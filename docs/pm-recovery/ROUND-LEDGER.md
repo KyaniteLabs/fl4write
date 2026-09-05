@@ -7,6 +7,8 @@ wrong implicit workdir, non-finite retro counters crashed state recovery, and
 runner result-path splitting miscounted successful workers. Fifteen new
 regressions and scoped independent checks pass after repairs. Full combined
 default verification passed 987 tests with three paid-model skips and Ruff.
+Exact f63addb live validation passed all 990 tests with zero skips, Ruff and
+canonical CI.
 Fresh clean remains 0/3; see
 ROUND24-REPAIR-CHECKPOINT.md. Superseded generated trial PR20 is closed
 unmerged; its failed live-model resume is preserved.

@@ -28,8 +28,12 @@ worker results. Baseline five failed and four passed; all nine pass after
 repair, plus six existing runner checks. The parent independently inspected
 the patch and ran all fifteen new regressions successfully; full Ruff passed.
 Combined default verification passed 987 tests with three paid-model skips
-in 115.87 seconds. No new combined live or committed validation is claimed
-yet; clean rounds remain 0/3.
+in 115.87 seconds. Exact code commit
+`f63addbe1992b61c640005e99c1356d14d08dc51` passed all 990 live tests with
+zero skips, Ruff and canonical CI. Live JUnit SHA256:
+`bab670c9e08969ce7e61bf7e466a9e5a28d0d6fd4244e449c758868f6217e280`.
+The isolated live run used six calls and 24000 reserved output tokens.
+Clean rounds remain 0/3.
 
 PR20 is closed unmerged after its failed live-model resume. Its approved path
 repair was manually integrated in round23. Original trial evidence remains
