@@ -320,7 +320,10 @@ def _review_pr(
                                        fixlane.escalate(pr, escalatable, blocked))
                 report.fix_escalations += len(escalatable)
         else:
-            _fix_lane(pr, findings_for_fix, config, primary, st, report, post_merge=post_merge)
+            _fix_lane(pr, findings_for_fix, config, primary, st, report,
+                      post_merge=post_merge, deadline=deadline)
+            if st["prs"][str(pr.number)].get("pending_fixes"):
+                return "fix-deferred"
 
     return "shadow" if config.shadow else "reviewed"
 
@@ -332,25 +335,35 @@ def _fix_lane(
     primary: ForgeAdapter,
     st: dict[str, Any],
     report: CycleReport,
-    *, post_merge: bool = False,
+    *, post_merge: bool = False, deadline: float | None = None,
 ) -> None:
     """Attempt fixes for Critical/Major findings; capped by fix_depth in state
     (which now PERSISTS across pushes — mark_reviewed merges, not replaces)."""
     from . import executor
 
-    for f in findings:
-        if f.severity not in ("Critical", "Major"):
-            continue
-        pr_state = st["prs"].setdefault(str(pr.number), {})
+    pr_state = st["prs"].setdefault(str(pr.number), {})
+    pending = [f for f in findings if f.severity in ("Critical", "Major")]
+    pr_state["pending_fix_sha"] = pr.head_sha
+    pr_state["pending_fixes"] = [f.model_dump() for f in pending]
+    for f in pending:
+        if deadline is not None and time.monotonic() >= deadline:
+            report.alerts.append(f"#{pr.number}: fix work deferred — cycle deadline reached")
+            return
         depth = int(pr_state.get("fix_depth", 0))
         blocked = fixlane.fix_allowed(pr, config, depth)
         if blocked is not None:
             body = fixlane.escalate(pr, [f], blocked)
             primary.create_comment(config.repo, pr.number, body)
             report.fix_escalations += 1
+            pr_state["pending_fixes"].pop(0)
             continue
         if not _fix_freshness_gate(primary, config, f, None if post_merge else pr.head_sha):
+            pr_state["pending_fixes"].pop(0)
             continue
+        if deadline is not None and time.monotonic() >= deadline:
+            report.alerts.append(f"#{pr.number}: fix work deferred — cycle deadline reached")
+            return
+        pr_state["pending_fixes"].pop(0)
         report.fix_attempts += 1
         result = executor.attempt_fix(pr, f, config)
         status = result.get("status")
@@ -368,6 +381,37 @@ def _fix_lane(
             # Sol audit: unknown statuses had no denominator — count + surface
             report.fix_failures += 1
             report._fix_failure_notes.append(f"#{pr.number} unknown-status {status!r}")
+    pr_state.pop("pending_fixes", None)
+    pr_state.pop("pending_fix_sha", None)
+
+
+def _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline, *, post_merge=False):
+    """Resume only unattempted fixes; a completed review stays completed."""
+    if not (run_fixes and config.fix.enabled and not config.shadow and primary.name == "github"):
+        return
+    rec = st["prs"].get(str(pr.number), {})
+    if rec.get("pending_fix_sha") != pr.head_sha:
+        rec.pop("pending_fixes", None)
+        rec.pop("pending_fix_sha", None)
+        return
+    from pydantic import ValidationError
+    try:
+        rows = rec.get("pending_fixes", [])
+        if not isinstance(rows, list):
+            raise ValueError("pending fixes must be a list")
+        findings = [Finding.model_validate(row) for row in rows]
+    except (ValidationError, ValueError, TypeError):
+        rec.pop("pending_fixes", None)
+        rec.pop("pending_fix_sha", None)
+        report.alerts.append(f"#{pr.number}: malformed pending fixes dropped")
+        return
+    try:
+        _fix_lane(pr, findings, config, primary, st, report,
+                  post_merge=post_merge, deadline=deadline)
+    except ForgeError as exc:
+        report.alerts.append(f"#{pr.number}: deferred fix forge error contained: {exc}")
+
+
 def _poll_fix_merges(config: RepoConfig, primary: ForgeAdapter, report: CycleReport) -> None:
     """Revisit owned fix PRs even when no source PR needs another review."""
     from . import executor
@@ -481,6 +525,12 @@ def _post_merge_sweep(
             terminal += 1
             continue
         if not state.needs_review(st, pr.number, pr.head_sha):
+            _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline,
+                             post_merge=True)
+            state.save_state(state_path, st)
+            if st["prs"][str(pr.number)].get("pending_fixes"):
+                st.setdefault("merged_since", since)
+                break
             terminal += 1  # already reviewed at this SHA (e.g. while open)
             continue
         if reviewed_budget >= config.post_merge.max_per_cycle:
@@ -503,6 +553,10 @@ def _post_merge_sweep(
             pm_shadow[str(pr.number)] = pr.head_sha
             report.postmerge_reviewed += 1
             continue  # NOT terminal — the live cutover re-reviews and posts
+        if outcome == "fix-deferred":
+            report.postmerge_reviewed += 1
+            st.setdefault("merged_since", since)
+            break
         if outcome in ("reviewed", "model-failed-cap"):
             if outcome == "reviewed":
                 report.postmerge_reviewed += 1
@@ -1222,7 +1276,7 @@ def _retro_sweep(
     _rs = st.get("retro_seen")
     if not isinstance(_rs, dict):
         _rs = {}  # MECE round-4 (luna F4-003): null/wrong-shape state degrades
-    seen: set[int] = {int(k) for k in _rs if str(k).isdigit()}
+    seen: set[int] = {number for k in _rs if (number := state.parse_number_key(k)) is not None}
     # MECE round-5 (sol F5-001): shadow runs keep their own dedupe belt and
     # never touch live cursors/belts — the live cutover must re-audit what
     # shadow only looked at
@@ -1234,14 +1288,15 @@ def _retro_sweep(
     parked = st.get("retro_parked", {})
     if not isinstance(parked, dict):
         parked = {}
+    parked = {str(number): expiry for k, v in parked.items()
+              if (number := state.parse_number_key(k)) is not None
+              and (expiry := state.parse_number_key(v)) is not None}
     now_i = int(time.time())
     # MECE round-5 (sol F5-009): parked PRs re-arm AUTOMATICALLY after their
     # window — no false "re-arms on the next repo commit" promise, no manual
     # reset needed
-    active_park = {int(k) for k, v in parked.items()
-                   if str(k).isdigit() and str(v).isdigit() and int(v) > now_i}
-    expired_park = {int(k) for k, v in parked.items()
-                    if str(k).isdigit() and str(v).isdigit() and int(v) <= now_i}
+    active_park = {int(k) for k, v in parked.items() if v > now_i}
+    expired_park = {int(k) for k, v in parked.items() if v <= now_i}
     pending = sorted(
         (p for p in listed
          if (parse_iso(p.merged_at) <= cursor_instant or p.number in expired_park) and p.number not in seen
@@ -1531,7 +1586,7 @@ def _ci_watch_step(
                 # annotation line is forge-external: non-numeric values must not
                 # crash the watch (UltraQA round 2)
                 ann_line = int(a.get("start_line") or a.get("line") or 0) or 1
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 ann_line = 1
             # MECE round-5 (sol F5-008): every annotation field is forge-
             # external — a numeric/object message crashed the slice below
@@ -1723,6 +1778,8 @@ def run_cycle(
                     state.mark_reviewed(st, pr.number, pr.head_sha, "dependency-skip")
                     continue
                 if not state.needs_review(st, pr.number, pr.head_sha):
+                    _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline)
+                    state.save_state(state_path, st)
                     continue
                 try:
                     _review_pr(pr, config, primary, get_diff, shadow_sink, st, report, run_fixes,

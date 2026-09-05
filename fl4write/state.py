@@ -138,7 +138,7 @@ def load_state(path: Path) -> dict[str, Any]:
                 # prune_closed. Drop malformed entries (bounded reconcile).
                 bad = [k for k, v in prs.items()
                        if not isinstance(v, dict)
-                       or not (str(k).isdigit() or k.isdigit())]
+                       or parse_number_key(k) is None]
                 if bad:
                     log.warning("state %s: dropping %d malformed PR records (bounded reconcile)",
                                 path, len(bad))
@@ -186,6 +186,24 @@ def load_state(path: Path) -> dict[str, Any]:
     except OSError as exc:
         raise StateIOError(f"state {path} unreadable ({exc}) — aborting cycle, will retry") from exc
     return json.loads(json.dumps(_FRESH_STATE))
+
+
+def parse_number_key(value: object) -> int | None:
+    """Read decimal identities without trusting isdigit or conversion size.
+
+    Decimal Unicode forms remain supported; superscript digits, booleans,
+    and strings beyond the interpreter's integer conversion bound do not.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if not isinstance(value, str) or not value.isdecimal():
+        return None
+    try:
+        return int(value)
+    except (ValueError, OverflowError):
+        return None
 
 
 def _valid_iso(value: str) -> bool:
@@ -278,6 +296,13 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
         if v is not None and not isinstance(v, str):
             log.warning("state omni core %s: non-string %r — sweep state reset", key, v)
             _omni_core_bad = True
+    parked = out.get("retro_parked")
+    if isinstance(parked, dict):
+        out["retro_parked"] = {
+            k: expiry for k, value in parked.items()
+            if parse_number_key(k) is not None
+            and (expiry := parse_number_key(value)) is not None
+        }
     for key in ("omni_scanned_total", "omni_next_id", "omni_total"):
         v = out.get(key)
         if v is not None and (isinstance(v, bool) or not isinstance(v, int)):
@@ -392,14 +417,15 @@ def prune_closed(state: dict[str, Any], open_numbers: set[int]) -> None:
     state["prs"] = {
         n: rec
         for n, rec in state["prs"].items()
-        if int(n) in open_numbers or "fix_depth" in rec or "model_failures" in rec
+        if parse_number_key(n) is not None
+        and (parse_number_key(n) in open_numbers or "fix_depth" in rec or "model_failures" in rec)
     }
     # MECE round-6 (luna-max F6-C015): fix-depth/model-failure records of
     # CLOSED PRs are kept for the depth rails while open, but a closed record
     # can never become open again — bound the retained history (insertion
     # order: the newest 2000 survive)
     closed_kept = [n for n, rec in state["prs"].items()
-                   if int(n) not in open_numbers]
+                   if parse_number_key(n) not in open_numbers]
     if len(closed_kept) > 2000:
         for n in closed_kept[: len(closed_kept) - 2000]:
             state["prs"].pop(n, None)
@@ -407,17 +433,17 @@ def prune_closed(state: dict[str, Any], open_numbers: set[int]) -> None:
     if isinstance(mf, dict):  # keys "{pr}:{sha10}"
         state["model_failures"] = {
             k: v for k, v in mf.items()
-            if isinstance(k, str) and k.split(":", 1)[0].isdigit()
-            and int(k.split(":", 1)[0]) in open_numbers
+            if isinstance(k, str) and parse_number_key(k.split(":", 1)[0]) in open_numbers
         }
     parked = state.get("retro_parked")
     if isinstance(parked, dict):
         import time as _t
         now_i = int(_t.time())
         state["retro_parked"] = {
-            k: v for k, v in parked.items()
-            if isinstance(v, int) and (v > now_i or (
-                str(k).isascii() and str(k).isdigit() and int(k) in open_numbers))
+            k: expiry for k, v in parked.items()
+            if parse_number_key(k) is not None
+            and (expiry := parse_number_key(v)) is not None
+            and (expiry > now_i or parse_number_key(k) in open_numbers)
             # A still-listed unresolved PR needs its expired park as a retry
             # identity until the retro lane succeeds or it leaves the window.
         }

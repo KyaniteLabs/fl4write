@@ -758,3 +758,14 @@ spaces, newlines and glob characters, including failed and missing results.
 JSON numeric syntax can overflow the runtime float representation: persisted
 counter normalization must reconcile integer-conversion overflow while keeping
 valid review memory and counters.
+
+## 70. Persist the work left at a deadline (2026-09-05)
+
+Finishing a review does not imply its fixes were attempted. Check the deadline
+at the review-to-fix boundary and before each new attempt; persist unattempted
+findings against the reviewed SHA so a later cycle can resume without another
+review or comment. Verify save/load and pruning between cycles. The same
+lifecycle test matters for retry parks: normalizing only a local copy can
+leave persisted values that pruning drops. Numeric identities need conversion
+validation, not isdigit alone; include Unicode forms and conversion-size
+limits in bounded-reconciliation tests.

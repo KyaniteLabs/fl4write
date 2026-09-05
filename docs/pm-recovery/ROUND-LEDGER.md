@@ -1,5 +1,17 @@
 # Recovered historical audit ledger
 
+## Successor round25 — September 5
+
+Fresh review of f63addb found three P2 defects: persisted numeric identities
+that crash integer conversion, repair execution after deadline expiry, and
+CI annotation numeric overflow. Numeric/CI repairs have independent approval,
+including a corrected park-persistence gap and real two-cycle proof. Deadline
+repair queues unattempted work by SHA and resumes without duplicate review;
+its independent review approved persisted open/post-merge retry controls.
+Full combined default validation passed 1015 tests with three paid-model skips
+and Ruff, including 28 new regressions. Fresh clean remains 0/3; see
+ROUND25-REPAIR-CHECKPOINT.md.
+
 ## Successor round24 — September 5
 
 Fresh review of 3238d8b found three P2 defects: gauntlet refresh selected the
