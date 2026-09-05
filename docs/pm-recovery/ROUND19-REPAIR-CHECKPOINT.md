@@ -39,7 +39,11 @@ and Ruff with the repair. The generated cache was unchanged. The full manual
 default suite passed **868 tests with three paid live-model skips** in86.80s;
 full Ruff passed. JUnit SHA256:
 `45738fb033f9e837526931f6849a2034e4b01fd15d1fc79f3c82a4b2ec850198`.
-Full paid live verification of this combined repair is the next validation gate.
+The subsequent exact `46c27ef3a9a76f333f9df692de5186afc30f72fd` isolated
+live run passed **871 tests, zero skips, and Ruff**. Its six real model calls
+reserved 24000 output tokens. Live JUnit SHA256:
+`a2d76e781af2251cb6cc5a690a06477a24bd8fe630474ba7f984e62367794413`.
+Canonical Forgejo CI also passed at that exact commit.
 
 ## Original hourly-health gate
 
