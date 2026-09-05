@@ -11,6 +11,8 @@ its independent review approved persisted open/post-merge retry controls.
 Full combined default validation passed 1015 tests with three paid-model skips
 and Ruff, including 28 new regressions. Fresh clean remains 0/3; see
 ROUND25-REPAIR-CHECKPOINT.md.
+Exact 965d787 live validation passed all 1018 tests with zero skips, Ruff
+and canonical CI.
 
 ## Successor round24 — September 5
 

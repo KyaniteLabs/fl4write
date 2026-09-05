@@ -32,8 +32,11 @@ cases and 280 neighboring tests pass. Independent review approved the repair,
 including persisted three-cycle open/post-merge tests, disabled/shadow/stale
 head controls, and verification that analysis/comments are not duplicated.
 The full combined default suite passed 1015 tests with three paid-model skips
-in 189.43 seconds, including 28 new regressions; Ruff passed. Exact committed
-live validation remains open.
+in 189.43 seconds, including 28 new regressions; Ruff passed. Exact code commit
+`965d787e9116c913c1ca851fb70e204d2bebad49` passed all 1018 live tests with
+zero skips, Ruff and canonical CI. Live JUnit SHA256:
+`a6c42d86c6412429cf4bff8aa4e67a3f542e6c45d9a386733d88bdb035eab6f9`.
+The isolated live run used six calls and 24000 reserved output tokens.
 
 The original eight first-week checklist observations are reconciled, including
 the verified zero-alert hourly cycle. Expanded delivery remains incomplete:
