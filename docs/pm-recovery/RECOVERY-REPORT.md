@@ -1,5 +1,23 @@
 # FL4WRITE PM recovery — 2026-09-04
 
+## Current checkpoint — September 5, round 23
+
+This checkpoint supersedes the operational status below; older sections remain
+as historical recovery evidence. The exhaustive-resolution work is pushed to
+Forgejo PR #15, with code commit `3238d8b` and evidence commit `ac7824a`.
+Exact code validation passed all 975 live tests with zero skips, Ruff and
+canonical CI. Both independent committed integration reviews approved the
+round23 timestamp and resolved-path repairs. See
+[ROUND23-REPAIR-CHECKPOINT.md](ROUND23-REPAIR-CHECKPOINT.md).
+
+The draft is not merged or deployed. Fresh round24 reviews the frozen code;
+the three-clean-round requirement remains 0/3. The generated path repair
+trial stopped on a live-model miss during resume, so automatic lifecycle
+proof remains incomplete despite the successful manual integration. Security
+review and the CEO's quality adjudication also remain open, followed by main
+merge, mirror synchronization and sole-runner delivery verification. Later
+successful tests do not erase failed trial evidence or close these gates.
+
 ## Current successor disposition — September 5
 
 This section supersedes operational status in the historical recovery record below.

@@ -355,7 +355,7 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
             v = out[k]
             try:
                 out[k] = int(v)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 log.warning("state %s: non-int %r dropped (bounded reconcile)", k, v)
                 out.pop(k, None)
     return out

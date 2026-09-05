@@ -748,3 +748,13 @@ aware datetime comparisons, and persistence validation must accept the same
 spellings as parsing. Test capped cycles and actual save/load, not just isolated
 comparisons. Presentation identities also need one encoding boundary: a parsed
 finding path is already encoded, so resolving it must reuse that identity.
+
+## 69. Verify shell argument boundaries and persisted numeric overflow (2026-09-05)
+
+Consume optional flags before assigning positional defaults. Preserve literal
+filenames through both worker dispatch and result aggregation; a quoted write
+does not protect a later unquoted read. Exercise the real shell fragment with
+spaces, newlines and glob characters, including failed and missing results.
+JSON numeric syntax can overflow the runtime float representation: persisted
+counter normalization must reconcile integer-conversion overflow while keeping
+valid review memory and counters.

@@ -1,5 +1,16 @@
 # Recovered historical audit ledger
 
+## Successor round24 — September 5
+
+Fresh review of 3238d8b found three P2 defects: gauntlet refresh selected the
+wrong implicit workdir, non-finite retro counters crashed state recovery, and
+runner result-path splitting miscounted successful workers. Fifteen new
+regressions and scoped independent checks pass after repairs. Full combined
+default verification passed 987 tests with three paid-model skips and Ruff.
+Fresh clean remains 0/3; see
+ROUND24-REPAIR-CHECKPOINT.md. Superseded generated trial PR20 is closed
+unmerged; its failed live-model resume is preserved.
+
 ## Successor round 23 — September 5
 
 Fresh review of 8fc1de5 found R23-001 (Major), timestamp ordering that could
