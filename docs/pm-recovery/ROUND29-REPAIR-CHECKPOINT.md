@@ -19,8 +19,8 @@ eleven passing controls. The repaired focused suite passed 36 tests and Ruff.
 Exact independent recheck approved the repair: three baseline failures and
 eleven controls, 36 repaired focused tests, Ruff and mixed renderer/acceptance
 controls. Full combined default validation passed 1050 tests with three
-expected paid-model skips in 233.56 seconds. Ruff passed. Canonical CI is
-pending at the new commit.
+expected paid-model skips in 233.56 seconds. Ruff passed. Canonical CI passed
+at exact repair commit `a946bd948b56a2f32a7af6bde0b7c06d774e8927`.
 
 The configured provider returned HTTP 402 during the separate real recon run.
 No further provider calls are being made pending restored access, so these
