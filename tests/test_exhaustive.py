@@ -393,6 +393,58 @@ def test_fix_requires_explicit_config_capability(tmp_path: Path):
     assert _state(state_dir)["consecutive_green"] == 0
 
 
+def test_atomic_fix_receives_selected_test_timeout(tmp_path, monkeypatch):
+    from fl4write import exhaustive_fix
+    repo = _repo(tmp_path)
+    args = _args(repo, tmp_path / "state", _responses(tmp_path))
+    args.isolation, args.test_timeout = "docker", 17
+    config = exhaustive.load_config(repo / ".fl4write.yaml")
+    config = config.model_copy(update={"shadow": False, "fix": config.fix.model_copy(
+        update={"enabled": True, "merge_own_prs": True})})
+    observed = {}
+    def repair(*args, **kwargs):
+        observed.update(kwargs)
+        return {"status": "merged", "merged_head": "b" * 40}
+    monkeypatch.setattr(exhaustive_fix, "attempt_fix_with_regression_pin", repair)
+    exhaustive._request_owned_fixes(repo, config, "a" * 40, [{"id": "F1"}], args, tmp_path / "e")
+    assert observed["test_timeout"] == 17
+
+
+def test_red_post_merge_suite_is_contained_and_retains_merge_receipt(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "value.py").write_text("VALUE = 2\n")
+    _git(repo, "add", "value.py")
+    _git(repo, "commit", "-qm", "fixture repair")
+    merged = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "--detach", base)
+    values = [{"findings": []}, {"findings": []}, {"findings": [
+        {"path": "value.py", "line": 1, "evidence": "VALUE = 1", "severity": "Major", "message": "bad"}
+    ]}]
+    state_dir = tmp_path / "state"
+    args = _args(repo, state_dir, _responses(tmp_path, values))
+    args.enable_fixes = True
+    receipt = {"status": "merged", "merged_head": merged, "pr_number": 7}
+    monkeypatch.setattr(exhaustive, "_request_owned_fixes", lambda *a: receipt)
+    real_git = exhaustive._git
+    def git(path, *argv):
+        return "" if argv[0] == "fetch" else real_git(path, *argv)
+    monkeypatch.setattr(exhaustive, "_git", git)
+    def red(command, tree, junit, timeout):
+        junit.write_text('<testsuite tests="1" failures="1"><testcase name="red"><failure/></testcase></testsuite>')
+        raise exhaustive.NonGreen("assertion failed", {
+            "junit_sha256": exhaustive.hashlib.sha256(junit.read_bytes()).hexdigest()})
+    monkeypatch.setattr(exhaustive, "_test", red)
+    assert exhaustive.run(args) == 2
+    state = _state(state_dir)
+    assert state["consecutive_green"] == 0 and state["pending_round"] is None
+    assert state["ledger"][-1]["fix"] == receipt
+    assert state["ledger"][-1]["tested_head"] == merged
+    assert not state["ledger"][-1]["green"]
+    assert _git(repo, "rev-parse", "HEAD") == merged
+    assert list(state_dir.glob("*/escalation.json"))
+
+
 def test_runner_outage_retries_sealed_recon_without_another_model_call(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     state_dir = tmp_path / "state"

@@ -104,8 +104,13 @@ def test_git_normalization_cannot_change_tested_bytes_before_commit(tmp_path):
 
 def test_real_git_patch_proves_red_pin_green_fix_and_preserves_baseline(tmp_path):
     repo, head = _repo(tmp_path)
+    timeouts = []
+    def verify(command, tree, junit, timeout):
+        timeouts.append(timeout)
+        return _verify(command, tree, junit, timeout)
     fixed, ids, digest, baseline = ef._prove_patch(
-        repo, head, *_patch(), ["pytest"], tmp_path / "evidence", _verify)
+        repo, head, *_patch(), ["pytest"], tmp_path / "evidence", verify, test_timeout=17)
+    assert timeouts == [17, 17, 17]
     assert (fixed / "calc.py").read_text().endswith("return a + b\n")
     assert baseline == {"tests/test_old.py::test_old"}
     assert baseline < ids

@@ -77,7 +77,8 @@ tests green** (752 passing + 3 skipped at repair checkpoint `0217dcb`;
 the round-13 desk pass reported 605 passing). The integrated live suite also
 passes: 755 passing + 0 skipped at that checkpoint. The next repair candidate
 passes 767 passing + 3 skipped by default at `36c6173`. The isolation candidate's
-default suite passes 777 passing + 3 skipped; its live target is 780 passing + 0 skipped.
+default suite passed 777 passing + 3 skipped before the next review repairs.
+The review-repair target is 781 passing + 3 skipped, or 784 passing + 0 skipped live.
 The latest completed live run remains blocked at 769 passed and one median-recall failure.
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and

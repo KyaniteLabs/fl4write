@@ -545,6 +545,7 @@ def _request_owned_fixes(repo, config, head, findings, args, evidence_dir):
     result = attempt_fix_with_regression_pin(
         repo, config, head, findings, args.test_command, evidence_dir,
         verify_suite=_suite_runner(args),
+        test_timeout=args.test_timeout,
     )
     if result.get("status") != "merged" or not _valid_sha(result.get("merged_head")):
         raise Deferred(f"atomic fix {result.get('status', 'error')}: {result.get('reason', 'unproven')}")
@@ -725,7 +726,13 @@ def run(args: argparse.Namespace) -> int:
                         if _git(repo, "rev-parse", "HEAD") != fix["merged_head"]:
                             raise Deferred("local refresh did not reach verified merged HEAD")
                         refreshed, _ = _pack(repo, fix["merged_head"], rd / "post-fix")
-                        _suite_runner(args)(args.test_command, refreshed, rd / "post-fix.xml", args.test_timeout)
+                        try:
+                            _suite_runner(args)(args.test_command, refreshed, rd / "post-fix.xml", args.test_timeout)
+                        except NonGreen as exc:
+                            _non_green(state, state_path, head, "merged repair failed refreshed full suite",
+                                       {**common, **exc.evidence, "fix": fix,
+                                        "tested_head": fix["merged_head"]})
+                            raise Deferred("merged repair failed refreshed full suite") from exc
                         _non_green(state, state_path, head, "findings fixed and merged; fresh recon required",
                                    {**common, "fix": fix})
                         continue

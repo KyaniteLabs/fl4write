@@ -63,3 +63,29 @@ def test_runner_timeout_retains_no_false_test_report_and_removes_container(tmp_p
         sandbox.run_isolated(["pytest", "{junit}"], tmp_path, tmp_path / "result.xml", 30, IMAGE)
     assert not (tmp_path / "result.xml").exists()
     assert calls[-1][1:3] == ["rm", "--force"]
+
+
+@pytest.mark.parametrize("timed_out", [False, True])
+def test_failed_cleanup_defers_and_retains_owned_recovery_identity(tmp_path, monkeypatch, timed_out):
+    calls = []
+    def docker(argv, timeout, binary=False):
+        calls.append(argv)
+        if argv[1:3] == ["image", "inspect"]:
+            output = IMAGE + " 1"
+        elif "wait" in argv:
+            output = json.dumps({"kind": "deferred"} if timed_out else
+                                {"kind": "completed", "returncode": 0})
+        elif "report" in argv:
+            output = b'<testsuite><testcase name="ok"/></testsuite>'
+        else:
+            output = "container"
+        return subprocess.CompletedProcess(argv, int(argv[1:3] == ["rm", "--force"]), output, "")
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    with pytest.raises(sandbox.SandboxUnavailable, match="cleanup remains unresolved") as caught:
+        sandbox.run_isolated(["pytest", "{junit}"], tmp_path, tmp_path / "result.xml", 30, IMAGE)
+    saved = json.loads((tmp_path / "result.xml.container.json").read_text())
+    assert saved["container"] == calls[1][calls[1].index("--name") + 1]
+    assert saved["image"] == IMAGE
+    if timed_out:
+        assert "timed out" in str(caught.value)
+        assert not (tmp_path / "result.xml").exists()

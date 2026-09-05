@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import uuid
 
@@ -64,6 +65,15 @@ def run_isolated(command: list[str], tree: Path, evidence: Path, timeout: int, i
     name = "fl4write-test-" + uuid.uuid4().hex
     argv = container_command(command, tree, image, name, timeout)
     validate_runtime(image)
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    recovery = evidence.with_name(evidence.name + ".container.json")
+    try:
+        with recovery.open("x", encoding="utf-8") as stream:
+            json.dump({"container": name, "image": image, "state": "cleanup_required"}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except OSError as exc:
+        raise SandboxUnavailable("container recovery record unavailable or prior cleanup unresolved") from exc
     try:
         started = _docker(argv, 30)
         if started.returncode:
@@ -94,4 +104,14 @@ def run_isolated(command: list[str], tree: Path, evidence: Path, timeout: int, i
         return subprocess.CompletedProcess(command, result["returncode"], "", "")
     finally:
         # This generated name belongs only to this invocation.
-        _docker(["docker", "rm", "--force", name], 30)
+        original = sys.exception()
+        try:
+            removed = _docker(["docker", "rm", "--force", name], 30)
+            if removed.returncode:
+                raise SandboxUnavailable("container cleanup remains unresolved")
+            recovery.unlink()
+        except (SandboxUnavailable, OSError) as exc:
+            reason = "container cleanup remains unresolved; recovery record retained"
+            if original is not None:
+                reason = str(original) + "; " + reason
+            raise SandboxUnavailable(reason) from (original or exc)

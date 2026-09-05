@@ -212,7 +212,7 @@ def _verify_unchanged(command, tree, junit, timeout, verify_suite, paths):
 
 def _prove_patch(source: Path, reviewed_head: str, files: dict[str, str],
                  regressions: set[str], test_command: list[str], evidence_dir: Path,
-                 verify_suite: Callable) -> tuple[Path, set[str], str, set[str]]:
+                 verify_suite: Callable, test_timeout: int = 1800) -> tuple[Path, set[str], str, set[str]]:
     work_root = Path(tempfile.mkdtemp(prefix="fl4write-exhaustive-fix-"))
     baseline, pin_only, fixed = (work_root / n for n in ("baseline", "pin-only", "fixed"))
     for tree in (baseline, pin_only, fixed):
@@ -220,11 +220,11 @@ def _prove_patch(source: Path, reviewed_head: str, files: dict[str, str],
     tracked = set(_git(["ls-files"], baseline).splitlines())
     evidence_dir.mkdir(parents=True, exist_ok=True)
     baseline_ids, _ = _verify_unchanged(test_command, baseline,
-                                       evidence_dir / "baseline.xml", 1800, verify_suite, tracked)
+                                       evidence_dir / "baseline.xml", test_timeout, verify_suite, tracked)
     for path in regressions:
         _write_file(pin_only, path, files[path])
     try:
-        _verify_unchanged(test_command, pin_only, evidence_dir / "regression-red.xml", 1800,
+        _verify_unchanged(test_command, pin_only, evidence_dir / "regression-red.xml", test_timeout,
                           verify_suite, tracked | regressions)
     except Exception as exc:
         from .exhaustive import NonGreen, _junit
@@ -242,7 +242,7 @@ def _prove_patch(source: Path, reviewed_head: str, files: dict[str, str],
     for path, content in files.items():
         _write_file(fixed, path, content)
     test_ids, junit_hash = _verify_unchanged(test_command, fixed,
-                                           evidence_dir / "fixed-green.xml", 1800,
+                                           evidence_dir / "fixed-green.xml", test_timeout,
                                            verify_suite, tracked | set(files))
     baseline_ids, test_ids = set(baseline_ids), set(test_ids)
     if not baseline_ids or not baseline_ids.issubset(test_ids):
@@ -562,6 +562,7 @@ def attempt_fix_with_regression_pin(
     *,
     verify_suite: Callable,
     max_model_calls: int = 1,
+    test_timeout: int = 1800,
 ) -> dict:
     """Prove, publish, and merge one atomic multi-file repair.
 
@@ -580,6 +581,8 @@ def attempt_fix_with_regression_pin(
             raise FixError("repo or reviewed_head is invalid")
         if max_model_calls != 1:
             raise FixError("exactly one bounded model call is supported")
+        if type(test_timeout) is not int or test_timeout <= 0:
+            raise FixError("test timeout must be a positive integer")
         if config.shadow or not config.fix.enabled or not config.fix.merge_own_prs:
             return _result("blocked", "fix and own-PR merge capabilities must be enabled", reviewed_head)
         if not findings or not isinstance(test_command, list) or not test_command \
@@ -592,7 +595,7 @@ def attempt_fix_with_regression_pin(
         files, regressions = _prepared_patch(config, reviewed_head, findings, repo, evidence_dir, test_command)
         fixed, test_ids, junit_hash, _ = _prove_patch(
             repo, reviewed_head, files, regressions, test_command,
-            evidence_dir, verify_suite)
+            evidence_dir, verify_suite, test_timeout)
         changed = set(_git(["diff", "--name-only", "HEAD", "--"], fixed).splitlines())
         changed.update(_git(["ls-files", "--others", "--exclude-standard"], fixed).splitlines())
         if changed != set(files):
