@@ -90,6 +90,7 @@ def test_compact_patch_expands_only_unique_supplied_source_fragments():
 
 
 @pytest.mark.parametrize("source,old", [("return 1\nreturn 1\n", "return 1"),
+                                        ("aaaa", "aaa"),
                                         ("return 1\n", "missing"), ("return 1\n", "")])
 def test_compact_patch_rejects_missing_empty_or_ambiguous_context(source, old):
     with pytest.raises(ef.FixError, match="exactly one"):

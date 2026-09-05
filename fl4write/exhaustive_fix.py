@@ -121,7 +121,8 @@ def _parse_patch(raw: str, sources: dict[str, str] | None = None) -> tuple[dict[
                 if (not isinstance(edit, dict) or set(edit) != {"old", "new"}
                         or not isinstance(edit["old"], str) or not edit["old"]
                         or not isinstance(edit["new"], str)
-                        or content.count(edit["old"]) != 1):
+                        or content.find(edit["old"]) < 0
+                        or content.find(edit["old"]) != content.rfind(edit["old"])):
                     raise FixError("model edit must match exactly one current source fragment")
                 content = content.replace(edit["old"], edit["new"], 1)
                 if len(content.encode()) > 1_000_000:
