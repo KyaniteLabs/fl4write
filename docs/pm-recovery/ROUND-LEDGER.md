@@ -15,8 +15,9 @@ patch replay and initial model responses. The repair preserves parsed cache
 objects and decodes complete JSON after removing only explicit outer wrappers.
 Twenty regressions and neighboring checks pass; final independent review
 approved the repair with 85 tests and 28 additional controls. Full default
-validation passed 924 tests with three paid-model skips and Ruff; exact live
-verification remains pending. See ROUND21-REPAIR-CHECKPOINT.md. Main delivery,
+validation passed 924 tests with three paid-model skips and Ruff; exact
+56af12b live validation passed 927 tests with zero skips and Ruff, plus green
+canonical CI. Fresh round 22 is active. See ROUND21-REPAIR-CHECKPOINT.md. Main delivery,
 security review, automated lifecycle proof and CEO verdicts remain open.
 
 ## Successor round20 — September5

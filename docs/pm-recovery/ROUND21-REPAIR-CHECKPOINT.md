@@ -64,4 +64,8 @@ cache replay, wrappers and rejection controls. Final independent review passed
 85 neighboring tests, Ruff, 14 independent fidelity cases and 14 rejection
 controls, closing F21-CACHE-001 within that scope. Full final default validation
 passed 924 tests with three paid-model skips in 89.56 seconds; Ruff passed.
-Exact committed live validation remains pending.
+Exact `56af12b79f3724fa7d57741aed7bf833c24250b2` live validation passed
+927 tests with zero skips and Ruff; canonical CI passed. Six live calls
+reserved 24000 output tokens. Live JUnit SHA256:
+`1179d78c2aa060594ac6934331cced8f2e2aad4933afafc23100450ed542d0c8`.
+Fresh whole-project round 22 is reviewing this frozen code candidate.
