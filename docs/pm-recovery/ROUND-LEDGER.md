@@ -1,5 +1,26 @@
 # Recovered historical audit ledger
 
+## Successor rounds 17–19 — September 5
+
+Round17 found eight defects, subsequently repaired and independently rechecked;
+see ROUND17-REPAIR-CHECKPOINT.md and ROUND17-CLOCK-REVIEW.md. Clock repair PR16
+was manually merged into the candidate after CI; the automated resume failed
+and remains a failed receipt. This did not establish automated lifecycle success.
+
+Round18 found five Major defects, subsequently repaired and independently
+rechecked; see ROUND18-REPAIR-CHECKPOINT.md and ROUND18-ISSUE-RETRY.md. Exact
+code5452139 passed858 isolated live tests with zero skips plus Ruff and CI.
+Its generated issue-retry trial failed; the successful manual repair is separate.
+
+Round19 at8a2638a found two Major defects: malformed issue identities discarded
+retries (F19-001), and packed snapshots lost tracked executable permission
+(F19-002). Both manual repairs have independent scoped clearance and regression
+proof; the combined default suite passes868 tests with three live skips plus
+Ruff. The generated issue-row trial failed fixed-green and created no PR.
+See ROUND19-REPAIR-CHECKPOINT.md for retained evidence and remaining gates.
+Every round found new valid defects, so the fresh clean counter remains **0/3**.
+Security review and final delivery remain incomplete; no certification follows.
+
 ## Candidate integration checkpoints — September 5
 
 The records below retain historical verdicts. Current repairs and follow-up

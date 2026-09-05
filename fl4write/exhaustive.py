@@ -264,7 +264,8 @@ def _pack(repo: Path, head: str, output: Path) -> tuple[Path, Path]:
         manifest, {"version": VERSION, "head": head, "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
     )
     for p in tree.rglob("*"):
-        p.chmod(0o500 if p.is_dir() else 0o400)
+        executable = p.is_dir() or bool(p.stat().st_mode & 0o111)
+        p.chmod(0o500 if executable else 0o400)
     tree.chmod(0o500)
     archive.chmod(0o400)
     manifest.chmod(0o400)

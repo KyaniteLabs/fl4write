@@ -690,3 +690,17 @@ before PR creation because its test forge never entered the fallback paths;
 the separate manual repair does not count as automated lifecycle success.
 Require regression fixtures to prove the intended failure path was executed,
 not merely produce red assertions. Original failed artifacts remain intact.
+
+## 64. Completeness includes row identity and executable behavior (2026-09-05)
+
+Round19 found two defects after a green858-test live run. A valid list envelope
+does not prove complete intake when row identities are malformed: retain the
+direct caller's usable rows, but defer stateful processing until every identity
+is known. Mixed valid/invalid listings must not advance the watermark past
+unknown work. Twelve primary/fallback recovery cases pin this distinction.
+
+Read-only test snapshots must preserve tracked executable behavior. Removing
+write permission from a script should retain owner execute permission; ordinary
+source files remain non-executable. A real tracked shell-helper invocation
+reproduces the PermissionError that Python-only test entry points concealed.
+Neither repair creates a fresh clean round or clears failed generated trials.

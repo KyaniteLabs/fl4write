@@ -84,13 +84,16 @@ def collect_new_issues(forge: ForgeAdapter, repo: str, last_number: int,
     # booleans are NOT numbers — isinstance(True, int) lets a forged boolean
     # row target issue #1
     retry = retry or set()
-    fresh = [i for i in all_issues
-             if isinstance(i, dict)
-             and isinstance(i.get("number"), int)
-             and not isinstance(i.get("number"), bool)
-             and (i["number"] > last_number or i["number"] in retry)
+    valid_rows = [i for i in all_issues
+                  if isinstance(i, dict)
+                  and isinstance(i.get("number"), int)
+                  and not isinstance(i.get("number"), bool)
+                  and i["number"] > 0]
+    fresh = [i for i in valid_rows
+             if (i["number"] > last_number or i["number"] in retry)
              and "pull_request" not in i]
-    return _IssueList(sorted(fresh, key=lambda i: i.get("number", 0)))
+    return _IssueList(sorted(fresh, key=lambda i: i.get("number", 0)),
+                      complete=len(valid_rows) == len(all_issues))
 
 
 def triage_issue(issue: dict[str, Any], config: RepoConfig) -> dict[str, Any] | None:
@@ -278,6 +281,13 @@ def run_issues_cycle(config: RepoConfig, st: dict[str, Any], forge: ForgeAdapter
         new_issues = collect_new_issues(forge, config.repo, last_num, retry=retry)
     except ForgeError as exc:
         log.warning("issues collect failed for %s: %s", config.repo, exc)
+        return summary
+
+    # F19-001: unknown row identities can hide work below either the existing
+    # or next watermark. Defer the whole cycle until intake is complete.
+    if not getattr(new_issues, "complete", True):
+        log.warning("issues listing incomplete for %s; preserving intake state", config.repo)
+        summary["errors"] += 1
         return summary
 
     # MECE round-1 (luna F1-07): a failed triage must RETRY — a later
