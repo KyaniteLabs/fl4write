@@ -150,7 +150,10 @@ class TestModelLayerLive:
         _org_model_keys()
         live_config = cfg.load_config(Path(os.environ.get(
             "FL4WRITE_EVAL_CONFIG", str(Path(__file__).parents[1] / "fl4write.fl4write.yaml"))))
-        assert os.environ.get(live_config.model.key_env), "Live evaluation model key is unavailable"
+        proxy = os.environ.get("FL4WRITE_LIVE_EVAL_PROXY_SOCKET")
+        if proxy:
+            monkeypatch.setenv("FL4WRITE_MODEL_PROXY_SOCKET", proxy)
+        assert proxy or os.environ.get(live_config.model.key_env), "Live evaluation model credential or proxy is unavailable"
 
         diff_text = (
             f"--- a/{case['impl']}\n+++ b/{case['impl']}\n"

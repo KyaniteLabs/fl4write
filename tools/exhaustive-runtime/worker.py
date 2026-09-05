@@ -44,6 +44,8 @@ def main():
            "PYTHONPATH": "/work", "PYTHONDONTWRITEBYTECODE": "1",
            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
            "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"}
+    if len(sys.argv) == 7 and sys.argv[6] == "live-model":
+        env.update(FL4WRITE_EVAL="1", FL4WRITE_LIVE_EVAL_PROXY_SOCKET="/model-proxy/model.sock")
     result = {"kind": "deferred", "reason": "test process unavailable"}
     try:
         process = subprocess.Popen(command, cwd="/work", env=env, user=uid, group=gid,

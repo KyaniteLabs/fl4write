@@ -80,7 +80,9 @@ passes 767 passing + 3 skipped by default at `36c6173`. The isolation candidate'
 default suite passed 777 passing + 3 skipped before the next review repairs.
 The review repairs pass 781 passing + 3 skipped both locally and in the isolated
 container. The installation-signing regression brings the current target to
-782 passing + 3 skipped, or 785 passing + 0 skipped live.
+782 passing + 3 skipped, or 785 passing + 0 skipped live, at the CI repair.
+The bounded model-transport candidate targets 789 passing + 3 skipped, or
+792 passing + 0 skipped with live model tests.
 The latest completed live run remains blocked at 769 passed and one median-recall failure.
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and

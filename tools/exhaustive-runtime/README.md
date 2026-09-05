@@ -39,9 +39,15 @@ produced these results:
 - Cleanup: no containers with the invocation prefix remained after these probes.
 
 These probes validate the runtime boundary only. They do not prove a full project
-repair, publication, merge or three-round certification. This runtime currently
-has no model-service transport: FL4WRITE's three paid live model tests cannot run
-inside it. Full live validation and independent review remain open release gates.
+repair, publication, merge or three-round certification. Full live validation and
+independent review remain open release gates.
+
+An optional host-owned `ModelProxy` context is being validated for standalone live
+test execution. It exposes only a Unix socket to the container, keeps provider
+credentials in the host process, fixes the endpoint/model/settings and caps calls
+and reserved output tokens. Failed calls still consume that budget. The runtime
+image must declare support for this transport. The exhaustive CLI does not yet
+enable it; integration with whole-round model accounting remains required.
 
 The first archived full-project execution exposed Docker's implicit `noexec`
 default on `/tmp`: two Git-command shim tests bypassed their generated helpers,

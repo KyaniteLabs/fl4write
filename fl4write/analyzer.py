@@ -190,8 +190,9 @@ def _system_prompt(mode: str = "pr") -> str:
 
 
 def _call_model(route: ModelRoute, prompt: str, mode: str = "pr", system: str | None = None) -> str:
+    proxy = os.environ.get("FL4WRITE_MODEL_PROXY_SOCKET")
     key = os.environ.get(route.key_env, "") if route.key_env else ""
-    if route.key_env and not key:
+    if route.key_env and not key and not proxy:
         raise RuntimeError(
             f"route {route.model}: key env var {route.key_env} is not set — "
             "set it or fix key_env in the config"
@@ -212,9 +213,13 @@ def _call_model(route: ModelRoute, prompt: str, mode: str = "pr", system: str | 
         payload["seed"] = route.seed
 
     _t0 = time.time()
-    req = urllib.request.Request(route.endpoint, data=json.dumps(payload).encode(), headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=180) as resp:
-        data = json.loads(resp.read().decode())
+    if proxy:
+        from .model_proxy import request
+        data = request(proxy, route.endpoint, payload)
+    else:
+        req = urllib.request.Request(route.endpoint, data=json.dumps(payload).encode(), headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            data = json.loads(resp.read().decode())
     _lat = time.time() - _t0
     choice = (data.get("choices") or [{}])[0]
     content = (choice.get("message") or {}).get("content", "")

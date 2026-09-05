@@ -19,7 +19,8 @@ WORKER = "/opt/fl4write-test-worker.py"
 MAX_REPORT = 16 * 1024 * 1024
 
 
-def container_command(command: list[str], tree: Path, image: str, name: str, timeout: int) -> list[str]:
+def container_command(command: list[str], tree: Path, image: str, name: str, timeout: int,
+                      *, model_proxy=None) -> list[str]:
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", image or ""):
         raise SandboxUnavailable("test image must be an immutable local image SHA-256")
     if not tree.is_dir() or "," in str(tree.resolve()):
@@ -31,6 +32,12 @@ def container_command(command: list[str], tree: Path, image: str, name: str, tim
     argv = ["/evidence/report.xml" if arg == "{junit}" else arg for arg in command]
     uid = os.getuid() or 65534
     gid = os.getgid() if os.getuid() else 65534
+    proxy_args = []
+    if model_proxy is not None:
+        socket_path = model_proxy.socket_path
+        if socket_path is None or not socket_path.is_socket() or "," in str(socket_path.parent):
+            raise SandboxUnavailable("model test proxy is unavailable")
+        proxy_args = ["--mount", f"type=bind,src={socket_path.parent},dst=/model-proxy,readonly"]
     return [
         "docker", "run", "--detach", "--name", name, "--network", "none", "--read-only",
         "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
@@ -39,8 +46,10 @@ def container_command(command: list[str], tree: Path, image: str, name: str, tim
         "--tmpfs", "/evidence:rw,nosuid,noexec,size=16777216,mode=1777",
         "--tmpfs", "/control:rw,nosuid,noexec,size=65536,mode=0700",
         "--mount", f"type=bind,src={tree.resolve()},dst=/work,readonly",
+        *proxy_args,
         "--workdir", "/work", "--user", "0:0", "--entrypoint", "/usr/local/bin/python3",
         image, "-I", WORKER, "run", str(uid), str(gid), str(timeout), json.dumps(argv),
+        *(["live-model"] if model_proxy is not None else []),
     ]
 
 
@@ -52,19 +61,23 @@ def _docker(argv, timeout, *, binary=False):
         raise SandboxUnavailable("container runtime unavailable or timed out") from exc
 
 
-def validate_runtime(image: str):
+def validate_runtime(image: str, *, require_model_proxy=False):
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", image or ""):
         raise SandboxUnavailable("test image must be an immutable local image SHA-256")
-    inspected = _docker(["docker", "image", "inspect", "--format",
-                         '{{.Id}} {{index .Config.Labels "org.fl4write.test-runtime"}}', image], 30)
-    if inspected.returncode or inspected.stdout.strip() != image + " 1":
+    format_string = '{{.Id}} {{index .Config.Labels "org.fl4write.test-runtime"}}'
+    expected = image + " 1"
+    if require_model_proxy:
+        format_string += ' {{index .Config.Labels "org.fl4write.model-proxy"}}'
+        expected += " 1"
+    inspected = _docker(["docker", "image", "inspect", "--format", format_string, image], 30)
+    if inspected.returncode or inspected.stdout.strip() != expected:
         raise SandboxUnavailable("selected image is not the installed FL4WRITE test runtime")
 
 
-def run_isolated(command: list[str], tree: Path, evidence: Path, timeout: int, image: str):
+def run_isolated(command: list[str], tree: Path, evidence: Path, timeout: int, image: str, *, model_proxy=None):
     name = "fl4write-test-" + uuid.uuid4().hex
-    argv = container_command(command, tree, image, name, timeout)
-    validate_runtime(image)
+    argv = container_command(command, tree, image, name, timeout, model_proxy=model_proxy)
+    validate_runtime(image, require_model_proxy=model_proxy is not None)
     evidence.parent.mkdir(parents=True, exist_ok=True)
     recovery = evidence.with_name(evidence.name + ".container.json")
     try:
