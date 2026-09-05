@@ -28,7 +28,8 @@ Fix: persist an exact pending-publication body/hash and replay it before any new
 
 `_public_value` strips directory components only for two manifest keys; other strings receive no local-path redaction (`fl4write/exhaustive.py:397-414`). Findings include archived source evidence and messages.
 
-Probe: `CACHE=/Users/alice/SecretClient/data` and `/Users/alice/SecretClient` survived `_ledger_body` verbatim.
+Probe: synthetic absolute home-directory paths in archived evidence and finding
+messages survived `_ledger_body` verbatim. The example paths are omitted here.
 
 Fix: publish a strict allow-listed DTO; redact machine-local identifiers in every public string and pin nested values.
 
