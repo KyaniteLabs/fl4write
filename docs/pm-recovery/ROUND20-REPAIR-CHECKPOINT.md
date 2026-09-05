@@ -42,6 +42,10 @@ All 29 new and neighboring targeted cases pass; full Ruff passes. The combined
 default suite passed **881 tests with three paid live-model skips** in79.53s.
 Default JUnit SHA256:
 `3b846230f90eab8ea38a6b86062e8d7ccc2ab32bc44225473ee079819c014bad`.
+The subsequent exact `bb3625a18be2416184df01806f2b0029cc65b78e` isolated
+live run passed **884 tests, zero skips, and Ruff**; canonical CI also passed.
+Six real model calls reserved 24000 output tokens. Live JUnit SHA256:
+`8ed30c6b8fe1e98297ec917e87259c6806ffde921a00860ffe75ffb3118c186b`.
 The independent pagination recheck passed64 neighboring tests and Ruff,
 and reproduced the Forgejo baseline failure while GitHub remained green. Evidence:
 `/tmp/fl4write-fresh-round20-report.md`,
