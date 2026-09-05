@@ -12,13 +12,13 @@ model:
   endpoint: https://api.deepinfra.com/v1/openai/chat/completions
   model: deepseek-ai/DeepSeek-V4-Flash-0731
   key_env: CODESITTER_DEEPSEEK_KEY
-  temperature: 0.2
+  temperature: 0.0
   max_tokens: 4000
 fallback_model:
   endpoint: https://api.deepinfra.com/v1/openai/chat/completions
   model: deepseek-ai/DeepSeek-V4-Flash-0731
   key_env: CODESITTER_DEEPSEEK_KEY
-  temperature: 0.2
+  temperature: 0.0
   max_tokens: 4000
 review:
   secrets: "Never commit or echo secrets, tokens, or credentials."
