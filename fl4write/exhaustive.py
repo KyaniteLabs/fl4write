@@ -320,6 +320,7 @@ def _validated(value: Any, path: str, start: int, end: int, source: str):
             raise Deferred("model finding is not grounded at its claimed archived line")
         clean = {str(k): scrub.redact_credentials(scrub.scrub(str(v))) for k, v in row.items()}
         clean["line"] = line
+        clean["path"] = path
         out.append(clean)
     return out
 
