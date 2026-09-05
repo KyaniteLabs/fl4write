@@ -72,23 +72,16 @@ no fleet repo has enabled it yet — luna F3-004 doc truth).
 
 Current fleet state (2026-09-05; recovered [audit ledger](docs/pm-recovery/ROUND-LEDGER.md)): **129 central configs**
 across GitHub + Forgejo in hourly cycles; the tier scheduler selects due repos
-(`run-cycle.sh`, hourly crontab, single-host law — LEARNINGS #17). **500+
-tests green** (752 passing + 3 skipped at repair checkpoint `0217dcb`;
-the round-13 desk pass reported 605 passing). The integrated live suite also
-passes: 755 passing + 0 skipped at that checkpoint. The next repair candidate
-passes 767 passing + 3 skipped by default at `36c6173`. The isolation candidate's
-default suite passed 777 passing + 3 skipped before the next review repairs.
-The review repairs pass 781 passing + 3 skipped both locally and in the isolated
-container. The installation-signing regression brings the current target to
-782 passing + 3 skipped, or 785 passing + 0 skipped live, at the CI repair.
-The bounded model-transport repairs at `6af8898` passed all 795 tests with zero
-skips in the real isolated live suite. The default suite has 792 passing tests
-and three paid live-model skips. Canonical Forgejo CI also passed at that head.
-The current round-budget, base-selection and compact-edit integration targets
-1031 passing + 0 skipped live, or 1028 passing + 3 skipped by default.
-The latest completed isolated live run at `4b1a141` passed 805 tests with zero
-skips. Fresh whole-project review at that head found eight correctness defects;
-those findings keep the candidate unready for merge despite the passing suite.
+(`run-cycle.sh`, hourly crontab, single-host law — LEARNINGS #17).
+
+The unmerged repair candidate at `795d832` passed **1031 live tests with zero
+skips**, Ruff and canonical Forgejo CI. Its default suite passed 1028 tests
+with three paid-model skips. One real automatic repair→PR→CI→merge→refresh
+trial passed on the integration branch. Three fresh clean whole-project
+rounds, full recon/quorum dogfood, security review, CEO quality adjudication
+and final main/mirror/runner delivery remain open. These candidate results
+do not describe a production rollout. See the [current audit ledger](docs/pm-recovery/ROUND-LEDGER.md)
+and [round26 evidence](docs/pm-recovery/ROUND26-REPAIR-CHECKPOINT.md).
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
 runtime model credentials. The default suite skips those three paid model
@@ -96,7 +89,7 @@ cases. Round 14 remains open; no exhaustive certification is
 claimed. CI on every push. Quality loop on
 issue #5; desk charter + incident history on issue #3 and map #63.
 
-Requested behavior (CEO 2026-09-04, not yet implemented): the **exhaustive bug-resolution
+Requested behavior (CEO 2026-09-04, implemented in this draft but not certified or deployed): the **exhaustive bug-resolution
 loop** — repeated fresh-eyes recon→fix→refresh→note rounds (new context every round) until
 THREE CONSECUTIVE 100%-green loops with zero regressions, then the repo is certified
 exhaustively flushed. Spec: [EXHAUSTIVE-BUG-RESOLUTION.md](EXHAUSTIVE-BUG-RESOLUTION.md) ·
