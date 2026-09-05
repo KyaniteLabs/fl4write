@@ -244,8 +244,9 @@ def _verify_unchanged(command, tree, junit, timeout, verify_suite, paths):
 
 def _prove_patch(source: Path, reviewed_head: str, files: dict[str, str],
                  regressions: set[str], test_command: list[str], evidence_dir: Path,
-                 verify_suite: Callable, test_timeout: int = 1800) -> tuple[Path, set[str], str, set[str]]:
-    work_root = Path(tempfile.mkdtemp(prefix="fl4write-exhaustive-fix-"))
+                 verify_suite: Callable, test_timeout: int = 1800, *,
+                 work_root: Path) -> tuple[Path, set[str], str, set[str]]:
+    # The caller owns this workspace through publication and always removes it.
     baseline, pin_only, fixed = (work_root / n for n in ("baseline", "pin-only", "fixed"))
     for tree in (baseline, pin_only, fixed):
         _clone_at(source, tree, reviewed_head)
@@ -608,6 +609,7 @@ def attempt_fix_with_regression_pin(
     ``(set(test_ids), junit_sha256)`` for green or raise for red/unavailable.
     """
     result = _result("error", "uninitialized", reviewed_head)
+    workspace = None
     try:
         prior_path = evidence_dir / _RECEIPT
         if prior_path.exists():
@@ -635,9 +637,10 @@ def attempt_fix_with_regression_pin(
         _, binding = _primary(config)
         evidence_dir.mkdir(parents=True, exist_ok=True)
         files, regressions = _prepared_patch(config, reviewed_head, findings, repo, evidence_dir, test_command)
+        workspace = tempfile.TemporaryDirectory(prefix="fl4write-exhaustive-fix-")
         fixed, test_ids, junit_hash, _ = _prove_patch(
             repo, reviewed_head, files, regressions, test_command,
-            evidence_dir, verify_suite, test_timeout)
+            evidence_dir, verify_suite, test_timeout, work_root=Path(workspace.name))
         changed = set(_git(["diff", "--name-only", "HEAD", "--"], fixed).splitlines())
         changed.update(_git(["ls-files", "--others", "--exclude-standard"], fixed).splitlines())
         if changed != set(files):
@@ -778,6 +781,9 @@ def attempt_fix_with_regression_pin(
         except OSError:
             pass
         return result
+    finally:
+        if workspace is not None:
+            workspace.cleanup()
 
 
 __all__ = ["attempt_fix_with_regression_pin"]

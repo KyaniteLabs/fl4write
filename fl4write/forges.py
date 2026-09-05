@@ -252,14 +252,17 @@ class ForgeAdapter:
         native endpoint must return None, never a fake empty diff."""
         raise NotImplementedError
 
-    def path_exists(self, repo: str, path: str) -> bool | None:
-        """Does `path` exist on the CURRENT default branch? True/False, or
+    def path_exists(self, repo: str, path: str, ref: str | None = None) -> bool | None:
+        """Does `path` exist at `ref` (current default branch when omitted)? True/False, or
         None when unqueryable (the retro freshness gate fails OPEN on None —
         keep the finding, a dropped real finding is worse than a stale one)."""
         from urllib.parse import quote
 
         try:
-            data = self._call("GET", f"/repos/{repo}/contents/{quote(path, safe='')}")
+            endpoint = f"/repos/{repo}/contents/{quote(path, safe='')}"
+            if ref is not None:
+                endpoint += "?ref=" + quote(ref, safe="")
+            data = self._call("GET", endpoint)
         except ForgeError as exc:
             if "HTTP 404" in str(exc):
                 return False

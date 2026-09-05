@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import fixlane, gatekeeper, renderer, state
+from .analyzer import MAX_FILE_BYTES
 from .config import RepoConfig
 from .forges import ForgeAdapter, ForgeError, adapter_for
 from .models import Finding, PullRequest
@@ -347,7 +348,7 @@ def _fix_lane(
             primary.create_comment(config.repo, pr.number, body)
             report.fix_escalations += 1
             continue
-        if not _fix_freshness_gate(primary, config, f):
+        if not _fix_freshness_gate(primary, config, f, pr.head_sha):
             continue
         report.fix_attempts += 1
         result = executor.attempt_fix(pr, f, config)
@@ -366,14 +367,18 @@ def _fix_lane(
             # Sol audit: unknown statuses had no denominator — count + surface
             report.fix_failures += 1
             report._fix_failure_notes.append(f"#{pr.number} unknown-status {status!r}")
+def _poll_fix_merges(config: RepoConfig, primary: ForgeAdapter, report: CycleReport) -> None:
+    """Revisit owned fix PRs even when no source PR needs another review."""
+    from . import executor
+
     try:
         # bot_identity REQUIRED (post-merge build): the merge gate re-verifies
         # authorship against it — a missing identity fails every merge closed.
         merged = executor.check_and_merge_own_prs(config, primary.bot_login)
         report.fix_prs_merged += len(merged)  # Sol audit: was int += list
     except Exception as exc:  # merge scan must not kill the cycle
-
         log.warning("merge scan failed for %s: %s", config.repo, exc)
+        report.alerts.append("owned fix merge scan unavailable — will retry")
 
 
 def _post_merge_sweep(
@@ -528,12 +533,14 @@ def _post_merge_sweep(
 _CI_BENIGN = {"success", "skipped", "neutral", "canceled"}
 
 
-def _fix_freshness_gate(primary: ForgeAdapter, config: RepoConfig, finding) -> bool:
+def _fix_freshness_gate(primary: ForgeAdapter, config: RepoConfig, finding,
+                        ref: str | None = None) -> bool:
     """True = fresh enough to attempt a fix. The #503 class: a finding on a
     file deleted/moved after review made every attempt fail at fetch,
     invisibly. False = skip the fix (finding stays posted); None-probe =
     fail-open (proceed)."""
-    exists = primary.path_exists(config.repo, finding.path)
+    exists = (primary.path_exists(config.repo, finding.path, ref=ref)
+              if ref is not None else primary.path_exists(config.repo, finding.path))
     if exists is False:
         log.info("fix freshness gate: %s gone from HEAD — skipping fix", finding.path)
         return False
@@ -541,7 +548,7 @@ def _fix_freshness_gate(primary: ForgeAdapter, config: RepoConfig, finding) -> b
 
 # Omnisweep bounds (consensus-gated): files above this are skipped (the
 # contents API refuses >1MB; anything near it is generated/vendored).
-_OMNI_MAX_FILE_BYTES = 200_000
+_OMNI_MAX_FILE_BYTES = MAX_FILE_BYTES
 _OMNI_FIX_ATTEMPTS_PER_CYCLE = 3
 
 
@@ -1779,6 +1786,13 @@ def run_cycle(
                     report.alerts.append("cycle deadline reached — acceptance metrics skipped")
                 else:
                     report.acceptance = metrics.acceptance_snapshot(primary, config)
+
+            if (run_fixes and config.fix.enabled and config.fix.merge_own_prs
+                    and not config.shadow):
+                if deadline is not None and (deadline - time.monotonic()) < REVIEW_BUDGET_S:
+                    report.alerts.append("cycle deadline reached — owned fix merges deferred")
+                else:
+                    _poll_fix_merges(config, primary, report)
 
             if report.fix_failures:
                 # ONE summarizing alert per cycle (V2) — alert fatigue is a

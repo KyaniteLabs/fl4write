@@ -657,3 +657,18 @@ completed issues once, without rescanning or fixing before publication
 succeeds. Four behavioral cases pin complete/partial bodies and successful/
 failed legacy refresh. The isolated release passes 672 tests with no skips,
 including real model calls. This does not certify an exhaustive audit round.
+
+## 63. Match repair and review boundaries to their actual work (2026-09-05)
+
+Fresh round 18 found five defects despite a passing 841-test live suite.
+Four repairs establish explicit boundaries: open-PR freshness checks use the
+reviewed SHA; whole-file analysis accepts the complete supported 200000-byte
+source instead of applying the 60000-character PR-diff cap; the public repair
+operation owns and removes its temporary clones on every outcome; and owned
+fix PRs are polled each enabled live cycle even when source reviews are cached.
+Unsupported whole-file inputs defer before a model call. Regression cases
+cover byte accounting, late-file findings, ordinary checkout failure, pending
+CI and quiet subsequent cycles. Existing freshness fixtures now accept the
+selected revision. The fifth finding, issue retries erased after incomplete
+listing, remains open pending its real automated repair trial. Fresh green
+rounds remain 0/3; these repairs do not establish certification.

@@ -40,6 +40,7 @@ from .models import Finding, PullRequest, ReviewDoc
 log = logging.getLogger("fl4write.analyzer")
 
 MAX_DIFF_CHARS = 60_000
+MAX_FILE_BYTES = 200_000
 
 
 def _git_diff_path(line: str) -> str | None:
@@ -585,15 +586,18 @@ def analyze(
     mode: str = "pr",
 ) -> ReviewDoc:
     """One PR -> one ReviewDoc. Raises ModelUnavailable only after both routes fail."""
+    if mode == "file" and len(diff_text.encode("utf-8")) > MAX_FILE_BYTES:
+        raise ModelUnavailable("whole-file source exceeds the supported byte bound")
+    source_limit = len(diff_text) if mode == "file" else MAX_DIFF_CHARS
     # F13-A15: the analyzer reviews the file's EXACT bytes — destructive
     # scrubbing of the diff rewritten sanitizer rules, HTML and data-URL
     # handling before the model could assess them. Only control/format chars
     # are stripped (invisible-character hygiene); the raw bytes ride inside a
     # run-widened fence and the system prompt declares them DATA.
-    diff_canonical = scrub.controls(diff_text[:MAX_DIFF_CHARS])
+    diff_canonical = scrub.controls(diff_text[:source_limit])
     _dlen = len(diff_text)
-    if _dlen > MAX_DIFF_CHARS:
-        diff_canonical += f"\n[diff truncated — showing first {MAX_DIFF_CHARS} of {_dlen} chars]"
+    if _dlen > source_limit:
+        diff_canonical += f"\n[diff truncated — showing first {source_limit} of {_dlen} chars]"
     _maxrun = max((len(run) for run in re.findall(r"`+", diff_canonical)), default=0)
     _fence = "`" * (_maxrun + 1)
     prompt = (
@@ -660,7 +664,7 @@ def analyze(
 
     findings: list[Finding] = []
     dropped: list[str] = []
-    _diff_truncated = len(diff_text or "") > MAX_DIFF_CHARS
+    _diff_truncated = mode != "file" and len(diff_text or "") > MAX_DIFF_CHARS
     for item in items:
         try:
             if not isinstance(item, dict):
@@ -884,5 +888,5 @@ def analyze(
         digest[f.severity] = digest.get(f.severity, 0) + 1
     doc = ReviewDoc(pr=pr, findings=findings, digest=digest)
     doc.digest["_dropped_ungrounded"] = len(dropped)
-    doc.digest["_diff_truncated"] = 1 if len(diff_text) > MAX_DIFF_CHARS else 0
+    doc.digest["_diff_truncated"] = int(_diff_truncated)
     return doc

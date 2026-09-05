@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -149,7 +150,8 @@ def test_real_git_patch_proves_red_pin_green_fix_and_preserves_baseline(tmp_path
         timeouts.append(timeout)
         return _verify(command, tree, junit, timeout)
     fixed, ids, digest, baseline = ef._prove_patch(
-        repo, head, *_patch(), ["pytest"], tmp_path / "evidence", verify, test_timeout=17)
+        repo, head, *_patch(), ["pytest"], tmp_path / "evidence", verify, test_timeout=17,
+        work_root=tmp_path / "proof")
     assert timeouts == [17, 17, 17]
     assert (fixed / "calc.py").read_text().endswith("return a + b\n")
     assert baseline == {"tests/test_old.py::test_old"}
@@ -162,7 +164,8 @@ def test_pin_that_does_not_fail_original_is_rejected(tmp_path):
     def always_green(command, tree, junit, timeout):
         return {"old"}, "a" * 64
     with pytest.raises(ef.FixError, match="did not fail"):
-        ef._prove_patch(repo, head, *_patch(), ["pytest"], tmp_path / "e", always_green)
+        ef._prove_patch(repo, head, *_patch(), ["pytest"], tmp_path / "e", always_green,
+                        work_root=tmp_path / "proof")
 
 
 def test_runner_outage_cannot_prove_regression(tmp_path):
@@ -172,7 +175,8 @@ def test_runner_outage_cannot_prove_regression(tmp_path):
             raise OSError("runner unavailable")
         return _verify(command, tree, junit, timeout)
     with pytest.raises(ef.FixError, match="runner failure"):
-        ef._prove_patch(repo, head, *_patch(), ["pytest"], tmp_path / "e", verifier)
+        ef._prove_patch(repo, head, *_patch(), ["pytest"], tmp_path / "e", verifier,
+                        work_root=tmp_path / "proof")
 
 
 def test_mutating_test_cannot_change_the_committed_fix(tmp_path):
@@ -183,7 +187,8 @@ def test_mutating_test_cannot_change_the_committed_fix(tmp_path):
             (tree / "calc.py").write_text("unreviewed mutation")
         return result
     with pytest.raises(ef.FixError, match="mutated"):
-        ef._prove_patch(repo, head, *_patch(), ["pytest"], tmp_path / "e", verifier)
+        ef._prove_patch(repo, head, *_patch(), ["pytest"], tmp_path / "e", verifier,
+                        work_root=tmp_path / "proof")
 
 
 def test_prepared_patch_retry_does_not_call_model(tmp_path, monkeypatch):
@@ -276,7 +281,8 @@ def test_baseline_loss_is_rejected(tmp_path):
             return _verify(command, tree, junit, timeout)
         return {"new"}, "b" * 64
     with pytest.raises(ef.FixError, match="baseline"):
-        ef._prove_patch(repo, head, *_patch(), ["pytest"], tmp_path / "e", verifier)
+        ef._prove_patch(repo, head, *_patch(), ["pytest"], tmp_path / "e", verifier,
+                        work_root=tmp_path / "proof")
 
 
 def test_capability_gate_precedes_model_and_credentials(tmp_path, monkeypatch):
@@ -383,6 +389,36 @@ def test_verified_bot_owned_flow_supports_github_and_forgejo(tmp_path, monkeypat
     assert result["regression_paths"] == ["tests/test_regression.py"]
     assert forge.merged_calls == 1
     assert json.loads((tmp_path / "evidence" / "exhaustive-fix.json").read_text())["status"] == "merged"
+
+
+@pytest.mark.parametrize("outcome", ["merged", "pending", "blocked", "error"])
+def test_repair_workspace_removed_on_every_outcome(tmp_path, monkeypatch, outcome):
+    roots = set()
+    clone = ef._clone_at
+
+    def capture_clone(source, destination, head):
+        roots.add(destination.parent)
+        clone(source, destination, head)
+        if outcome == "error":
+            raise OSError("ordinary checkout failure after allocating workspace")
+
+    class Forge(_FakeForge):
+        ci = None if outcome == "pending" else True
+        fork = outcome == "blocked"
+        identity = "fl4write[bot]"
+        existing = None
+        has_existing = False
+
+    monkeypatch.setattr(ef, "_clone_at", capture_clone)
+    result, _ = _flow(tmp_path, monkeypatch, forge=Forge)
+    assert result["status"] == outcome, result
+    try:
+        assert roots and all(not root.exists() for root in roots)
+        assert (tmp_path / "evidence" / "exhaustive-fix.json").exists() or outcome == "blocked"
+    finally:
+        # A deliberate baseline-red run must not leave the reproduced leak.
+        for root in roots:
+            shutil.rmtree(root, ignore_errors=True)
 
 
 def test_explicit_base_uses_its_head_and_required_checks(tmp_path, monkeypatch):

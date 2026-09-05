@@ -1197,7 +1197,7 @@ class _R4Forge(ForgeAdapter):
     def list_merged_prs(self, repo, since_iso):
         return list(self.merged)
 
-    def path_exists(self, repo, path):
+    def path_exists(self, repo, path, ref=None):
         return True
 
     def get_persistent_comment(self, repo, number):
