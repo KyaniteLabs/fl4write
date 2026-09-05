@@ -98,9 +98,34 @@ def _write_file(tree: Path, rel: str, content: str) -> None:
 
 
 def _parse_patch(raw: str, sources: dict[str, str] | None = None) -> tuple[dict[str, str], set[str]]:
-    from .analyzer import extract_json
+    def unique_keys(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError(f"duplicate JSON key {key!r}")
+            obj[key] = value
+        return obj
 
-    obj = extract_json(raw, envelope_key="files")
+    # Remove only explicit OUTER wrappers. Searching the entire response for
+    # reasoning tags also edits literal source strings inside valid JSON.
+    text = raw.strip()
+    preamble = re.match(r"<think\b[^>]*>.*?</think\s*>", text, flags=re.DOTALL | re.IGNORECASE)
+    if preamble:
+        text = text[preamble.end():].strip()
+    fence = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*)\r?\n```[ \t]*",
+                         text, flags=re.DOTALL | re.IGNORECASE)
+    if fence:
+        text = fence.group(1)
+    # Complete decoding rejects trailing/multiple envelopes, incomplete
+    # wrappers and arbitrary prose instead of guessing at embedded objects.
+    obj = json.loads(text, object_pairs_hook=unique_keys)
+    return _validate_patch(obj, sources)
+
+
+def _validate_patch(obj: object, sources: dict[str, str] | None = None) -> tuple[dict[str, str], set[str]]:
+    """Validate parsed patch data without treating source strings as model prose."""
+    if not isinstance(obj, dict):
+        raise FixError("model patch must be an object")
     rows = obj.get("files")
     if not isinstance(rows, list) or len(rows) < 2 or len(rows) > 24:
         raise FixError("model patch must contain 2-24 files")
@@ -533,11 +558,11 @@ def _prepared_patch(config, reviewed_head, findings, repo, evidence_dir, test_co
         saved = json.loads(path.read_bytes())
         if saved.get("reviewed_head") != reviewed_head or saved.get("request_sha256") != request_sha:
             raise FixError("prepared patch belongs to another repair request")
-        return _parse_patch(json.dumps(saved["patch"]))
+        return _validate_patch(saved["patch"])
     files, regressions = _model_patch(config, reviewed_head, findings, repo)
     patch = {"files": [{"path": p, "content": text, "regression": p in regressions}
                         for p, text in sorted(files.items())]}
-    _parse_patch(json.dumps(patch))
+    _validate_patch(patch)
     temporary = evidence_dir / ".prepared-patch.tmp"
     with temporary.open("w", encoding="utf-8") as stream:
         json.dump({"reviewed_head": reviewed_head, "request_sha256": request_sha,

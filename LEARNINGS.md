@@ -716,3 +716,15 @@ pagination must use the adapter's actual page-size parameter: Forgejo's limit
 and GitHub's per_page are different contracts. Test a server that honors those
 parameters and enough rows to force fallback, rather than counting invented
 short fixture pages. Thirteen regressions cover these repairs.
+
+## 66. Preserve source bytes through every repair stage (2026-09-05)
+
+Literal Unicode paths and custom rule IDs need reversible handling wherever
+they become presentation text or parsed identity. Round 21 also demonstrated
+that a prepared patch is structured data, not a fresh model response. Passing
+cached source through reasoning-text extraction changed literal source bytes
+and broke repair replay. The same extraction damaged first-generation full
+content and compact replacements. Decode complete JSON, remove only explicit
+outer wrappers, and validate cached objects without reparsing their strings.
+Test the same source through initial response and replay, including supported
+wrappers. Green tests alone did not reveal the changed patch identity.

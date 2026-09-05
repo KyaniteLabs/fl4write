@@ -35,8 +35,33 @@ rechecking its exact head, base, ownership and green CI. The feature merge is
 clear the automated-resume gate. The combined candidate adds the quoted-path
 extension and rule-ID repair; full default verification passed 904 tests
 with three paid-model skips in 84.75 seconds. Ruff passed. Exact committed
-live verification remains pending.
+`0090d53cf9ed6d5af2809fe053efb5292df42117` live verification passed all
+907 tests with zero skips and Ruff; canonical CI passed. Six live calls
+reserved 24000 output tokens. Live JUnit SHA256:
+`5b64ccd37555bfb27fd5996308117a58dcf52f799d8740c7cd7acd431e2b63c0`.
 
 Full combined validation and delivery remain open. PR15 is a draft; main
 merge, mirror/runner delivery, security review, three clean fresh rounds and
 CEO quality adjudication remain open. Production is unchanged.
+
+Follow-up diagnosis reproduced a concrete replay defect: cached expanded
+source was serialized and passed through model-prose extraction, which
+removed literal think-tag text from source strings. That changes patch bytes
+between generation and replay. The second real commit object was not retained,
+so its exact difference was not reconstructed. The reproduced content drift
+explains the observed commit mismatch, but that attribution remains an
+inference. A separate repair validates parsed cache data directly, retaining
+the shared strict patch schema. The cache-only patch passed 910 default tests
+with three paid-model skips. Independent review then found the same defect
+in first-generation full-content rows, and again in supported preamble/fenced
+responses after an initial strict-JSON fix. This is F21-CACHE-001 (Major).
+The final repair removes only an explicit leading closed reasoning preamble
+and an optional outer JSON fence, then decodes the complete JSON with duplicate
+key rejection. Unsupported prose, malformed wrappers and trailing or multiple
+objects fail closed. Cached objects use the same schema validator directly.
+Twenty regressions cover initial responses, full content, compact replacements,
+cache replay, wrappers and rejection controls. Final independent review passed
+85 neighboring tests, Ruff, 14 independent fidelity cases and 14 rejection
+controls, closing F21-CACHE-001 within that scope. Full final default validation
+passed 924 tests with three paid-model skips in 89.56 seconds; Ruff passed.
+Exact committed live validation remains pending.

@@ -1,5 +1,24 @@
 # Recovered historical audit ledger
 
+## Successor round 21 — September 5
+
+Fresh review of bb3625a found F21-001 and F21-002 (both Minor): Unicode
+diff-path corruption and custom rule-ID identity loss. Both repairs passed
+independent scoped review and were pushed as 0090d53. Full default validation
+passed 904 tests with three paid-model skips; exact live validation passed
+907 tests with zero skips and Ruff. Canonical CI passed. Fresh clean remains
+0/3. The generated Unicode trial failed automated resume after two green
+886-test proofs; PR18 was manually integrated, preserving the failed trial.
+
+Follow-up F21-CACHE-001 (Major) reproduced source text corruption in cached
+patch replay and initial model responses. The repair preserves parsed cache
+objects and decodes complete JSON after removing only explicit outer wrappers.
+Twenty regressions and neighboring checks pass; final independent review
+approved the repair with 85 tests and 28 additional controls. Full default
+validation passed 924 tests with three paid-model skips and Ruff; exact live
+verification remains pending. See ROUND21-REPAIR-CHECKPOINT.md. Main delivery,
+security review, automated lifecycle proof and CEO verdicts remain open.
+
 ## Successor round20 — September5
 
 Fresh functional review of46c27ef found three defects: F20-001(Minor) path
