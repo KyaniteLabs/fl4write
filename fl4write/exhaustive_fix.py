@@ -350,9 +350,13 @@ class _Forge:
 
     def head(self, repo: str, branch: str) -> str:
         quoted = urllib.parse.quote(branch, safe="")
-        path = f"/repos/{repo}/commits/{quoted}"
+        path = f"/repos/{repo}/commits/{quoted}" if self.github else f"/repos/{repo}/branches/{quoted}"
         row = self.call("GET", path)
-        sha = row.get("sha") if isinstance(row, dict) else None
+        if self.github:
+            sha = row.get("sha") if isinstance(row, dict) else None
+        else:
+            commit = row.get("commit") if isinstance(row, dict) and row.get("name") == branch else None
+            sha = commit.get("id") if isinstance(commit, dict) else None
         if not isinstance(sha, str) or not _SHA.fullmatch(sha):
             raise FixError("forge branch head response is malformed")
         return sha

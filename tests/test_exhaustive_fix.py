@@ -46,6 +46,25 @@ def _config(*, github: bool = True, enabled: bool = True) -> RepoConfig:
     })
 
 
+@pytest.mark.parametrize("branch", ["main", "feature/exhaustive-loop-draft"])
+def test_forgejo_head_uses_branch_endpoint_and_commit_id(monkeypatch, branch):
+    forge = ef._Forge(_config(github=False).forges["origin"], "synthetic-token")
+    calls = []
+    monkeypatch.setattr(forge, "call", lambda method, path:
+                        calls.append((method, path)) or {"name": branch, "commit": {"id": "a" * 40}})
+    assert forge.head("acme/widget", branch) == "a" * 40
+    assert calls == [("GET", "/repos/acme/widget/branches/" + branch.replace("/", "%2F"))]
+
+
+@pytest.mark.parametrize("row", [{"name": "other", "commit": {"id": "a" * 40}},
+                                  {"name": "main", "commit": {"id": "invalid"}}])
+def test_forgejo_head_rejects_wrong_branch_or_invalid_commit(monkeypatch, row):
+    forge = ef._Forge(_config(github=False).forges["origin"], "synthetic-token")
+    monkeypatch.setattr(forge, "call", lambda *args: row)
+    with pytest.raises(ef.FixError, match="branch head"):
+        forge.head("acme/widget", "main")
+
+
 def _verify(command, tree: Path, junit: Path, timeout):
     del command, timeout
     source = (tree / "calc.py").read_text()
