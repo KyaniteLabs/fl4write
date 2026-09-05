@@ -59,6 +59,7 @@ def _request_identity(args, config):
         "chunk_chars": args.chunk_chars,
         "isolation": isolation, "test_image": test_image,
         "live_model_tests": getattr(args, "live_model_tests", False),
+        "base_branch": getattr(args, "base_branch", None),
         "environment": {k: os.environ.get(k) for k in ("FL4WRITE_EVAL", "FL4WRITE_EVAL_CONFIG", "PYTHONPATH")},
     }
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -557,10 +558,14 @@ def _request_owned_fixes(repo, config, head, findings, args, evidence_dir):
         raise Deferred("automatic fixes require the isolated container test runtime")
     from .exhaustive_fix import attempt_fix_with_regression_pin
 
+    selection = {}
+    if getattr(args, "base_branch", None) is not None:
+        selection["base_branch"] = args.base_branch
     result = attempt_fix_with_regression_pin(
         repo, config, head, findings, args.test_command, evidence_dir,
         verify_suite=_suite_runner(args),
         test_timeout=args.test_timeout,
+        **selection,
     )
     if result.get("status") != "merged" or not _valid_sha(result.get("merged_head")):
         raise Deferred(f"atomic fix {result.get('status', 'error')}: {result.get('reason', 'unproven')}")
@@ -851,6 +856,7 @@ def _parser():
     p.add_argument("--test-timeout", type=int, default=3600)
     p.add_argument("--ledger-issue", type=int)
     p.add_argument("--enable-fixes", action="store_true")
+    p.add_argument("--base-branch", help="explicit existing repair target; defaults to the repository default branch")
     p.add_argument("--isolation", choices=("docker", "process"), default="docker",
                    help="Docker is required for automatic fixes; process is for trusted local diagnostics")
     p.add_argument("--test-image", help="immutable image SHA-256 of the installed test runtime")

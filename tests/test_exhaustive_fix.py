@@ -274,6 +274,7 @@ class _FakeForge:
     created = 0
     merged_calls = 0
     has_existing = False
+    target = "main"
 
     def __init__(self, binding, token): pass
     def repo(self, repo):
@@ -287,10 +288,12 @@ class _FakeForge:
         if not self.has_existing and not self.created:
             return None
         return {"number": 7, "html_url": "https://forge/pr/7",
-            "user": {"login": self.identity}, "head": {"sha": self.commit, "ref": branch},
-            "base": {"sha": self.base}}
+            "user": {"login": self.identity},
+            "head": {"sha": self.commit, "ref": branch, "repo": {"full_name": repo}},
+            "base": {"sha": self.base, "ref": self.target, "repo": {"full_name": repo}}}
     def create_pr(self, repo, branch, base, title, body):
         type(self).created += 1
+        type(self).target = base
         return self.find_pr(repo, branch)
     def required_contexts(self, repo, branch): return set()
     def checks_green(self, repo, sha, required=None): return self.ci
@@ -299,17 +302,19 @@ class _FakeForge:
         return self.merge_response
 
 
-def _flow(tmp_path, monkeypatch, forge=_FakeForge, github=True):
+def _flow(tmp_path, monkeypatch, forge=_FakeForge, github=True, base_branch=None):
     repo, head = _repo(tmp_path)
     forge.base = head
     forge.merged_calls = forge.created = 0
     forge.merged = "e" * 40
+    forge.target = "main"
     if forge is _FakeForge:
         forge.existing = None
         forge.ci = True
         forge.identity = "fl4write[bot]"
         forge.fork = False
         forge.has_existing = False
+        forge.target = "main"
     monkeypatch.setattr(ef, "_model_patch", lambda *a: _patch())
     monkeypatch.setattr(ef, "_Forge", forge)
     @contextlib.contextmanager
@@ -326,7 +331,7 @@ def _flow(tmp_path, monkeypatch, forge=_FakeForge, github=True):
     monkeypatch.setattr(ef, "_git", git)
     result = ef.attempt_fix_with_regression_pin(
         repo, _config(github=github), head, [{"id": "F1", "path": "calc.py"}], ["pytest"],
-        tmp_path / "evidence", verify_suite=_verify)
+        tmp_path / "evidence", verify_suite=_verify, base_branch=base_branch)
     return result, forge
 
 
@@ -338,6 +343,43 @@ def test_verified_bot_owned_flow_supports_github_and_forgejo(tmp_path, monkeypat
     assert result["regression_paths"] == ["tests/test_regression.py"]
     assert forge.merged_calls == 1
     assert json.loads((tmp_path / "evidence" / "exhaustive-fix.json").read_text())["status"] == "merged"
+
+
+def test_explicit_base_uses_its_head_and_required_checks(tmp_path, monkeypatch):
+    selected = []
+    class Candidate(_FakeForge):
+        def head(self, repo, branch):
+            selected.append(branch)
+            return super().head(repo, branch)
+        def required_contexts(self, repo, branch):
+            selected.append(branch)
+            return set()
+    result, forge = _flow(tmp_path, monkeypatch, forge=Candidate,
+                          base_branch="feature/review-candidate")
+    assert result["status"] == "merged", result["reason"]
+    assert selected and set(selected) == {"feature/review-candidate"}
+    assert forge.target == "feature/review-candidate"
+    assert result["default_branch"] == "main"
+    assert result["base_branch"] == "feature/review-candidate"
+
+
+@pytest.mark.parametrize("field", ["branch", "base_repo", "head_repo"])
+def test_same_sha_on_wrong_base_or_repository_never_merges(tmp_path, monkeypatch, field):
+    class ChangedBase(_FakeForge):
+        def find_pr(self, repo, branch):
+            value = super().find_pr(repo, branch)
+            if value:
+                if field == "branch":
+                    value["base"]["ref"] = "other-branch"
+                elif field == "base_repo":
+                    value["base"]["repo"]["full_name"] = "other/repo"
+                else:
+                    value["head"].pop("repo")
+            return value
+    result, forge = _flow(tmp_path, monkeypatch, forge=ChangedBase)
+    assert result["status"] == "blocked"
+    assert "ownership, head, or base" in result["reason"]
+    assert forge.merged_calls == 0
 
 
 @pytest.mark.parametrize("failure,reason", [

@@ -1,5 +1,22 @@
 # Recovered historical audit ledger
 
+## Candidate integration checkpoints — September 5
+
+The records below retain historical verdicts. Current repairs and follow-up
+evidence supersede their descriptions of unimplemented capabilities.
+
+At `6af8898`, model transport repairs passed independent bounded review and a real
+795-test live suite with zero skips. At `42e59b9`, shared durable round budgets
+passed independent bounded review (95 tests). The live run found a README format
+regression and another median model miss. The README format was repaired; at
+`545771e`, zero-temperature product review configuration passed 801 live tests,
+zero skips, and canonical CI. These were scoped repair checkpoints, not fresh
+whole-project green rounds. Consecutive clean counter remains **0/3**.
+
+Explicit repair base selection now permits a delivery trial against an existing
+candidate branch while preserving selected-head, repository, author and CI gates.
+The fresh whole-project review and actual owned repair delivery remain open.
+
 ## Feature draft review — September 5
 
 FEATURE13-DRAFT-REVIEW.md reproduces five new safety findings in the isolated

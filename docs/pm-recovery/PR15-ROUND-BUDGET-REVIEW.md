@@ -19,7 +19,9 @@ This changes the real route used by evaluation and the product's own reviews,
 not the corpus or its assertions. DeepInfra documents lower temperature as less
 random, not a guarantee of correctness or identical results:
 [chat completion parameters](https://docs.deepinfra.com/chat/overview).
-Validation of this configuration remains pending. No successful retry erases a
+At `545771e`, this configuration passed all 801 tests in the real isolated live
+suite, with zero skips and six completed model calls. Canonical CI run 20 also
+passed. No successful run erases a
 recorded miss, and no bounded review is counted as a fresh whole-project round.
 
 The feature still needs actual owned fix/PR/merge/refresh execution, fresh whole-

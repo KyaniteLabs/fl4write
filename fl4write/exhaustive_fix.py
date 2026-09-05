@@ -520,7 +520,8 @@ def _recover_merge(forge, config, reviewed_head, commit_sha, author, default, ev
     if saved.get("phase") not in {"merging", "merged"}:
         return None
     if (saved.get("reviewed_head") != reviewed_head or saved.get("commit_sha") != commit_sha
-            or saved.get("author") != author or saved.get("default_branch") != default
+            or saved.get("author") != author
+            or saved.get("base_branch", saved.get("default_branch")) != default
             or type(saved.get("pr_number")) is not int or saved["pr_number"] <= 0):
         raise FixError("merge recovery receipt does not match the proved transaction")
     pr = forge.call("GET", f"/repos/{config.repo}/pulls/{saved['pr_number']}")
@@ -563,6 +564,7 @@ def attempt_fix_with_regression_pin(
     verify_suite: Callable,
     max_model_calls: int = 1,
     test_timeout: int = 1800,
+    base_branch: str | None = None,
 ) -> dict:
     """Prove, publish, and merge one atomic multi-file repair.
 
@@ -583,6 +585,10 @@ def attempt_fix_with_regression_pin(
             raise FixError("exactly one bounded model call is supported")
         if type(test_timeout) is not int or test_timeout <= 0:
             raise FixError("test timeout must be a positive integer")
+        if base_branch is not None:
+            if (not isinstance(base_branch, str) or not base_branch or base_branch.startswith("-")
+                    or _git(["check-ref-format", "--branch", base_branch], repo) != base_branch):
+                raise FixError("selected base branch is invalid")
         if config.shadow or not config.fix.enabled or not config.fix.merge_own_prs:
             return _result("blocked", "fix and own-PR merge capabilities must be enabled", reviewed_head)
         if not findings or not isinstance(test_command, list) or not test_command \
@@ -613,6 +619,8 @@ def attempt_fix_with_regression_pin(
         if _git(["rev-parse", "HEAD^{tree}"], fixed) != tested_tree:
             raise FixError("committed tree differs from the tested patch")
         branch = _BRANCH + reviewed_head[:12]
+        if base_branch is not None:
+            branch += "-" + hashlib.sha256(base_branch.encode()).hexdigest()[:8]
         with _credential(config, binding) as token:
             forge = _Forge(binding, token)
             info = forge.repo(config.repo)
@@ -622,6 +630,7 @@ def attempt_fix_with_regression_pin(
             if full_name != config.repo or fork is not False or not isinstance(default, str) or not default:
                 return _result("blocked", "canonical repository identity or non-fork rail failed", reviewed_head,
                                fork=fork)
+            default = base_branch or default
             author = forge.user()
             if author != config.bot_login:
                 return _result("blocked", "authenticated identity is not the configured bot", reviewed_head,
@@ -631,7 +640,7 @@ def attempt_fix_with_regression_pin(
                 return recovered
             base_sha = forge.head(config.repo, default)
             if base_sha != reviewed_head:
-                return _result("pending", "remote default HEAD drifted", reviewed_head,
+                return _result("pending", "remote selected base HEAD drifted", reviewed_head,
                                author=author, fork=False, base_sha=base_sha,
                                changed_paths=sorted(changed), regression_paths=sorted(regressions),
                                test_ids=sorted(test_ids), junit_sha256=junit_hash)
@@ -660,14 +669,16 @@ def attempt_fix_with_regression_pin(
                          and isinstance((pr.get("head") or {}).get("repo"), dict) else None)
             if isinstance(number, bool) or not isinstance(number, int) or number <= 0 \
                     or pr_author != author or pr_head != commit_sha or pr_base != base_sha \
-                    or head_repo not in (None, config.repo):
+                    or head_repo != config.repo \
+                    or ((pr.get("base") or {}).get("ref") != default) \
+                    or (((pr.get("base") or {}).get("repo") or {}).get("full_name") != config.repo):
                 return _result("blocked", "PR ownership, head, or base rail failed", reviewed_head,
                                pr_number=number, pr_url=pr_url, author=pr_author, fork=False,
                                base_sha=base_sha, changed_paths=sorted(changed),
                                regression_paths=sorted(regressions), test_ids=sorted(test_ids),
                                junit_sha256=junit_hash)
             proof = dict(pr_number=number, pr_url=pr_url, author=author, fork=False,
-                         commit_sha=commit_sha, default_branch=default,
+                         commit_sha=commit_sha, default_branch=info["default_branch"], base_branch=default,
                          base_sha=base_sha, changed_paths=sorted(changed),
                          regression_paths=sorted(regressions), test_ids=sorted(test_ids),
                          junit_sha256=junit_hash)
@@ -685,7 +696,7 @@ def attempt_fix_with_regression_pin(
                 return result
             # Re-read every mutable authority field immediately before merge.
             if forge.head(config.repo, default) != base_sha:
-                result = _result("pending", "default branch drifted before merge",
+                result = _result("pending", "selected base branch drifted before merge",
                                  reviewed_head, **proof)
                 _receipt(evidence_dir, result)
                 return result
@@ -698,9 +709,9 @@ def attempt_fix_with_regression_pin(
             if not current or ((current.get("user") or {}).get("login") != author) \
                     or ((current.get("head") or {}).get("sha") != commit_sha) \
                     or ((current.get("base") or {}).get("sha") != base_sha) \
-                    or (isinstance((current.get("head") or {}).get("repo"), dict)
-                        and ((current.get("head") or {}).get("repo") or {}).get("full_name")
-                        != config.repo):
+                    or ((current.get("base") or {}).get("ref") != default) \
+                    or (((current.get("base") or {}).get("repo") or {}).get("full_name") != config.repo) \
+                    or (((current.get("head") or {}).get("repo") or {}).get("full_name") != config.repo):
                 return _result("blocked", "PR changed before merge", reviewed_head, **proof)
             proof["phase"] = "merging"
             result = _result("pending", "merge requested; outcome requires verification", reviewed_head, **proof)

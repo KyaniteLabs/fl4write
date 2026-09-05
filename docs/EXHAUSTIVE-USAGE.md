@@ -39,8 +39,13 @@ own-PR merges. It proves the baseline, failing regression and repaired full suit
 before publication, then validates ownership, base, head and checks before merging.
 The local checkout refreshes to the verified merged head and runs the full suite
 again. `--ledger-issue NUMBER` selects the existing owned persistent ledger.
+`--base-branch BRANCH` explicitly selects an existing integration branch for repair
+PRs; omitting it selects the repository default branch. Its remote head must equal
+the reviewed commit, its required checks must pass, and the PR's base branch and
+both repository identities must match before merge. This allows a real delivery
+trial on an unmerged candidate without changing the target repository's default.
 
-Changing the configured command, image, model, budget or live-test mode invalidates
+Changing the configured command, image, model, budget, base branch or live-test mode invalidates
 reuse of the existing request evidence. Retain the state directory on retries;
 discarding it discards recovery and spend history. Per-repository runner adoption,
 real owned repair delivery, fresh whole-project quorum and three clean dogfood
