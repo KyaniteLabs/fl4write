@@ -187,9 +187,13 @@ def _model_patch(config: RepoConfig, reviewed_head: str,
     }, sort_keys=True)
     system = (
         "You are a bounded code repairer. Return JSON only: "
-        '{"files":[{"path":"relative/path","content":"complete file contents",'
-        '"regression":true}]}. For an existing supplied file, replace content with '
-        '"edits":[{"old":"exact unique source fragment","new":"replacement"}]. '
+        '{"files":[{"path":"existing.py","edits":[{"old":"exact unique source fragment",'
+        '"new":"replacement"}],"regression":false},'
+        '{"path":"tests/test_fix.py","content":"complete new test file contents",'
+        '"regression":true}]}. Each row has exactly three keys: path, regression, '
+        'and either edits or content. Never add other keys or combine edits and content. '
+        'Use edits for ALL supplied existing files, including README; use content only '
+        'for new files. The regression value must be a JSON boolean. '
         'Edits apply sequentially and each old fragment must match exactly once. '
         'Include multiple files, at least one regression '
         "test and at least one implementation file. Never return commands, diffs, "
