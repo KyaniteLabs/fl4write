@@ -41,7 +41,13 @@ repair is included with the timestamp repair; this is manual integration and
 does not satisfy automated lifecycle success.
 
 Combined default verification passed 972 tests with three paid-model skips
-in 85.88 seconds; Ruff passed. Exact committed live verification remains open.
+in 85.88 seconds; Ruff passed. Exact committed live verification of
+`3238d8baa7dc8fdabb86daae3c4298fc78be4709` passed all 975 tests with zero
+skips and Ruff; canonical CI is green. Live JUnit SHA256:
+`9b10951ada7348b47326dcb771368f3f45c6d4d1a602d1675053ed1b41931e6a`.
+The isolated run used six calls and 24000 reserved output tokens. Final
+independent checks approved the exact commit: 98 timestamp integration tests,
+54 path tests and eleven additional path lifecycle controls passed.
 Three fresh clean rounds, security review, CEO quality
 adjudication and main/mirror/runner delivery remain open. Production is
 unchanged.

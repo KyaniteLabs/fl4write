@@ -11,7 +11,9 @@ skips and Ruff. The generated path trial passed 944 baseline and 946 fixed
 live tests, with expected regression failures and exact PR20 CI green;
 automatic resume then failed the planted unsorted-median live-model test and
 stopped without merging (37 calls, 156000 reserved output tokens). The approved
-path repair is integrated manually. Fresh clean remains 0/3. See
+path repair is integrated manually. Exact committed 3238d8b live validation
+passed 975 tests with zero skips, Ruff and canonical CI; both independent
+committed integration checks approved. Fresh clean remains 0/3. See
 ROUND23-REPAIR-CHECKPOINT.md for evidence and remaining delivery gates.
 
 ## Successor round 22 — September 5
