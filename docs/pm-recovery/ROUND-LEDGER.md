@@ -8,7 +8,8 @@ automatic repairs. Both are repaired locally with eight new regression cases;
 31 focused tests and Ruff pass. Independent recheck approved both repairs
 with 33 tests and seven adapter/persistence controls. Full combined default
 validation passed 1036 tests with three paid-model skips in 173.12 seconds.
-Exact committed live validation and CI are pending. Fresh clean remains 0/3. See
+Exact committed 81a97d5 passed all 1039 live tests with zero skips, Ruff and
+canonical CI. Fresh clean remains 0/3. See
 ROUND27-REPAIR-CHECKPOINT.md.
 
 ## Successor round26 — September 5

@@ -26,7 +26,12 @@ The first combined run found only two README validation failures after the
 status cleanup removed historical attribution and the required count form.
 The attribution and explicit current candidate counts are restored; the full
 suite passed 1036 tests with three paid-model skips in 173.12 seconds.
-Exact committed live validation and canonical CI are pending. The previously committed
+Exact committed `81a97d5ec7b88ecd664ee9d967eabec10f62a78d` passed all 1039
+live tests with zero skips and Ruff; canonical CI passed at that exact head.
+The live suite consumed six calls and 24000 reserved output tokens.
+JUnit SHA256:
+`d1e3ccac67fcd4fda690c70e3eee5171e19db48d1b5ead213fa6739216071779`.
+The previously committed
 795d832 remains proven by 1031 live tests with zero skips and canonical CI;
 that earlier proof does not cover these new repairs.
 

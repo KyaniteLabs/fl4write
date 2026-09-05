@@ -74,17 +74,17 @@ Current fleet state (2026-09-05; recovered [audit ledger](docs/pm-recovery/ROUND
 across GitHub + Forgejo in hourly cycles; the tier scheduler selects due repos
 (`run-cycle.sh`, hourly crontab, single-host law — LEARNINGS #17).
 
-The unmerged repair candidate at `795d832` passed **1031 live tests with zero
-skips**, Ruff and canonical Forgejo CI. Its default suite passed 1028 tests
+The unmerged repair candidate at `81a97d5` passed **1039 live tests with zero
+skips**, Ruff and canonical Forgejo CI. Its default suite passed 1036 tests
 with three paid-model skips. One real automatic repair→PR→CI→merge→refresh
 trial passed on the integration branch. Three fresh clean whole-project
 rounds, full recon/quorum dogfood, security review, CEO quality adjudication
 and final main/mirror/runner delivery remain open. These candidate results
 do not describe a production rollout. See the [current audit ledger](docs/pm-recovery/ROUND-LEDGER.md)
-and [round26 evidence](docs/pm-recovery/ROUND26-REPAIR-CHECKPOINT.md).
+and [round27 evidence](docs/pm-recovery/ROUND27-REPAIR-CHECKPOINT.md).
 The round-13 desk pass reported 605 passing tests; that historical count is
 superseded by the linked recovery checkpoints. The round27 repair candidate
-targets 1036 passing + 3 skipped by default, or 1039 passing + 0 skipped live;
+achieved 1036 passing + 3 skipped by default, or 1039 passing + 0 skipped live;
 its exact validation status is recorded in the audit ledger.
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
