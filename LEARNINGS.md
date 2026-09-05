@@ -728,3 +728,14 @@ content and compact replacements. Decode complete JSON, remove only explicit
 outer wrappers, and validate cached objects without reparsing their strings.
 Test the same source through initial response and replay, including supported
 wrappers. Green tests alone did not reveal the changed patch identity.
+
+## 67. Bounded state must preserve discoverability and scope (2026-09-05)
+
+A retry cap may bound stored IDs, but it cannot forget pending work behind a
+watermark. Keep older pending identities and rewind before omitted ones so
+ordinary collection finds the rest; verify actual recovery on the next cycle.
+Shadow mode must not move that live boundary. The generated round22 repair
+passed its live tests yet violated shadow preservation, so independent review
+rejected it. Completed audits also need current scope evidence, not just an
+unchanged HEAD. Validate the effective fingerprint before reusing completion,
+and migrate unknown legacy scope through publication retry and a fresh audit.

@@ -80,6 +80,9 @@ def test_first_clean_sweep_creates_no_empty_issue(tmp_path, monkeypatch):
 def test_legacy_clean_publication_flag_does_not_preserve_stale_issue(tmp_path, monkeypatch):
     forge, path, number = _old_audit(tmp_path, monkeypatch)
     legacy = state.load_state(path)
+    # This pin isolates the old publication flag at the already-audited HEAD.
+    # _old_audit advances the fake forge for the other rescan tests.
+    forge.head = legacy["omni_head"]
     legacy.update(omni_head=forge.head, omni_findings=[], omni_complete=True,
                   omni_published=True, omni_report_version=2)
     legacy.pop("omni_clean_published", None)

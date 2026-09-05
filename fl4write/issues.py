@@ -394,14 +394,21 @@ def run_issues_cycle(config: RepoConfig, st: dict[str, Any], forge: ForgeAdapter
         last_num = max(last_num, num)
         st["last_triaged_number"] = last_num  # F7-B002: int-normalized write
 
-    # F12-B009 (reopened F10-B003): the retry set must stay BOUNDED like the
-    # quarantine list — closed/permanently-marked issues used to accumulate
-    # forever. Entries at or below the watermark that were NOT collected this
-    # cycle are gone/closed: garbage-collect them; cap the remainder.
-    # F18-004: absence only proves closure after a complete listing. Plain
-    # lists remain supported for existing callers and test adapters.
-    if getattr(new_issues, "complete", True):
-        _collected = {int(i.get("number", 0)) for i in new_issues}
-        retry = {r for r in retry if r > last_num or r in _collected}
-    st["issues_retry"] = sorted(retry)[-200:]
+    if config.shadow:
+        return summary  # Preserve the live watermark and retry belt verbatim.
+
+    # Intake is complete here, and explicitly includes every open retry even
+    # below the watermark. An absent retry is closed and can be collected.
+    collected = {int(i.get("number", 0)) for i in new_issues}
+    pending = sorted(retry & collected)
+    if len(pending) > 200:
+        # Never drop an identity behind the watermark. Keep the oldest 200
+        # and rewind before the first omitted pending issue; everything above
+        # the saved watermark will be rediscovered by the next open listing.
+        # This also covers old retries deferred by the cycle deadline.
+        lowered = min(last_num, pending[200] - 1)
+        if lowered < last_num:
+            st["last_triaged_number"] = lowered
+        pending = [number for number in pending[:200] if number <= lowered]
+    st["issues_retry"] = pending
     return summary

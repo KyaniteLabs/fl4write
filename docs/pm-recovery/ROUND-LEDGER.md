@@ -1,5 +1,18 @@
 # Recovered historical audit ledger
 
+## Successor round 22 — September 5
+
+Fresh review of 56af12b found two P2 defects: F22-001 permanently lost
+unresolved issue retries beyond the 200-ID cap; F22-002 reused completed
+full-tree coverage after exclusions changed at unchanged HEAD. Manual repairs
+have separate independent approval, eight retry and nine scope regressions,
+plus actual multicycle recovery checks. Full combined default validation
+passed 941 tests with three paid-model skips and Ruff; exact live is pending.
+The generated retry trial passed 927 baseline and 929 fixed live tests, but
+independent review found a new shadow-state regression. Its PR19 was closed
+unmerged, with original 19-call/84000-reserved evidence preserved. Fresh clean
+remains 0/3; automated lifecycle is unproven. See ROUND22-REPAIR-CHECKPOINT.md.
+
 ## Successor round 21 — September 5
 
 Fresh review of bb3625a found F21-001 and F21-002 (both Minor): Unicode
