@@ -1,0 +1,19 @@
+{
+  "reviewed_head": "5c3c0c40be9bedc7ad8f4efad4abd42fcd50c952",
+  "base": "68ca576f4febbb34b46b18cc83589f4f03ae6af4",
+  "parent_verification": {
+    "command": "python3 -m pytest -q",
+    "passed": 698,
+    "skipped": 3,
+    "failures": 0,
+    "errors": 0,
+    "junit_sha256": "23b34cec9ffe3835625e1d02ea814f5cec1491b4857d654f471923f396e9d27e",
+    "lint": "passed",
+    "live_models": false
+  },
+  "source_sha256": {
+    "fl4write/exhaustive.py": "80bc4eb0ac24d1bed1af299c06a7f111d6cf7b4873ace059b928909a21e5296a",
+    "tests/test_exhaustive.py": "b1dcc5ed3818813e6c962c4050d947bfe9ae2089f112f926772e1efdae07069e"
+  },
+  "status": "draft; request changes; not approved for merge or deployment"
+}
