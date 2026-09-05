@@ -9,7 +9,7 @@
   "junit_sha256": "9a3b95b110ed5aec8175c0304f3bc7706240e2db6876f5a1c13e1784b44d7280",
   "source_sha256": {
     "fl4write/exhaustive.py": "af746a37df176ba33fd0da84fc5101e6f4403bddfc0b24f8b96519e3bed3d716",
-    "tests/test_exhaustive.py": "c3e102e04fb2fe3cba663358f94ea5296b9ee81b349831e7b8456803071d3b11"
+    "tests/test_exhaustive.py": "81afdfc7edfde9e50b23fffaab9dd72724e1fd1e2282048822376a2f7858e78e"
   },
-  "note": "After full-suite start, an unused import was removed; lint passed. No functional source change."
+  "note": "After full-suite start, an unused import was removed; lint passed. A synthetic credential fixture was split into equivalent literals; its focused test passed. No functional source change."
 }

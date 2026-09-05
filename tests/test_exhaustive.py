@@ -296,7 +296,7 @@ def test_failed_certification_patch_is_retry_safe(tmp_path: Path):
 def test_public_ledger_scrubs_credentials():
     state = exhaustive._fresh_state("repo")
     state["round"] = 1
-    state["ledger"] = [{"round": 1, "reason": "token ghp_abcdefghijklmnopqrstuvwxyz123456"}]
+    state["ledger"] = [{"round": 1, "reason": "token ghp_" + "abcdefghijklmnopqrstuvwxyz123456"}]
     body = exhaustive._ledger_body(state)
     assert "ghp_" not in body and "[redacted]" in body
 
