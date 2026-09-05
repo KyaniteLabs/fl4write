@@ -84,9 +84,11 @@ container. The installation-signing regression brings the current target to
 The bounded model-transport repairs at `6af8898` passed all 795 tests with zero
 skips in the real isolated live suite. The default suite has 792 passing tests
 and three paid live-model skips. Canonical Forgejo CI also passed at that head.
-The current round-budget and base-selection integration adds ten regression cases,
-targeting 805 passing + 0 skipped live, or 802 passing + 3 skipped by default.
-The latest completed live run remains blocked at 769 passed and one median-recall failure.
+The current round-budget, base-selection and compact-edit integration targets
+809 passing + 0 skipped live, or 806 passing + 3 skipped by default.
+The latest completed isolated live run at `4b1a141` passed 805 tests with zero
+skips. Fresh whole-project review at that head found eight correctness defects;
+those findings keep the candidate unready for merge despite the passing suite.
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
 runtime model credentials. The default suite skips those three paid model

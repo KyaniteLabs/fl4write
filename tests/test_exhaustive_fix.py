@@ -79,6 +79,26 @@ def test_structured_patch_requires_multiple_files_and_pin():
             {"path": "b.py", "content": "y", "regression": False}]}))
 
 
+def test_compact_patch_expands_only_unique_supplied_source_fragments():
+    files, pins = ef._parse_patch(json.dumps({"files": [
+        {"path": "calc.py", "edits": [{"old": "return a - b", "new": "return a + b"}],
+         "regression": False},
+        {"path": "test_calc.py", "content": "assert add(2, 1) == 3\n", "regression": True},
+    ]}), {"calc.py": "def add(a, b):\n    return a - b\n"})
+    assert files["calc.py"] == "def add(a, b):\n    return a + b\n"
+    assert pins == {"test_calc.py"}
+
+
+@pytest.mark.parametrize("source,old", [("return 1\nreturn 1\n", "return 1"),
+                                        ("return 1\n", "missing"), ("return 1\n", "")])
+def test_compact_patch_rejects_missing_empty_or_ambiguous_context(source, old):
+    with pytest.raises(ef.FixError, match="exactly one"):
+        ef._parse_patch(json.dumps({"files": [
+            {"path": "calc.py", "edits": [{"old": old, "new": "return 2"}], "regression": False},
+            {"path": "test_calc.py", "content": "assert True", "regression": True},
+        ]}), {"calc.py": source})
+
+
 @pytest.mark.parametrize("path", ["../escape", "/absolute", "a\\b", "a\x00b"])
 def test_structured_patch_rejects_unsafe_paths(path):
     with pytest.raises(ef.FixError, match="unsafe"):

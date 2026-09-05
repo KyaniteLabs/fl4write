@@ -97,7 +97,7 @@ def _write_file(tree: Path, rel: str, content: str) -> None:
     resolved.write_text(content, encoding="utf-8")
 
 
-def _parse_patch(raw: str) -> tuple[dict[str, str], set[str]]:
+def _parse_patch(raw: str, sources: dict[str, str] | None = None) -> tuple[dict[str, str], set[str]]:
     from .analyzer import extract_json
 
     obj = extract_json(raw, envelope_key="files")
@@ -107,10 +107,27 @@ def _parse_patch(raw: str) -> tuple[dict[str, str], set[str]]:
     files: dict[str, str] = {}
     regressions: set[str] = set()
     for row in rows:
-        if not isinstance(row, dict) or set(row) != {"path", "content", "regression"}:
+        if not isinstance(row, dict) or set(row) not in (
+                {"path", "content", "regression"}, {"path", "edits", "regression"}):
             raise FixError("model patch row has an invalid shape")
         path = _safe_path(row["path"])
-        content = row["content"]
+        if "edits" in row:
+            edits = row["edits"]
+            if (sources is None or path not in sources or not isinstance(edits, list)
+                    or not 1 <= len(edits) <= 64):
+                raise FixError("model edits require a supplied source and 1-64 replacements")
+            content = sources[path]
+            for edit in edits:
+                if (not isinstance(edit, dict) or set(edit) != {"old", "new"}
+                        or not isinstance(edit["old"], str) or not edit["old"]
+                        or not isinstance(edit["new"], str)
+                        or content.count(edit["old"]) != 1):
+                    raise FixError("model edit must match exactly one current source fragment")
+                content = content.replace(edit["old"], edit["new"], 1)
+                if len(content.encode()) > 1_000_000:
+                    raise FixError(f"model patch file is too large: {path}")
+        else:
+            content = row["content"]
         regression = row["regression"]
         if path in files or not isinstance(content, str) or not isinstance(regression, bool):
             raise FixError("model patch contains a duplicate or malformed file")
@@ -134,10 +151,16 @@ def _model_patch(config: RepoConfig, reviewed_head: str,
         raise FixError("findings exceed the bounded model prompt")
     sources: dict[str, str] = {}
     source_bytes = 0
+    paths = set()
     for finding in findings:
         if not isinstance(finding, dict) or "path" not in finding:
             raise FixError("every finding must name a source path")
-        path = _safe_path(finding["path"])
+        paths.add(_safe_path(finding["path"]))
+    # README may contain machine-checked suite counts or execution instructions.
+    readme = tree / "README.md"
+    if readme.is_file() and not readme.is_symlink():
+        paths.add("README.md")
+    for path in sorted(paths):
         target = tree / path
         if target.is_symlink() or not target.is_file():
             raise FixError(f"finding source is not a regular file: {path}")
@@ -158,17 +181,21 @@ def _model_patch(config: RepoConfig, reviewed_head: str,
         "findings": findings,
         "sources": sources,
         "repository_laws": config.review,
-        "instruction": "Return complete contents for every changed file, including regression tests.",
+        "instruction": "Use exact old/new replacements for supplied existing files; complete contents for new regression files.",
+        "verification": "Preserve existing tests and their assertions. If adding tests changes machine-checked README counts, update those counts as part of the repair.",
     }, sort_keys=True)
     system = (
         "You are a bounded code repairer. Return JSON only: "
         '{"files":[{"path":"relative/path","content":"complete file contents",'
-        '"regression":true}]}. Include multiple files, at least one regression '
+        '"regression":true}]}. For an existing supplied file, replace content with '
+        '"edits":[{"old":"exact unique source fragment","new":"replacement"}]. '
+        'Edits apply sequentially and each old fragment must match exactly once. '
+        'Include multiple files, at least one regression '
         "test and at least one implementation file. Never return commands, diffs, "
         "symlinks, binary data, deletions, or paths outside the repository.\n\n"
         + SYSTEM_PROMPT_ADDENDUM
     )
-    return _parse_patch(_call_model(config.model, prompt, system=system))
+    return _parse_patch(_call_model(config.model, prompt, system=system), sources)
 
 
 def _clone_at(source: Path, destination: Path, sha: str) -> None:
