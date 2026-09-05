@@ -41,7 +41,12 @@ its original 49-call/196000-token budget. No automated lifecycle success is
 claimed. The separately approved manual repair preserves shadow state.
 
 Combined default validation passed 941 tests with three paid-model skips
-in 80.43 seconds; Ruff passed. Exact committed live validation remains pending.
+in 80.43 seconds; Ruff passed. Exact `8fc1de51e66c043524dab8bc19e0c595e65f97bd`
+live validation passed all 944 tests with zero skips and Ruff; canonical CI
+passed. Six live calls reserved 24000 output tokens. Live JUnit SHA256:
+`f9d5c54e9b0adaa3a6d769efcf314f484b1ba1c968ef60e7292074ec0463552f`.
+Fresh round23 remains active and has reported a merged-PR timestamp-ordering
+defect; green tests do not clear that new finding.
 
 Three fresh clean rounds, automated lifecycle proof,
 security review, CEO quality adjudication and main/mirror/runner delivery

@@ -7,7 +7,9 @@ unresolved issue retries beyond the 200-ID cap; F22-002 reused completed
 full-tree coverage after exclusions changed at unchanged HEAD. Manual repairs
 have separate independent approval, eight retry and nine scope regressions,
 plus actual multicycle recovery checks. Full combined default validation
-passed 941 tests with three paid-model skips and Ruff; exact live is pending.
+passed 941 tests with three paid-model skips and Ruff; exact 8fc1de5 live
+passed 944 tests with zero skips, Ruff and canonical CI. Fresh round23 is
+active and has reported a merged-PR timestamp-ordering defect.
 The generated retry trial passed 927 baseline and 929 fixed live tests, but
 independent review found a new shadow-state regression. Its PR19 was closed
 unmerged, with original 19-call/84000-reserved evidence preserved. Fresh clean
