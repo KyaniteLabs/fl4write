@@ -44,10 +44,16 @@ independent review remain open release gates.
 
 An optional host-owned `ModelProxy` context is being validated for standalone live
 test execution. It exposes only a Unix socket to the container, keeps provider
-credentials in the host process, fixes the endpoint/model/settings and caps calls
+credentials in owned host processes, fixes the endpoint/model/settings and caps calls
 and reserved output tokens. Failed calls still consume that budget. The runtime
 image must declare support for this transport. The exhaustive CLI does not yet
 enable it; integration with whole-round model accounting remains required.
+Each provider call runs in a tracked subprocess with a 180-second total deadline.
+Context exit kills and reaps active provider processes and closes client sockets.
+The `completed` counter means a size-validated provider result, not acknowledged
+client delivery; a passing test result remains necessary execution evidence.
+Provider bodies and canonical JSON are limited to 1 MiB; the framed response
+allows another 64 bytes for its envelope and uses UTF-8 without ASCII expansion.
 
 The first archived full-project execution exposed Docker's implicit `noexec`
 default on `/tmp`: two Git-command shim tests bypassed their generated helpers,

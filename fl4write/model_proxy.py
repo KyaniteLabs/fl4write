@@ -7,12 +7,15 @@ from pathlib import Path
 import socket
 import socketserver
 import struct
+import subprocess
+import sys
 import tempfile
 import threading
 import urllib.request
 
 MAX_REQUEST = 256 * 1024
 MAX_RESPONSE = 1024 * 1024
+MAX_FRAME = MAX_RESPONSE + 64
 
 
 class ProxyError(RuntimeError):
@@ -37,10 +40,15 @@ def _receive(stream, limit):
     return json.loads(_read(stream, size))
 
 
-def _send(stream, value, limit):
-    raw = json.dumps(value).encode()
+def _encode(value, limit):
+    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
     if len(raw) > limit:
         raise ProxyError("model transport response exceeds limit")
+    return raw
+
+
+def _send(stream, value, limit):
+    raw = _encode(value, limit)
     stream.sendall(struct.pack("!I", len(raw)) + raw)
 
 
@@ -49,7 +57,7 @@ def request(socket_path: str, endpoint: str, payload: dict) -> dict:
         stream.settimeout(190)
         stream.connect(socket_path)
         _send(stream, {"endpoint": endpoint, "payload": payload}, MAX_REQUEST)
-        response = _receive(stream, MAX_RESPONSE)
+        response = _receive(stream, MAX_FRAME)
     if not isinstance(response, dict) or response.get("ok") is not True:
         raise ProxyError("model proxy rejected request or provider unavailable")
     if not isinstance(response.get("data"), dict):
@@ -60,6 +68,28 @@ def request(socket_path: str, endpoint: str, payload: dict) -> dict:
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+def _provider(value):
+    """Run only in the owned subprocess so timeout/cleanup can stop HTTP I/O."""
+    headers = {"Content-Type": "application/json", "User-Agent": "fl4write/model-test-proxy"}
+    if value["key"]:
+        headers["Authorization"] = "Bearer " + value["key"]
+    req = urllib.request.Request(value["endpoint"], data=json.dumps(value["payload"]).encode(),
+                                 headers=headers, method="POST")
+    with urllib.request.build_opener(_NoRedirect()).open(req, timeout=180) as response:
+        raw = response.read(MAX_RESPONSE + 1)
+    if len(raw) > MAX_RESPONSE:
+        raise ProxyError("provider response exceeds limit")
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ProxyError("provider response is not an object")
+    return _encode(data, MAX_RESPONSE)
+
+
+class _Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+    block_on_close = False
 
 
 class ModelProxy:
@@ -80,22 +110,33 @@ class ModelProxy:
         self.calls = self.reserved_output_tokens = self.completed = self.failed = 0
         self.lock = threading.Lock()
         self.socket_path = None
+        self.closed = False
+        self.children = set()
+        self.streams = set()
+        self.handlers = set()
 
     def _forward(self, payload):
-        headers = {"Content-Type": "application/json", "User-Agent": "fl4write/model-test-proxy"}
-        if self.key:
-            headers["Authorization"] = "Bearer " + self.key
-        req = urllib.request.Request(self.route.endpoint, data=json.dumps(payload).encode(),
-                                     headers=headers, method="POST")
-        opener = urllib.request.build_opener(_NoRedirect())
-        with opener.open(req, timeout=180) as response:
-            raw = response.read(MAX_RESPONSE + 1)
-        if len(raw) > MAX_RESPONSE:
-            raise ProxyError("provider response exceeds limit")
-        value = json.loads(raw)
-        if not isinstance(value, dict):
-            raise ProxyError("provider response is not an object")
-        return value
+        with self.lock:
+            if self.closed:
+                raise ProxyError("model proxy closed")
+            body = json.dumps({"endpoint": self.route.endpoint, "key": self.key, "payload": payload}).encode()
+            child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--provider"],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     env={k: os.environ[k] for k in ("PATH", "SYSTEMROOT") if k in os.environ})
+            self.children.add(child)
+        try:
+            try:
+                raw, _ = child.communicate(body, timeout=180)
+            except subprocess.TimeoutExpired as exc:
+                child.kill()
+                child.communicate()
+                raise ProxyError("provider deadline exceeded") from exc
+            if child.returncode or len(raw) > MAX_RESPONSE:
+                raise ProxyError("provider request failed")
+            return json.loads(raw)
+        finally:
+            with self.lock:
+                self.children.discard(child)
 
     def _dispatch(self, value):
         if not isinstance(value, dict) or set(value) != {"endpoint", "payload"}:
@@ -116,13 +157,14 @@ class ModelProxy:
                        for m, role in zip(messages, ("system", "user")))):
             raise ProxyError("invalid model messages")
         with self.lock:
-            if (self.calls >= self.max_calls
+            if (self.closed or self.calls >= self.max_calls
                     or self.reserved_output_tokens + self.route.max_tokens > self.max_output_tokens):
                 raise ProxyError("model test budget exhausted")
             self.calls += 1
             self.reserved_output_tokens += self.route.max_tokens
         try:
             result = self._forward(payload)
+            _encode(result, MAX_RESPONSE)
         except Exception:
             with self.lock:
                 self.failed += 1
@@ -141,19 +183,28 @@ class ModelProxy:
         owner = self
         class Handler(socketserver.BaseRequestHandler):
             def handle(self):
+                with owner.lock:
+                    if owner.closed:
+                        return
+                    owner.streams.add(self.request)
+                    owner.handlers.add(threading.current_thread())
                 self.request.settimeout(190)
                 try:
                     value = _receive(self.request, MAX_REQUEST)
                     response = {"ok": True, "data": owner._dispatch(value)}
-                    _send(self.request, response, MAX_RESPONSE)
+                    _send(self.request, response, MAX_FRAME)
                 except Exception:
                     try:
                         _send(self.request, {"ok": False}, MAX_RESPONSE)
                     except OSError:
                         pass
+                finally:
+                    with owner.lock:
+                        owner.streams.discard(self.request)
+                        owner.handlers.discard(threading.current_thread())
         self.directory = tempfile.TemporaryDirectory(prefix="fl4write-model-proxy-", dir="/tmp")
         self.socket_path = Path(self.directory.name) / "model.sock"
-        self.server = socketserver.UnixStreamServer(str(self.socket_path), Handler)
+        self.server = _Server(str(self.socket_path), Handler)
         Path(self.directory.name).chmod(0o711)
         self.socket_path.chmod(0o600)
         if os.getuid() == 0:
@@ -163,8 +214,31 @@ class ModelProxy:
         return self
 
     def __exit__(self, *args):
+        with self.lock:
+            self.closed = True
+            children, streams, handlers = list(self.children), list(self.streams), list(self.handlers)
+            self.key = ""
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+        for stream in streams:
+            try:
+                stream.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=1)
         self.directory.cleanup()
-        self.key = ""
+        for handler in handlers:
+            handler.join(timeout=1)
+        if any(handler.is_alive() for handler in handlers):
+            raise ProxyError("model proxy handler cleanup incomplete")
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["--provider"]:
+    try:
+        sys.stdout.buffer.write(_provider(json.load(sys.stdin)))
+    except Exception:
+        sys.exit(1)
