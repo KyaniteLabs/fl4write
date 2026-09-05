@@ -92,6 +92,9 @@ def _git_diff_path(line: str) -> str | None:
         tok = tok.rstrip("\r\n")
         if not tok:
             return None
+        # F21-001: unquoted literal Unicode paths are already decoded text.
+        # Return them directly; only the quoted branch decodes C escapes.
+        return tok
     try:
         import ast as _ast
         decoded = _ast.literal_eval('"' + tok + '"')
