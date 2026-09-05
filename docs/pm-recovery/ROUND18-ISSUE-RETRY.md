@@ -29,5 +29,10 @@ Evidence: `/tmp/fl4write-issue-retry-manual-red.xml`,
 three paid live-model skips in 111.07 seconds; full Ruff passed. The independent
 manual recheck passed 333 neighboring tests with no skips and targeted Ruff,
 and found no actionable defect in the scoped repair. This manual tree has not
-yet completed the full paid live suite. PR15 remains a draft; fresh certification
+yet completed the full paid live suite at that checkpoint. The subsequent exact
+`54521395392a3acada143360621d31d72789b9b5` isolated live run passed **858 tests,
+zero skips, and Ruff**, using six real model calls and 24000 reserved output
+tokens. JUnit SHA256:
+`20ef09d8c3aa3434e28af7dacf0009ce00bc31ee708211beeaf0f4523d8de32c`.
+Canonical Forgejo CI also passed at that exact commit. PR15 remains a draft; fresh certification
 is 0/3, security review remains incomplete, and production is unchanged.
