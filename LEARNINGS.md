@@ -679,3 +679,14 @@ executor remains GitHub-only. Thread the post-merge mode into the freshness
 choice and retain the primary-forge gate on the cycle drain. Two additional
 real-cycle regressions reproduce the incorrect repaired behavior and pass
 after these boundaries are restored.
+
+The fifth repair subsequently landed at5452139: issue intake now carries
+listing completeness, so absence only removes old retries after a complete
+listing. Four real-cycle tests cover outage, malformed fallback, pagination
+exhaustion and complete-empty cleanup; the first three preserve state through
+recovery. Independent review passed333 neighboring tests. Full isolated live
+validation passed858 tests with no skips and Ruff. The generated trial failed
+before PR creation because its test forge never entered the fallback paths;
+the separate manual repair does not count as automated lifecycle success.
+Require regression fixtures to prove the intended failure path was executed,
+not merely produce red assertions. Original failed artifacts remain intact.
