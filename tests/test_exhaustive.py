@@ -261,23 +261,19 @@ class _Forge:
         return self.outcomes.pop(0) if self.outcomes else True
 
 
-def test_three_same_sha_rounds_publish_ledger_then_certification(tmp_path: Path):
+def test_quarantined_publication_never_calls_forge_or_advances_state(tmp_path: Path):
     repo = _repo(tmp_path)
     state_dir = tmp_path / "state"
     forge = _Forge()
     args = _args(repo, state_dir, _responses(tmp_path), rounds=3)
     args.ledger_issue = 13
     args._forge_adapter = forge
-    assert exhaustive.run(args) == 0
-    state = _state(state_dir)
-    assert state["certified_sha"] == _git(repo, "rev-parse", "HEAD")
-    assert len(forge.bodies) == 3
-    assert "exhaustive certification" in forge.bodies[-1][2]
-    cert = json.loads(next(state_dir.glob("*/certification.json")).read_text())
-    assert cert["status"] == "forge_published" and cert["ledger_issue"] == 13
+    assert exhaustive.run(args) == 2
+    assert forge.bodies == []
+    assert not list(state_dir.glob("*/state.json"))
 
 
-def test_failed_certification_patch_is_retry_safe(tmp_path: Path):
+def test_quarantined_publication_retry_stays_disabled(tmp_path: Path):
     repo = _repo(tmp_path)
     state_dir = tmp_path / "state"
     forge = _Forge([True, True, False])
@@ -285,12 +281,14 @@ def test_failed_certification_patch_is_retry_safe(tmp_path: Path):
     args.ledger_issue = 13
     args._forge_adapter = forge
     assert exhaustive.run(args) == 2
-    assert _state(state_dir)["certified_sha"] is None
     retry = _args(repo, state_dir, _responses(tmp_path), rounds=1)
     retry.ledger_issue = 13
     retry._forge_adapter = forge
-    assert exhaustive.run(retry) == 0
-    assert forge.bodies[-1][2] == forge.bodies[-2][2]
+    assert exhaustive.run(retry) == 2
+    assert forge.bodies == []
+    with pytest.raises(exhaustive.Deferred, match="quarantined"):
+        exhaustive._publish(forge, "fixture/repo", 13, exhaustive._fresh_state("repo"))
+    assert forge.bodies == []
 
 
 def test_public_ledger_scrubs_credentials():

@@ -428,10 +428,7 @@ def _ledger_body(state: dict[str, Any], certification: bool = False) -> str:
 
 
 def _publish(adapter: ForgeAdapter, repo: str, issue: int, state: dict[str, Any], certification: bool = False) -> None:
-    if isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0:
-        raise Deferred("forge ledger issue number is invalid")
-    if not adapter.update_issue(repo, issue, _ledger_body(state, certification)):
-        raise Deferred("forge ledger publication failed; retry will PATCH the same issue body")
+    raise Deferred("draft quarantined: forge publication requires unresolved safety repairs and independent approval")
 
 
 def _primary(config, injected: ForgeAdapter | None = None) -> tuple[Any, ForgeAdapter]:
@@ -503,6 +500,8 @@ def run(args: argparse.Namespace) -> int:
     state_path = state_dir / "state.json"
     state = _fresh_state(identity)
     try:
+        if getattr(args, "ledger_issue", None) is not None:
+            raise Deferred("draft quarantined: forge publication is disabled")
         with CycleLock(state_dir / "loop.lock"):
             state = _load_state(state_path, identity)
             current = _git(repo, "rev-parse", "HEAD")
