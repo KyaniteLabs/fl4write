@@ -1,6 +1,6 @@
 # Exhaustive evidence prototype — quarantined
 
-**Local-only, unmerged draft; not approved for deployment or certification.**
+**Unmerged review draft; not approved for deployment or certification.**
 Independent review reproduced five unresolved safety defects. Forge publication
 is disabled at both the CLI run boundary and the publication function.
 `--ledger-issue` always defers without making a forge call or advancing state.
@@ -12,7 +12,7 @@ state. Its test fixtures do not establish real finding quality or exhaustion.
 Do not rely on its success return as certification: counter/ledger consistency
 is one of the unresolved defects.
 
-Local experimentation only:
+Isolated experimentation only:
 
 ```bash
 python3 -m fl4write.exhaustive \\
