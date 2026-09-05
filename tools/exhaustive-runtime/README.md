@@ -42,12 +42,15 @@ These probes validate the runtime boundary only. They do not prove a full projec
 repair, publication, merge or three-round certification. Full live validation and
 independent review remain open release gates.
 
-An optional host-owned `ModelProxy` context is being validated for standalone live
-test execution. It exposes only a Unix socket to the container, keeps provider
+A host-owned `ModelProxy` context supplies the exhaustive loop's model calls.
+With `--live-model-tests`, it also exposes a Unix socket to the test container.
+It keeps provider
 credentials in owned host processes, fixes the endpoint/model/settings and caps calls
 and reserved output tokens. Failed calls still consume that budget. The runtime
-image must declare support for this transport. The exhaustive CLI does not yet
-enable it; integration with whole-round model accounting remains required.
+image must declare support for this transport. Recon, repair generation and live
+tests share the selected per-round call and reserved-output-token limits.
+Reservations are persisted before forwarding a call and retained across retries,
+including provider failures. Corrupt or mismatched budget records defer the run.
 Each provider call runs in a tracked subprocess with a 180-second total deadline.
 Context exit kills and reaps active provider processes and closes client sockets.
 The `completed` counter means a size-validated provider result, not acknowledged

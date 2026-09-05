@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import hashlib
 import json
 import os
@@ -22,6 +23,7 @@ from . import scrub
 from .config import ModelRoute, load_config
 from .executor import _sandbox_env_for
 from .exhaustive_evidence import EvidenceError, seal_bundle, verify_bundle
+from .model_proxy import ProxyError
 from .forges import ForgeAdapter, adapter_for
 from .state import CycleLock, CycleLockHeld
 
@@ -34,12 +36,14 @@ class Deferred(RuntimeError):
 
 def _request_identity(args, config):
     isolation = getattr(args, "isolation", "docker")
+    if getattr(args, "live_model_tests", False) and isolation != "docker":
+        raise Deferred("live model tests require Docker isolation")
     test_image = getattr(args, "test_image", None)
     if isolation == "docker":
         from .exhaustive_sandbox import SandboxUnavailable, validate_runtime
 
         try:
-            validate_runtime(test_image)
+            validate_runtime(test_image, require_model_proxy=getattr(args, "live_model_tests", False))
         except SandboxUnavailable as exc:
             raise Deferred(str(exc)) from exc
     executable = shutil.which(args.test_command[0]) if args.test_command else None
@@ -54,6 +58,7 @@ def _request_identity(args, config):
         "max_model_calls": args.max_model_calls, "max_output_tokens": args.max_output_tokens,
         "chunk_chars": args.chunk_chars,
         "isolation": isolation, "test_image": test_image,
+        "live_model_tests": getattr(args, "live_model_tests", False),
         "environment": {k: os.environ.get(k) for k in ("FL4WRITE_EVAL", "FL4WRITE_EVAL_CONFIG", "PYTHONPATH")},
     }
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -389,7 +394,10 @@ def _recon(
         env = _sandbox_env_for(home)
         package_root = str(Path(__file__).resolve().parent.parent)
         env["PYTHONPATH"] = package_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-        if route.key_env:
+        proxy = os.environ.get("FL4WRITE_MODEL_PROXY_SOCKET")
+        if proxy:
+            env["FL4WRITE_MODEL_PROXY_SOCKET"] = proxy
+        elif route.key_env:
             if not os.environ.get(route.key_env):
                 raise Deferred(f"configured model credential {route.key_env} is unavailable")
             env[route.key_env] = os.environ[route.key_env]
@@ -464,7 +472,8 @@ def _junit(path: Path):
     return ids, green, hashlib.sha256(raw).hexdigest()
 
 
-def _test(command: list[str], tree: Path, evidence: Path, timeout: int, *, isolation="process", image=None):
+def _test(command: list[str], tree: Path, evidence: Path, timeout: int, *, isolation="process", image=None,
+          model_proxy=None):
     argv = [str(evidence) if x == "{junit}" else x for x in command]
     if str(evidence) not in argv:
         raise NonGreen("test command requires standalone {junit}")
@@ -472,7 +481,8 @@ def _test(command: list[str], tree: Path, evidence: Path, timeout: int, *, isola
         from .exhaustive_sandbox import SandboxUnavailable, run_isolated
 
         try:
-            done = run_isolated(command, tree, evidence, timeout, image)
+            options = {"model_proxy": model_proxy} if model_proxy is not None else {}
+            done = run_isolated(command, tree, evidence, timeout, image, **options)
         except SandboxUnavailable as exc:
             raise Deferred(str(exc)) from exc
     elif isolation == "process":
@@ -496,7 +506,12 @@ def _suite_runner(args):
         return _test
     from functools import partial
 
-    return partial(_test, isolation="docker", image=getattr(args, "test_image", None))
+    options = {"isolation": "docker", "image": getattr(args, "test_image", None)}
+    if getattr(args, "live_model_tests", False):
+        options["model_proxy"] = getattr(args, "_model_proxy", None)
+        if options["model_proxy"] is None:
+            raise Deferred("live model tests require the active round transport")
+    return partial(_test, **options)
 
 
 def _escalate(path: Path, reason: str, state: dict[str, Any]):
@@ -578,7 +593,7 @@ def run(args: argparse.Namespace) -> int:
     state_path = state_dir / "state.json"
     state = _fresh_state(identity)
     try:
-        with CycleLock(state_dir / "loop.lock"):
+        with CycleLock(state_dir / "loop.lock"), ExitStack() as transports:
             state = _load_state(state_path, identity)
             config = load_config(args.config or repo / ".fl4write.yaml")
             request_sha = _request_identity(args, config)
@@ -648,11 +663,15 @@ def run(args: argparse.Namespace) -> int:
                 )
                 return 0
             for _ in range(args.max_rounds):
+                transports.close()
                 if state["round"] >= args.round_cap:
                     raise Deferred("round cap reached")
                 if _git(repo, "status", "--porcelain"):
                     raise Deferred("repository is dirty")
                 head = _git(repo, "rev-parse", "HEAD")
+                from .exhaustive_budget import round_transport
+                budget = transports.enter_context(round_transport(
+                    args, config, state_dir / "budgets" / f"round-{state['round'] + 1:04d}.json", request_sha))
                 if state["green_sha"] is not None and state["green_sha"] != head:
                     state["consecutive_green"] = 0
                     state["green_sha"] = None
@@ -702,7 +721,7 @@ def run(args: argparse.Namespace) -> int:
                     "request_sha256": request_sha,
                     "pack_manifest": str(manifest),
                     "coverage_manifest": str(coverage),
-                    "model_usage": usage,
+                    "model_usage": budget.usage if budget is not None else usage,
                     "finding_count": len(findings),
                     "findings": findings,
                 }
@@ -733,6 +752,7 @@ def run(args: argparse.Namespace) -> int:
                                        {**common, **exc.evidence, "fix": fix,
                                         "tested_head": fix["merged_head"]})
                             raise Deferred("merged repair failed refreshed full suite") from exc
+                        transports.close()
                         _non_green(state, state_path, head, "findings fixed and merged; fresh recon required",
                                    {**common, "fix": fix})
                         continue
@@ -748,6 +768,7 @@ def run(args: argparse.Namespace) -> int:
                 except NonGreen as exc:
                     _non_green(state, state_path, head, str(exc), {**common, **exc.evidence})
                     raise Deferred(str(exc)) from exc
+                transports.close()
                 if _git(repo, "rev-parse", "HEAD") != head:
                     _non_green(state, state_path, head, "HEAD changed during tests", common)
                     raise Deferred("HEAD changed during tests")
@@ -809,7 +830,7 @@ def run(args: argparse.Namespace) -> int:
     except CycleLockHeld as exc:
         print(scrub.inline(str(exc)), file=sys.stderr)
         return 3
-    except Deferred as exc:
+    except (Deferred, ProxyError) as exc:
         _escalate(state_dir / "escalation.json", str(exc), state)
         print(scrub.inline(str(exc)), file=sys.stderr)
         return 2
@@ -833,6 +854,8 @@ def _parser():
     p.add_argument("--isolation", choices=("docker", "process"), default="docker",
                    help="Docker is required for automatic fixes; process is for trusted local diagnostics")
     p.add_argument("--test-image", help="immutable image SHA-256 of the installed test runtime")
+    p.add_argument("--live-model-tests", action="store_true",
+                   help="allow live tests through the shared bounded model transport (Docker only)")
     return p
 
 

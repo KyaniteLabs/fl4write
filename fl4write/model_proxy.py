@@ -99,7 +99,7 @@ class ModelProxy:
     forwards only the configured model/endpoint/settings and never client headers.
     """
 
-    def __init__(self, route, *, max_calls: int, max_output_tokens: int):
+    def __init__(self, route, *, max_calls: int, max_output_tokens: int, reserve=None):
         if any(type(v) is not int or v <= 0 for v in (max_calls, max_output_tokens)):
             raise ProxyError("model proxy budgets must be positive integers")
         self.route = route.model_copy(deep=True)
@@ -107,6 +107,7 @@ class ModelProxy:
         if route.key_env and not self.key:
             raise ProxyError("configured model credential unavailable")
         self.max_calls, self.max_output_tokens = max_calls, max_output_tokens
+        self.reserve = reserve
         self.calls = self.reserved_output_tokens = self.completed = self.failed = 0
         self.lock = threading.Lock()
         self.socket_path = None
@@ -160,6 +161,8 @@ class ModelProxy:
             if (self.closed or self.calls >= self.max_calls
                     or self.reserved_output_tokens + self.route.max_tokens > self.max_output_tokens):
                 raise ProxyError("model test budget exhausted")
+            if self.reserve is not None:
+                self.reserve(self.route.max_tokens)
             self.calls += 1
             self.reserved_output_tokens += self.route.max_tokens
         try:

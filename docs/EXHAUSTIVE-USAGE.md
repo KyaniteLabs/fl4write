@@ -1,35 +1,47 @@
-# Exhaustive evidence prototype — quarantined
+# Exhaustive loop review candidate
 
-**Unmerged review draft; not approved for deployment or certification.**
-Independent review reproduced five unresolved safety defects. Forge publication
-is disabled at both the CLI run boundary and the publication function.
-`--ledger-issue` always defers without making a forge call or advancing state.
-The candidate is excluded from main and the fleet runner.
+**Unmerged; final review and real fix-to-merge dogfood remain open.** The candidate
+is excluded from main and the fleet runner. Historical draft findings and their
+repairs are retained under `docs/pm-recovery`; those old reports do not describe
+the current runtime's capabilities.
 
-The prototype explores fresh subprocess recon over archived tracked text,
-model budgets, evidence-grounded findings, JUnit parsing and persisted round
-state. Its test fixtures do not establish real finding quality or exhaustion.
-Do not rely on its success return as certification: counter/ledger consistency
-is one of the unresolved defects.
+The loop reviews archived tracked text in a fresh subprocess, validates grounded
+findings, tests an immutable Docker snapshot, and seals evidence. Three consecutive
+zero-finding rounds with a completely green configured suite are required.
+Skipped, missing or failing tests cannot count toward certification. An existing
+bot-owned ledger issue is required for public certification; issue creation is
+not implemented. Publication validates ownership and records a replayable transaction.
 
-Isolated experimentation only:
+Example invocation after installing the [test runtime](../tools/exhaustive-runtime/README.md):
 
 ```bash
-python3 -m fl4write.exhaustive \\
-  --repo /absolute/path/to/repo \\
-  --state-dir /durable/private/fl4write-state \\
-  --config /absolute/path/to/repo/.fl4write.yaml \\
-  --test-command 'python3 -m pytest -q --junitxml {junit}'
+python3 -m fl4write.exhaustive \
+  --repo /absolute/path/to/repo \
+  --state-dir /durable/private/fl4write-state \
+  --config /absolute/path/to/repo/.fl4write.yaml \
+  --test-image sha256:IMMUTABLE_INSTALLED_IMAGE_ID \
+  --test-command 'python3 -m pytest -q --junitxml {junit}' \
+  --max-model-calls 64 --max-output-tokens 100000
 ```
 
-The independent report is [FEATURE13-DRAFT-REVIEW.md](pm-recovery/FEATURE13-DRAFT-REVIEW.md).
-Required repairs: bind counters to verified trailing ledger evidence; make
-publication transactional; use a strict public-data schema; verify issue
-ownership before updates; finalize and re-hash immutable evidence bundles.
+Use `--live-model-tests` when the configured suite needs the live model evaluation
+transport. It requires Docker and a runtime image declaring model-proxy support.
+The selected model credential remains in owned host processes. Recon, repair
+generation and live tests share one per-round budget. Calls reserve their maximum
+output allowance before forwarding; failed calls and retries do not refund it.
+Budget records persist under the private state directory. Select sufficient limits
+for complete source coverage and all verification phases before starting a run;
+an exhausted budget defers, without certifying partial coverage.
 
-The product also needs an atomic fix-plus-regression-pin executor API,
-authenticated ownership/fork/base/HEAD rails, post-fix full-suite verification
-and refreshed contexts, per-repository runner integration, quorum approval,
-and three real clean dogfood rounds. Existing one-file fixes cannot satisfy
-that contract. GitHub fixes stop at the missing API; Forgejo fixes explicitly
-defer. These gaps remain unfinished engineering work.
+`--enable-fixes` enables actual owned repair PR creation and merging only when
+the repository config also enables fixes, disables shadow mode, and permits
+own-PR merges. It proves the baseline, failing regression and repaired full suite
+before publication, then validates ownership, base, head and checks before merging.
+The local checkout refreshes to the verified merged head and runs the full suite
+again. `--ledger-issue NUMBER` selects the existing owned persistent ledger.
+
+Changing the configured command, image, model, budget or live-test mode invalidates
+reuse of the existing request evidence. Retain the state directory on retries;
+discarding it discards recovery and spend history. Per-repository runner adoption,
+real owned repair delivery, fresh whole-project quorum and three clean dogfood
+rounds remain required before release.
