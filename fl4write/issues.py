@@ -40,6 +40,14 @@ _URGENCY_MARKER = {"high": "⚠️", "medium": "", "low": ""}
 # "critical" urgency the model was never asked for cannot exist
 
 
+class _IssueList(list):
+    """List-compatible intake with explicit evidence of listing completeness."""
+
+    def __init__(self, items=(), *, complete=True):
+        super().__init__(items)
+        self.complete = complete
+
+
 def collect_new_issues(forge: ForgeAdapter, repo: str, last_number: int,
                        retry: set[int] | None = None) -> list[dict[str, Any]]:
     """Fetch open issues with number > last_number, PAGINATED and ascending.
@@ -63,14 +71,14 @@ def collect_new_issues(forge: ForgeAdapter, repo: str, last_number: int,
                 batch = forge._call(
                     "GET", f"/repos/{repo}/issues?state=open&per_page=100&page={page}")
                 if not isinstance(batch, list):
-                    return []  # F14-B001: shape drift = no intake (watermark holds)
+                    return _IssueList(complete=False)  # malformed envelope
                 all_issues += batch
                 if len(batch) < 100:
                     break
             else:
-                return []  # F14-B001: ten FULL pages = incomplete intake
+                return _IssueList(complete=False)  # ten full pages: incomplete
         except ForgeError:
-            return []
+            return _IssueList(complete=False)
     # UltraQA round 3: row-shape guard — garbage rows from a half-parsed forge
     # response must not crash the issues lane. F10-B004 (luna-max2 DOM-B):
     # booleans are NOT numbers — isinstance(True, int) lets a forged boolean
@@ -82,7 +90,7 @@ def collect_new_issues(forge: ForgeAdapter, repo: str, last_number: int,
              and not isinstance(i.get("number"), bool)
              and (i["number"] > last_number or i["number"] in retry)
              and "pull_request" not in i]
-    return sorted(fresh, key=lambda i: i.get("number", 0))
+    return _IssueList(sorted(fresh, key=lambda i: i.get("number", 0)))
 
 
 def triage_issue(issue: dict[str, Any], config: RepoConfig) -> dict[str, Any] | None:
@@ -379,7 +387,10 @@ def run_issues_cycle(config: RepoConfig, st: dict[str, Any], forge: ForgeAdapter
     # quarantine list — closed/permanently-marked issues used to accumulate
     # forever. Entries at or below the watermark that were NOT collected this
     # cycle are gone/closed: garbage-collect them; cap the remainder.
-    _collected = {int(i.get("number", 0)) for i in new_issues}
-    retry = {r for r in retry if r > last_num or r in _collected}
+    # F18-004: absence only proves closure after a complete listing. Plain
+    # lists remain supported for existing callers and test adapters.
+    if getattr(new_issues, "complete", True):
+        _collected = {int(i.get("number", 0)) for i in new_issues}
+        retry = {r for r in retry if r > last_num or r in _collected}
     st["issues_retry"] = sorted(retry)[-200:]
     return summary
