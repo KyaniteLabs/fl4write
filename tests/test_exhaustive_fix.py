@@ -540,6 +540,48 @@ def test_scoped_credential_restores_existing_env_on_error(monkeypatch):
     assert os.environ["TEST_FORGE_TOKEN"] == "dedicated-token"
 
 
+@pytest.mark.parametrize("existing", [None, "previous-configured-token"])
+@pytest.mark.parametrize("raise_inside", [False, True])
+def test_github_credential_never_installs_token_and_restores_environment(
+        monkeypatch, existing, raise_inside):
+    from fl4write import appauth
+
+    config = _config()
+    binding = config.forges["origin"]
+    if existing is None:
+        monkeypatch.delenv(binding.token_env, raising=False)
+    else:
+        monkeypatch.setenv(binding.token_env, existing)
+    legacy = {"CODESITTER_GITHUB_TOKEN": "previous-app-token", "GH_TOKEN": "previous-cli-token"}
+    for name, value in legacy.items():
+        monkeypatch.setenv(name, value)
+    acquired = []
+
+    def repository_token(repo, bot_login):
+        acquired.append((repo, bot_login))
+        return "synthetic-repository-token"
+
+    monkeypatch.setattr(appauth, "get_repository_token", repository_token)
+    monkeypatch.setattr(appauth, "install_token_to_env",
+                        lambda *a, **k: pytest.fail("legacy token installation called"))
+
+    class TransactionFailure(Exception):
+        pass
+
+    expectation = pytest.raises(TransactionFailure) if raise_inside else contextlib.nullcontext()
+    with expectation:
+        with ef._credential(config, binding) as token:
+            assert token == "synthetic-repository-token"
+            assert binding.token_env not in os.environ
+            assert {name: os.environ.get(name) for name in legacy} == legacy
+            if raise_inside:
+                raise TransactionFailure()
+
+    assert acquired == [(config.repo, config.bot_login)]
+    assert os.environ.get(binding.token_env) == existing
+    assert {name: os.environ.get(name) for name in legacy} == legacy
+
+
 def test_askpass_secret_is_removed_on_exception():
     helper = None
     with pytest.raises(RuntimeError):
