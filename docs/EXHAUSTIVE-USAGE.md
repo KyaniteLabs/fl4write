@@ -1,6 +1,8 @@
 # Exhaustive loop review candidate
 
-**Unmerged; final review and real fix-to-merge dogfood remain open.** The candidate
+**Unmerged; final review and three clean product rounds remain open.** One real
+automatic repair→PR→CI→merge→refresh lifecycle passed on the integration branch;
+see [round26 evidence](pm-recovery/ROUND26-REPAIR-CHECKPOINT.md). The candidate
 is excluded from main and the fleet runner. Historical draft findings and their
 repairs are retained under `docs/pm-recovery`; those old reports do not describe
 the current runtime's capabilities.

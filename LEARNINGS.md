@@ -785,3 +785,11 @@ not consume a later real failure's SHA action marker. A failed check can
 contain informational annotations. Filter explicit notice/warning levels
 before the actionable annotation cap so those rows neither direct repairs
 nor hide a real failure. Verify persisted cycles and mixed rows at a cap of one.
+
+## 73. Count the renderer's actual code fences (2026-09-05)
+
+Acceptance metrics consume rendered review rows. Markdown code fences widen
+when file identities contain backticks; a single-backtick marker pattern
+silently drops resolved findings and changes the acceptance denominator.
+Test real renderer-to-metrics output while retaining line anchoring and
+near-match controls so quoted message text cannot inflate counts.

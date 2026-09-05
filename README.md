@@ -86,6 +86,8 @@ The round-13 desk pass reported 605 passing tests; that historical count is
 superseded by the linked recovery checkpoints. The round27 repair candidate
 achieved 1036 passing + 3 skipped by default, or 1039 passing + 0 skipped live;
 its exact validation status is recorded in the audit ledger.
+The round29 metrics repair targets 1050 passing + 3 skipped by default,
+or 1053 passing + 0 skipped live. Live validation is pending provider access.
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
 runtime model credentials. The default suite skips those three paid model

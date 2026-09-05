@@ -1,5 +1,17 @@
 # Recovered historical audit ledger
 
+## Successor round29 — September 5
+
+Fresh independent review of `81a97d5` found one Minor resolved-metrics defect:
+paths containing backticks cause real rendered resolved findings to vanish
+from acceptance totals. The valid finding resets clean functional reviews
+to 0/3. Fourteen new cases and a minimal marker repair pass 36 focused tests
+and Ruff. Independent recheck approved the exact repair with 36 tests and
+mixed renderer/acceptance controls. Full combined default validation passed
+1050 tests with three expected paid-model skips in 233.56 seconds; Ruff passed.
+Exact new live validation remains blocked by configured provider HTTP 402.
+See ROUND29-REPAIR-CHECKPOINT.md.
+
 ## Successor round28 — September 5
 
 Fresh independent review of exact81a97d5 found no new functional defect.
