@@ -134,6 +134,8 @@ def test_prepared_patch_retry_does_not_call_model(tmp_path, monkeypatch):
     first = ef._prepared_patch(_config(), head, [], repo, evidence)
     monkeypatch.setattr(ef, "_model_patch", lambda *a: pytest.fail("repeated model call"))
     assert ef._prepared_patch(_config(), head, [], repo, evidence) == first
+    with pytest.raises(ef.FixError, match="another repair request"):
+        ef._prepared_patch(_config(), head, [{"id": "new finding"}], repo, evidence)
 
 
 def test_forgejo_merge_uses_live_contract_and_reads_empty_response():
@@ -148,6 +150,58 @@ def test_forgejo_merge_uses_live_contract_and_reads_empty_response():
     forge.call = call
     assert forge.merge("acme/widget", 7, "a" * 40) == {"merged": True, "sha": "b" * 40}
     assert [c[0] for c in calls] == ["POST", "GET"]
+
+
+def test_actions_only_ci_can_be_green_without_legacy_status_contexts():
+    forge = ef._Forge(_config().forges["origin"], "synthetic-token")
+    def call(method, path, data=None):
+        if "/actions/runs" in path:
+            return {"total_count": 1, "workflow_runs": [
+                {"head_sha": "a" * 40, "status": "completed", "conclusion": "success"}]}
+        return {"total_count": 0, "statuses": [], "state": "pending"}
+    forge.call = call
+    assert forge.checks_green("acme/widget", "a" * 40) is True
+
+
+def test_forgejo_ci_uses_latest_status_for_each_context():
+    forge = ef._Forge(_config(github=False).forges["origin"], "synthetic-token")
+    forge.call = lambda *a: [
+        {"id": 2, "context": "tests", "status": "success"},
+        {"id": 1, "context": "tests", "status": "pending"},
+    ]
+    assert forge.checks_green("acme/widget", "a" * 40) is True
+
+
+def test_actions_enumeration_cannot_silently_drop_runs():
+    forge = ef._Forge(_config().forges["origin"], "synthetic-token")
+    forge.call = lambda *a: {"total_count": 2, "workflow_runs": [
+        {"head_sha": "a" * 40, "status": "completed", "conclusion": "success"}]}
+    with pytest.raises(ef.FixError, match="incomplete"):
+        forge.checks_green("acme/widget", "a" * 40)
+
+
+def test_required_forgejo_context_cannot_be_replaced_by_unrelated_green_status():
+    forge = ef._Forge(_config(github=False).forges["origin"], "synthetic-token")
+    def call(method, path, data=None):
+        if "/branches/" in path:
+            return {"name": "main", "protected": True, "enable_status_check": True,
+                    "status_check_contexts": ["required-suite"]}
+        return [{"id": 1, "context": "unrelated", "status": "success"}]
+    forge.call = call
+    required = forge.required_contexts("acme/widget", "main")
+    assert required == {"required-suite"}
+    assert forge.checks_green("acme/widget", "a" * 40, required) is None
+
+
+def test_unqueryable_app_bound_requirement_cannot_approve_merge():
+    forge = ef._Forge(_config().forges["origin"], "synthetic-token")
+    def call(method, path, data=None):
+        if path.endswith("/branches/main"):
+            return {"name": "main", "protected": True}
+        return {"contexts": ["tests"], "checks": [{"context": "tests", "app_id": 17}]}
+    forge.call = call
+    with pytest.raises(ef.FixError, match="App-bound"):
+        forge.required_contexts("acme/widget", "main")
 
 
 def test_baseline_loss_is_rejected(tmp_path):
@@ -218,7 +272,8 @@ class _FakeForge:
     def create_pr(self, repo, branch, base, title, body):
         type(self).created += 1
         return self.find_pr(repo, branch)
-    def checks_green(self, repo, sha): return self.ci
+    def required_contexts(self, repo, branch): return set()
+    def checks_green(self, repo, sha, required=None): return self.ci
     def merge(self, repo, number, sha):
         type(self).merged_calls += 1
         return self.merge_response
@@ -306,6 +361,33 @@ def test_unproven_merge_is_pending(tmp_path, monkeypatch):
     result, forge = _flow(tmp_path, monkeypatch, Unknown)
     assert result["status"] == "pending"
     assert "not proven" in result["reason"]
+
+
+def test_lost_merge_response_is_recovered_without_another_push_or_merge(tmp_path, monkeypatch):
+    class Lost(_FakeForge):
+        merge_response = {"message": "accepted"}
+        def call(self, method, path, data=None):
+            assert method == "GET" and path.endswith("/pulls/7")
+            return {"number": 7, "merged": True, "state": "closed",
+                    "user": {"login": self.identity},
+                    "head": {"sha": self.commit, "repo": {"full_name": "acme/widget"}},
+                    "base": {"ref": "main", "repo": {"full_name": "acme/widget"}},
+                    "merge_commit_sha": self.merged}
+    first, forge = _flow(tmp_path, monkeypatch, Lost)
+    assert first["status"] == "pending" and first["phase"] == "merging"
+    before = forge.merged_calls
+    monkeypatch.setattr(ef, "_model_patch", lambda *a: pytest.fail("model repeated during merge recovery"))
+    real_git = ef._git
+    def no_push(args, *a, **kw):
+        assert args[0] != "push", "recovery pushed an already merged branch"
+        return real_git(args, *a, **kw)
+    monkeypatch.setattr(ef, "_git", no_push)
+    second = ef.attempt_fix_with_regression_pin(
+        tmp_path / "repo", _config(), forge.base, [{"id": "F1", "path": "calc.py"}], ["pytest"],
+        tmp_path / "evidence", verify_suite=_verify)
+    assert second["status"] == "merged", second
+    assert second["merged_head"] == forge.merged
+    assert forge.merged_calls == before
 
 
 def test_scoped_credential_restores_existing_env_on_error(monkeypatch):

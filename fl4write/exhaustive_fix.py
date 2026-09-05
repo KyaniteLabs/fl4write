@@ -253,8 +253,8 @@ def _is_github(binding: ForgeBinding) -> bool:
 def _credential(config: RepoConfig, binding: ForgeBinding) -> Iterator[str]:
     """Acquire late and restore process state on every exit path."""
     if _is_github(binding):
-        from .appauth import get_installation_token
-        token = get_installation_token(config.repo)
+        from .appauth import get_repository_token
+        token = get_repository_token(config.repo, config.bot_login)
     else:
         token = os.environ.get(binding.token_env, "")
     if not token or token != token.strip() or any(ord(c) < 0x20 for c in token):
@@ -296,6 +296,10 @@ class _Forge:
         return row
 
     def user(self) -> str:
+        if self.github:
+            from .appauth import verified_app_login
+
+            return verified_app_login()
         row = self.call("GET", "/user")
         login = row.get("login") if isinstance(row, dict) else None
         if not isinstance(login, str) or not login:
@@ -311,12 +315,26 @@ class _Forge:
             raise FixError("forge branch head response is malformed")
         return sha
 
+    def pages(self, path: str, field: str | None = None) -> list[dict]:
+        rows = []
+        for page in range(1, 101):
+            param = "per_page" if self.github else "limit"
+            value = self.call("GET", path + ("&" if "?" in path else "?")
+                              + f"{param}=100&page={page}")
+            batch = value.get(field) if field and isinstance(value, dict) else value
+            if not isinstance(batch, list) or any(not isinstance(row, dict) for row in batch):
+                raise FixError("forge paginated response is malformed")
+            rows.extend(batch)
+            if len(batch) < 100:
+                if field and value.get("total_count") != len(rows):
+                    raise FixError("forge paginated enumeration changed or is incomplete")
+                return rows
+        raise FixError("forge pagination cap reached; enumeration is incomplete")
+
     def find_pr(self, repo: str, branch: str) -> dict | None:
         owner = repo.split("/", 1)[0]
         head = urllib.parse.quote(f"{owner}:{branch}" if self.github else branch, safe="")
-        rows = self.call("GET", f"/repos/{repo}/pulls?state=open&head={head}&limit=50&per_page=50")
-        if not isinstance(rows, list):
-            raise FixError("forge PR lookup response is malformed")
+        rows = self.pages(f"/repos/{repo}/pulls?state=open&head={head}")
         matches = [r for r in rows if isinstance(r, dict)
                    and isinstance(r.get("head"), dict)
                    and r["head"].get("ref") == branch]
@@ -331,22 +349,84 @@ class _Forge:
             raise FixError("forge PR creation response is malformed")
         return row
 
-    def checks_green(self, repo: str, sha: str) -> bool | None:
+    def required_contexts(self, repo: str, branch: str) -> set[str]:
+        quoted = urllib.parse.quote(branch, safe="")
+        info = self.call("GET", f"/repos/{repo}/branches/{quoted}")
+        if not isinstance(info, dict) or info.get("name") != branch or type(info.get("protected")) is not bool:
+            raise FixError("branch protection policy is unqueryable")
+        if not info["protected"]:
+            return set()
         if self.github:
-            checks = self.call("GET", f"/repos/{repo}/commits/{sha}/check-runs?per_page=100")
-            status = self.call("GET", f"/repos/{repo}/commits/{sha}/status")
-            runs = checks.get("check_runs") if isinstance(checks, dict) else None
-            if not isinstance(runs, list) or not isinstance(status, dict):
+            policy = self.call("GET", f"/repos/{repo}/branches/{quoted}/protection/required_status_checks")
+            if not isinstance(policy, dict) or not isinstance(policy.get("contexts"), list):
+                raise FixError("required status-check policy is unqueryable")
+            if any(not isinstance(c, dict) or c.get("app_id") not in (None, -1)
+                   for c in policy.get("checks", [])):
+                raise FixError("required App-bound checks need independently queryable check-run identity")
+            rules = self.call("GET", f"/repos/{repo}/rules/branches/{quoted}")
+            if not isinstance(rules, list):
+                raise FixError("branch rules are unqueryable")
+            contexts = list(policy["contexts"])
+            for rule in rules:
+                if not isinstance(rule, dict):
+                    raise FixError("branch rule is malformed")
+                if rule.get("type") == "required_workflows":
+                    raise FixError("required workflow policy cannot be established from status contexts")
+                if rule.get("type") == "required_status_checks":
+                    required = (rule.get("parameters") or {}).get("required_status_checks")
+                    if not isinstance(required, list):
+                        raise FixError("required branch rule is malformed")
+                    for check in required:
+                        if not isinstance(check, dict) or check.get("integration_id") is not None:
+                            raise FixError("required integration-bound check identity is unqueryable")
+                        contexts.append(check.get("context"))
+        else:
+            if type(info.get("enable_status_check")) is not bool:
+                raise FixError("Forgejo status-check policy is unqueryable")
+            contexts = info.get("status_check_contexts") if info["enable_status_check"] else []
+        if not isinstance(contexts, list) or any(not isinstance(c, str) or not c for c in contexts):
+            raise FixError("required status contexts are malformed")
+        return set(contexts)
+
+    def checks_green(self, repo: str, sha: str, required: set[str] | None = None) -> bool | None:
+        required = required or set()
+        if self.github:
+            runs = self.pages(f"/repos/{repo}/actions/runs?head_sha={sha}", "workflow_runs")
+            status = self.call("GET", f"/repos/{repo}/commits/{sha}/status?per_page=100")
+            contexts = status.get("statuses") if isinstance(status, dict) else None
+            if not isinstance(contexts, list) or status.get("total_count") != len(contexts):
                 return None
-            if not runs or status.get("state") == "pending" or any(
-                    not isinstance(r, dict) or r.get("status") != "completed" for r in runs):
+            if not runs and not contexts:
                 return None
-            return status.get("state") == "success" and all(
-                r.get("conclusion") in ("success", "neutral", "skipped") for r in runs)
-        rows = self.call("GET", f"/repos/{repo}/commits/{sha}/statuses?limit=100")
-        if not isinstance(rows, list) or not rows:
+            if any(r.get("head_sha") != sha or r.get("status") != "completed" for r in runs):
+                return None
+            if contexts and status.get("state") == "pending":
+                return None
+            successful = {row.get("context") for row in contexts if isinstance(row, dict) and row.get("state") == "success"}
+            if required - successful:
+                for run in runs:
+                    if type(run.get("id")) is not int:
+                        return None
+                    jobs = self.pages(f"/repos/{repo}/actions/runs/{run['id']}/jobs", "jobs")
+                    successful.update(job.get("name") for job in jobs
+                                      if job.get("status") == "completed" and job.get("conclusion") == "success")
+            if required - successful:
+                return None
+            return ((not contexts or status.get("state") == "success")
+                    and all(r.get("conclusion") == "success" for r in runs))
+        rows = self.pages(f"/repos/{repo}/commits/{sha}/statuses")
+        if not rows:
             return None
-        states = [r.get("status") if isinstance(r, dict) else None for r in rows]
+        latest = {}
+        for row in rows:
+            context, identifier = row.get("context"), row.get("id")
+            if not isinstance(context, str) or not context or type(identifier) is not int:
+                return None
+            if context not in latest or identifier > latest[context]["id"]:
+                latest[context] = row
+        states = [row.get("status") for row in latest.values()]
+        if required - latest.keys():
+            return None
         if any(s in ("pending", None) for s in states):
             return None
         return all(s == "success" for s in states)
@@ -396,13 +476,16 @@ def _receipt(path: Path, result: dict) -> None:
     os.replace(tmp, path / _RECEIPT)
 
 
-def _prepared_patch(config, reviewed_head, findings, repo, evidence_dir):
+def _prepared_patch(config, reviewed_head, findings, repo, evidence_dir, test_command=None):
     """Reuse the exact model patch on pending-PR retries."""
     path = evidence_dir / "prepared-patch.json"
+    request = {"head": reviewed_head, "findings": findings,
+               "config": config.model_dump(mode="json"), "test_command": test_command or []}
+    request_sha = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
     if path.exists():
         saved = json.loads(path.read_bytes())
-        if saved.get("reviewed_head") != reviewed_head:
-            raise FixError("prepared patch belongs to another reviewed HEAD")
+        if saved.get("reviewed_head") != reviewed_head or saved.get("request_sha256") != request_sha:
+            raise FixError("prepared patch belongs to another repair request")
         return _parse_patch(json.dumps(saved["patch"]))
     files, regressions = _model_patch(config, reviewed_head, findings, repo)
     patch = {"files": [{"path": p, "content": text, "regression": p in regressions}
@@ -410,12 +493,53 @@ def _prepared_patch(config, reviewed_head, findings, repo, evidence_dir):
     _parse_patch(json.dumps(patch))
     temporary = evidence_dir / ".prepared-patch.tmp"
     with temporary.open("w", encoding="utf-8") as stream:
-        json.dump({"reviewed_head": reviewed_head, "patch": patch}, stream, sort_keys=True)
+        json.dump({"reviewed_head": reviewed_head, "request_sha256": request_sha,
+                   "patch": patch}, stream, sort_keys=True)
         stream.flush()
         os.fsync(stream.fileno())
     temporary.chmod(0o400)
     temporary.replace(path)
     return files, regressions
+
+
+def _recover_merge(forge, config, reviewed_head, commit_sha, author, default, evidence_dir):
+    receipt = evidence_dir / _RECEIPT
+    if not receipt.exists():
+        return None
+    saved = json.loads(receipt.read_bytes())
+    if saved.get("phase") not in {"merging", "merged"}:
+        return None
+    if (saved.get("reviewed_head") != reviewed_head or saved.get("commit_sha") != commit_sha
+            or saved.get("author") != author or saved.get("default_branch") != default
+            or type(saved.get("pr_number")) is not int or saved["pr_number"] <= 0):
+        raise FixError("merge recovery receipt does not match the proved transaction")
+    pr = forge.call("GET", f"/repos/{config.repo}/pulls/{saved['pr_number']}")
+    if (not isinstance(pr, dict) or ((pr.get("user") or {}).get("login") != author)
+            or ((pr.get("head") or {}).get("sha") != commit_sha)
+            or ((pr.get("base") or {}).get("ref") != default)
+            or (((pr.get("base") or {}).get("repo") or {}).get("full_name") != config.repo)
+            or (((pr.get("head") or {}).get("repo") or {}).get("full_name") != config.repo)):
+        raise FixError("merge recovery PR identity changed")
+    if pr.get("merged") is not True:
+        if pr.get("state") == "open":
+            return None
+        raise FixError("proved PR closed without a merge")
+    merged = pr.get("merge_commit_sha")
+    if not isinstance(merged, str) or not _SHA.fullmatch(merged):
+        raise FixError("merge recovery has no verified merge commit")
+    current = forge.head(config.repo, default)
+    if current != merged:
+        comparison = forge.call("GET", f"/repos/{config.repo}/compare/{merged}...{current}")
+        if (not isinstance(comparison, dict) or comparison.get("status") != "ahead"
+                or ((comparison.get("merge_base_commit") or {}).get("sha") != merged)):
+            raise FixError("default branch no longer contains the proved merge")
+    if forge.head(config.repo, default) != current:
+        raise FixError("default branch changed during merge recovery")
+    result = {**saved, "status": "merged", "phase": "merged",
+              "reason": "recovered verified bot-owned merge", "merge_commit_sha": merged,
+              "merged_head": current}
+    _receipt(evidence_dir, result)
+    return result
 
 
 def attempt_fix_with_regression_pin(
@@ -436,6 +560,12 @@ def attempt_fix_with_regression_pin(
     """
     result = _result("error", "uninitialized", reviewed_head)
     try:
+        prior_path = evidence_dir / _RECEIPT
+        if prior_path.exists():
+            prior = json.loads(prior_path.read_bytes())
+            if (isinstance(prior, dict) and prior.get("reviewed_head") == reviewed_head
+                    and prior.get("phase") in {"merging", "merged"}):
+                result = prior
         if not repo.is_dir() or not _SHA.fullmatch(reviewed_head):
             raise FixError("repo or reviewed_head is invalid")
         if max_model_calls != 1:
@@ -449,7 +579,7 @@ def attempt_fix_with_regression_pin(
             return _result("pending", "local reviewed HEAD drifted", reviewed_head)
         _, binding = _primary(config)
         evidence_dir.mkdir(parents=True, exist_ok=True)
-        files, regressions = _prepared_patch(config, reviewed_head, findings, repo, evidence_dir)
+        files, regressions = _prepared_patch(config, reviewed_head, findings, repo, evidence_dir, test_command)
         fixed, test_ids, junit_hash, _ = _prove_patch(
             repo, reviewed_head, files, regressions, test_command,
             evidence_dir, verify_suite)
@@ -482,6 +612,9 @@ def attempt_fix_with_regression_pin(
             if author != config.bot_login:
                 return _result("blocked", "authenticated identity is not the configured bot", reviewed_head,
                                author=author, fork=False)
+            recovered = _recover_merge(forge, config, reviewed_head, commit_sha, author, default, evidence_dir)
+            if recovered is not None:
+                return recovered
             base_sha = forge.head(config.repo, default)
             if base_sha != reviewed_head:
                 return _result("pending", "remote default HEAD drifted", reviewed_head,
@@ -520,10 +653,13 @@ def attempt_fix_with_regression_pin(
                                regression_paths=sorted(regressions), test_ids=sorted(test_ids),
                                junit_sha256=junit_hash)
             proof = dict(pr_number=number, pr_url=pr_url, author=author, fork=False,
+                         commit_sha=commit_sha, default_branch=default,
                          base_sha=base_sha, changed_paths=sorted(changed),
                          regression_paths=sorted(regressions), test_ids=sorted(test_ids),
                          junit_sha256=junit_hash)
-            ci = forge.checks_green(config.repo, commit_sha)
+            required = forge.required_contexts(config.repo, default)
+            proof["required_contexts"] = sorted(required)
+            ci = forge.checks_green(config.repo, commit_sha, required)
             if ci is None:
                 result = _result("pending", "required checks are pending or unqueryable",
                                  reviewed_head, **proof)
@@ -539,6 +675,11 @@ def attempt_fix_with_regression_pin(
                                  reviewed_head, **proof)
                 _receipt(evidence_dir, result)
                 return result
+            if (forge.required_contexts(config.repo, default) != required
+                    or forge.checks_green(config.repo, commit_sha, required) is not True):
+                result = _result("pending", "required-check evidence changed before merge", reviewed_head, **proof)
+                _receipt(evidence_dir, result)
+                return result
             current = forge.find_pr(config.repo, branch)
             if not current or ((current.get("user") or {}).get("login") != author) \
                     or ((current.get("head") or {}).get("sha") != commit_sha) \
@@ -547,6 +688,9 @@ def attempt_fix_with_regression_pin(
                         and ((current.get("head") or {}).get("repo") or {}).get("full_name")
                         != config.repo):
                 return _result("blocked", "PR changed before merge", reviewed_head, **proof)
+            proof["phase"] = "merging"
+            result = _result("pending", "merge requested; outcome requires verification", reviewed_head, **proof)
+            _receipt(evidence_dir, result)
             merged = forge.merge(config.repo, number, commit_sha)
             merge_sha = merged.get("sha") if isinstance(merged, dict) else None
             if not isinstance(merged, dict) or merged.get("merged") is not True \
@@ -562,10 +706,12 @@ def attempt_fix_with_regression_pin(
                 return result
             result = _result("merged", "verified bot-owned PR merge", reviewed_head,
                              merged_head=merged_head, **proof)
+            result["phase"] = "merged"
             _receipt(evidence_dir, result)
             return result
     except Exception as exc:  # containment: credentials are already unwound
-        result = _result("error", str(exc)[:300], reviewed_head)
+        result = {**result, "status": "pending" if result.get("phase") == "merging" else "error",
+                  "reason": str(exc)[:300]}
         try:
             _receipt(evidence_dir, result)
         except OSError:

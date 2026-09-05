@@ -59,6 +59,8 @@ def _args(repo: Path, state: Path, fake: Path, rounds=1, test_command=None):
         chunk_chars=48_000,
         process_timeout=30,
         test_timeout=60,
+        ledger_issue=13,
+        _forge_adapter=_Forge(),
         _fake_responses=fake,
     )
 
@@ -79,6 +81,30 @@ def test_real_snapshot_fixed_subprocess_and_coverage_certify(tmp_path: Path):
     assert {e["path"] for e in entries} == {".fl4write.yaml", "test_value.py", "value.py"}
     assert state["ledger"][0]["model_usage"] == {"calls": 3, "reserved_output_tokens": 30}
     assert state["ledger"][0]["junit_sha256"] and state["ledger"][0]["test_ids"]
+
+
+def test_local_green_rounds_cannot_claim_certification(tmp_path):
+    repo = _repo(tmp_path)
+    state_dir = tmp_path / "state"
+    args = _args(repo, state_dir, _responses(tmp_path), rounds=3)
+    args.ledger_issue = None
+    assert exhaustive.run(args) == 2
+    assert _state(state_dir)["consecutive_green"] == 3
+    assert _state(state_dir)["certified_sha"] is None
+    assert exhaustive.run(args) == 2
+
+
+def test_pending_round_rejects_changed_test_command_before_execution(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    state_dir = tmp_path / "state"
+    args = _args(repo, state_dir, _responses(tmp_path))
+    def unavailable(*args): raise exhaustive.Deferred("runner unavailable")
+    monkeypatch.setattr(exhaustive, "_test", unavailable)
+    assert exhaustive.run(args) == 2
+    args.test_command = [sys.executable, "-c", "print('weaker suite')", "{junit}"]
+    monkeypatch.setattr(exhaustive, "_test", lambda *a: pytest.fail("changed command executed"))
+    assert exhaustive.run(args) == 2
+    assert _state(state_dir)["round"] == 0 and _state(state_dir)["pending_round"]
 
 
 def test_budget_is_reserved_before_call(tmp_path: Path):
@@ -139,16 +165,16 @@ def test_recovery_cannot_forget_pending_findings(tmp_path: Path):
     assert recovered["consecutive_green"] == 0
 
 
-def test_failed_suite_after_two_green_resets(tmp_path: Path):
+def test_failed_suite_after_two_green_resets(tmp_path: Path, monkeypatch):
     repo = _repo(tmp_path)
     state_dir = tmp_path / "state"
     assert exhaustive.run(_args(repo, state_dir, _responses(tmp_path), rounds=2)) == 2
-    bad = [
-        sys.executable,
-        "-c",
-        "from pathlib import Path; Path(r'{junit}').write_text('''<testsuite tests=\"1\" failures=\"1\"><testcase name=\"x\"/></testsuite>''')",
-    ]
-    assert exhaustive.run(_args(repo, state_dir, _responses(tmp_path), test_command=bad)) == 2
+    def failed_suite(command, tree, evidence, timeout):
+        evidence.write_text('<testsuite tests="1" failures="1">'
+                            '<testcase classname="test_value" name="test_value"><failure/></testcase></testsuite>')
+        raise exhaustive.NonGreen("full suite not green")
+    monkeypatch.setattr(exhaustive, "_test", failed_suite)
+    assert exhaustive.run(_args(repo, state_dir, _responses(tmp_path))) == 2
     assert _state(state_dir)["consecutive_green"] == 0
 
 
@@ -307,6 +333,29 @@ def test_publication_retry_replays_identical_body_before_new_recon(tmp_path: Pat
     assert exhaustive.run(retry) == 0
     assert len(forge.bodies) == 4 and forge.bodies[2] == forge.bodies[3]
     assert _state(state_dir)["consecutive_green"] == 3
+
+
+@pytest.mark.parametrize("landed", [False, True])
+def test_publication_head_drift_archives_old_outcome_and_allows_fresh_round(tmp_path, landed):
+    repo = _repo(tmp_path)
+    state_dir = tmp_path / "state"
+    forge = _Forge([False])
+    args = _args(repo, state_dir, _responses(tmp_path))
+    args._forge_adapter = forge
+    assert exhaustive.run(args) == 2
+    if landed:
+        forge.body = forge.bodies[-1]
+    (repo / "value.py").write_text("VALUE = 2\n")
+    _git(repo, "add", "value.py")
+    _git(repo, "commit", "-qm", "advance")
+    assert exhaustive.run(args) == 2
+    assert not list(state_dir.glob("*/publication-pending.json"))
+    receipt = json.loads(next(state_dir.glob("*/publication-obsolete-*.json")).read_text())
+    assert receipt["status"] == ("old_body_observed" if landed else "old_body_not_observed")
+    assert len(forge.bodies) == 1
+    assert exhaustive.run(args) == 2
+    assert _state(state_dir)["consecutive_green"] == 1
+    assert len(forge.bodies) == 2
 
 
 def test_public_ledger_scrubs_credentials():

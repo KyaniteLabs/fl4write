@@ -2,6 +2,27 @@
 
 Status: implementation in progress; not approved for merge or deployment.
 
+## Second repair pass
+
+Independent review R2 requested changes on six integrated recovery and
+certification defects plus a portable Git warning bug. The next candidate
+adds request-bound recon and fix retries, requires owned publication before
+certification, reconciles obsolete publication after HEAD movement, recovers
+lost merge responses through exact owned-PR proof, and queries required CI
+contexts with complete pagination. It also separates Git diagnostics from
+porcelain status and uses verified single-repository GitHub App tokens.
+
+Focused checks: 98 passed. Default full suite: 767 passed, 3 live skips.
+Latest integrated live full suite: 769 passed, 1 failed. The failed live
+median-unsorted recall case remains a quality gate; the earlier all-green
+checkpoint does not override this result. Fresh security review, isolated
+live fix/merge/refresh execution and three clean fresh rounds remain required.
+
+The signing GitHub App and token scope were verified live. Docker access is
+available on the canonical runner, but unprivileged bubblewrap could not
+configure its isolated loopback interface. No production runner was replaced
+or second production runner started during these capability probes.
+
 The candidate derives clean-round counters from sealed ledger evidence,
 rechecks archived source and JUnit digests, rejects contradictory JUnit
 aggregates, and preserves pending recon when the test runner is unavailable.

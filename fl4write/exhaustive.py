@@ -25,11 +25,28 @@ from .exhaustive_evidence import EvidenceError, seal_bundle, verify_bundle
 from .forges import ForgeAdapter, adapter_for
 from .state import CycleLock, CycleLockHeld
 
-VERSION, GREEN_REQUIRED, DEFAULT_CHUNK_CHARS = 3, 3, 48_000
+VERSION, GREEN_REQUIRED, DEFAULT_CHUNK_CHARS = 4, 3, 48_000
 
 
 class Deferred(RuntimeError):
     pass
+
+
+def _request_identity(args, config):
+    executable = shutil.which(args.test_command[0]) if args.test_command else None
+    selected = Path(executable).resolve() if executable else None
+    if selected is None:
+        raise Deferred("selected test executable is unavailable")
+    value = {
+        "test_command": args.test_command, "executable": str(selected),
+        "executable_sha256": hashlib.sha256(selected.read_bytes()).hexdigest() if selected else None,
+        "config": config.model_dump(mode="json"),
+        "test_timeout": args.test_timeout, "process_timeout": args.process_timeout,
+        "max_model_calls": args.max_model_calls, "max_output_tokens": args.max_output_tokens,
+        "chunk_chars": args.chunk_chars,
+        "environment": {k: os.environ.get(k) for k in ("FL4WRITE_EVAL", "FL4WRITE_EVAL_CONFIG", "PYTHONPATH")},
+    }
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
 class NonGreen(RuntimeError):
@@ -184,6 +201,8 @@ def _load_state(path: Path, identity: str) -> dict[str, Any]:
             manifest = json.loads(paths["manifest.json"].read_bytes())
             if manifest.get("head") != row["reviewed_head"]:
                 raise EvidenceError("round archive does not match reviewed HEAD")
+            if json.loads(paths["selected-request.json"].read_bytes()) != {"sha256": row.get("request_sha256")}:
+                raise EvidenceError("round selected request does not match sealed evidence")
             if row["green"]:
                 if row.get("tested_head") != row["reviewed_head"] or row.get("finding_count") != 0:
                     raise EvidenceError("green round lacks matching tested HEAD or zero findings")
@@ -531,6 +550,23 @@ def run(args: argparse.Namespace) -> int:
         with CycleLock(state_dir / "loop.lock"):
             state = _load_state(state_path, identity)
             config = load_config(args.config or repo / ".fl4write.yaml")
+            request_sha = _request_identity(args, config)
+            request_path = state_dir / "request-identity.json"
+            if request_path.exists():
+                try:
+                    if json.loads(request_path.read_bytes()) != {"sha256": request_sha}:
+                        raise Deferred("selected test command or configuration changed; existing round cannot be reused")
+                except (OSError, ValueError, TypeError) as exc:
+                    raise Deferred("request identity evidence is invalid") from exc
+            elif state["ledger"] or state["pending_round"]:
+                raise Deferred("existing rounds lack selected request identity")
+            else:
+                _atomic_json(request_path, {"sha256": request_sha})
+            if (state["pending_round"] and state["pending_round"].get("request_sha256") != request_sha
+                    or any(row.get("request_sha256") != request_sha
+                           for row in state["ledger"][-state["consecutive_green"]:])
+                    and state["consecutive_green"]):
+                raise Deferred("selected request differs from pending or clean-round evidence")
             ledger_issue = getattr(args, "ledger_issue", None)
             binding, forge = _primary(config, getattr(args, "_forge_adapter", None))
             from .exhaustive_transaction import publish_round, replay_publication
@@ -568,10 +604,10 @@ def run(args: argparse.Namespace) -> int:
                 _atomic_json(state_path, state)
             if state["consecutive_green"] == GREEN_REQUIRED and state["green_sha"] == current:
                 if ledger_issue is None:
-                    return 0
+                    raise Deferred("local rounds complete; owned ledger publication is required for certification")
                 publish_state = dict(state)
                 publish_state["certified_sha"] = current
-                _publish(forge, config.repo, ledger_issue, publish_state, certification=True)
+                publish_round(repo, state_path, forge, config, ledger_issue, publish_state, True)
                 state["certified_sha"] = current
                 _atomic_json(state_path, state)
                 _atomic_json(
@@ -593,12 +629,15 @@ def run(args: argparse.Namespace) -> int:
                 state["head"] = head
                 rd = state_dir / "artifacts" / f"round-{state['round'] + 1:04d}-{head[:12]}-{time.time_ns()}"
                 tree, manifest = _pack(repo, head, rd)
+                _atomic_json(rd / "selected-request.json", {"sha256": request_sha})
                 ledger = rd / "ledger-input.json"
                 _atomic_json(ledger, {"ledger": state["ledger"]})
                 pending = state["pending_round"]
                 if pending:
                     try:
                         paths = verify_bundle(pending.get("evidence_bundle"))
+                        if json.loads(paths["selected-request.json"].read_bytes()) != {"sha256": request_sha}:
+                            raise EvidenceError("pending selected request changed")
                         if pending["reviewed_head"] != head:
                             _non_green(state, state_path, pending["reviewed_head"],
                                        "HEAD changed during pending round", pending)
@@ -629,6 +668,7 @@ def run(args: argparse.Namespace) -> int:
                         getattr(args, "_fake_responses", None),
                     )
                 common = {
+                    "request_sha256": request_sha,
                     "pack_manifest": str(manifest),
                     "coverage_manifest": str(coverage),
                     "model_usage": usage,
@@ -663,7 +703,7 @@ def run(args: argparse.Namespace) -> int:
                         if not getattr(args, "enable_fixes", False):
                             _non_green(state, state_path, head, str(exc), common)
                             if ledger_issue is not None:
-                                _publish(forge, config.repo, ledger_issue, state)
+                                publish_round(repo, state_path, forge, config, ledger_issue, state)
                         raise
                 _atomic_json(state_path, state)
                 try:
@@ -723,9 +763,9 @@ def run(args: argparse.Namespace) -> int:
                         state["certified_sha"] = head
                     publish_round(repo, state_path, forge, config, ledger_issue, state, ready_to_certify)
                 else:
-                    if locally_complete:
-                        state["certified_sha"] = head
                     _atomic_json(state_path, state)
+                    if locally_complete:
+                        raise Deferred("local rounds complete; owned ledger publication is required for certification")
                 if state["certified_sha"]:
                     return 0
             raise Deferred("invocation round limit reached")

@@ -137,17 +137,14 @@ def _repo_name(payload: Any) -> str | None:
     return f"{owner}/{name}" if owner and isinstance(name, str) and name else None
 
 
-def publish_owned(adapter: ForgeAdapter, repo: str, issue: int, bot_login: str, body: str) -> None:
-    """PATCH an exact owned ledger body after live guards, then verify it."""
+def inspect_owned(adapter: ForgeAdapter, repo: str, issue: int, bot_login: str) -> dict:
+    """Read an owned ledger through the same live guards used before writes."""
     canonical = _canonical_repo(repo)
     if isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0:
         raise PublicationError("invalid issue number")
     if not isinstance(bot_login, str) or not bot_login or bot_login != adapter.bot_login:
         raise PublicationError("configured bot identity mismatch")
     marker = _MARKER_TEMPLATE.format(repo=canonical)
-    if not isinstance(body, str) or body.count(marker) != 1 or not body.startswith(marker + "\n"):
-        raise PublicationError("publication body lacks the repository-bound marker")
-
     try:
         identity = adapter._call("GET", "/user")
         repository = adapter._call("GET", f"/repos/{canonical}")
@@ -166,6 +163,16 @@ def publish_owned(adapter: ForgeAdapter, repo: str, issue: int, bot_login: str, 
     old_body = current.get("body")
     if not isinstance(old_body, str) or marker not in old_body:
         raise PublicationError("issue is not an owned exhaustive ledger")
+    return current
+
+
+def publish_owned(adapter: ForgeAdapter, repo: str, issue: int, bot_login: str, body: str) -> None:
+    """PATCH an exact owned ledger body after live guards, then verify it."""
+    canonical = _canonical_repo(repo)
+    marker = _MARKER_TEMPLATE.format(repo=canonical)
+    if not isinstance(body, str) or body.count(marker) != 1 or not body.startswith(marker + "\n"):
+        raise PublicationError("publication body lacks the repository-bound marker")
+    inspect_owned(adapter, canonical, issue, bot_login)
 
     try:
         adapter._call("PATCH", f"/repos/{canonical}/issues/{issue}", {"body": body})

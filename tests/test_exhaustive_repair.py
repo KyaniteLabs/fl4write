@@ -2,11 +2,25 @@
 import subprocess
 import hashlib
 import json
+import os
+from pathlib import Path
 
 import pytest
 
 from fl4write import exhaustive as ex
 from fl4write.exhaustive_evidence import seal_bundle, verify_bundle, EvidenceError
+
+
+def test_git_warning_does_not_become_a_dirty_file(tmp_path):
+    binary = tmp_path / "git"
+    binary.write_text("#!/bin/sh\necho 'warning: temporary directory fallback' >&2\nexit 0\n")
+    binary.chmod(0o700)
+    script = Path(__file__).resolve().parents[1] / "check-dirty.sh"
+    result = subprocess.run(["bash", str(script)], capture_output=True, text=True,
+                            env={**os.environ, "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+                                 "FL4WRITE_CHECKOUT": str(tmp_path)})
+    assert result.returncode == 0 and result.stdout.strip() == "clean"
+    assert "warning:" in result.stderr
 
 
 @pytest.mark.parametrize("counter", ["failures", "errors", "skipped", "tests"])

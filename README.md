@@ -73,9 +73,11 @@ no fleet repo has enabled it yet — luna F3-004 doc truth).
 Current fleet state (2026-09-05; recovered [audit ledger](docs/pm-recovery/ROUND-LEDGER.md)): **129 central configs**
 across GitHub + Forgejo in hourly cycles; the tier scheduler selects due repos
 (`run-cycle.sh`, hourly crontab, single-host law — LEARNINGS #17). **500+
-tests green** (752 passing + 3 skipped in the isolated feature draft;
+tests green** (752 passing + 3 skipped at repair checkpoint `0217dcb`;
 the round-13 desk pass reported 605 passing). The integrated live suite also
-passes: 755 passing + 0 skipped in the isolated repair candidate.
+passes: 755 passing + 0 skipped at that checkpoint. The next repair candidate
+passes 767 passing + 3 skipped by default. Its live target is 770 passing + 0 skipped;
+the latest live run is blocked at 769 passed and one median-recall failure.
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
 runtime model credentials. The default suite skips those three paid model
