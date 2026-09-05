@@ -603,6 +603,8 @@ def _omni_report_body(config: RepoConfig, findings: list[dict], scanned: int, to
     if len(ordered) > cap:
         lines.append(f"… and {len(ordered) - cap} more findings recorded in sweep state.\n")
     if complete:
+        if not findings:
+            lines.append("No findings were recorded in this completed sweep.\n")
         score, label = _omni_readiness(findings)
         lines.append(f"**Readiness: {score}/100 — {label}**\n")
         lines.append("_This finding-based score is subject to missing-evidence caps; "
@@ -726,19 +728,22 @@ def _omnisweep_step(
         if not st.get("omni_complete"):
             pass  # fell through to a fresh sweep below
         else:
-            if not st.get("omni_published") or st.get("omni_report_version") != 2:
+            if (not st.get("omni_published") or st.get("omni_report_version") != 2
+                    or (st.get("omni_issue") and not st.get("omni_findings")
+                        and not st.get("omni_clean_published"))):
                 # MECE round-5 (sol F5-002): a completed sweep whose final
                 # publication FAILED must retry it — the old fast path
                 # returned before the upsert and 'retrying next cycle' lied
                 findings = st.get("omni_findings", [])
                 total = int(st.get("omni_total", 0) or 0)
-                if findings:
+                if findings or st.get("omni_issue"):
                     _omni_upsert_issue(config, primary, st, findings, total, total,
                                        complete=True, report=report)
                     if not st.get("omni_published") or st.get("omni_report_version") != 2:
                         return  # publication still failing — retry next cycle
                 else:
-                    st["omni_published"] = True  # clean sweep: nothing to publish
+                    st["omni_published"] = True  # no existing issue to refresh
+                    st["omni_report_version"] = 2
             if config.omnisweep.fix and st.get("omni_findings"):
                 _omni_fix_phase(config, primary, st, report)
             return
@@ -869,7 +874,7 @@ def _omnisweep_step(
         findings = st.get("omni_findings", [])
         report.omni_scanned = len(scan)
         report.omni_findings = len(findings)
-        if findings:
+        if findings or st.get("omni_issue"):
             _omni_upsert_issue(config, primary, st, findings, len(scan), len(scan),
                                complete=True, report=report)
             if not st.get("omni_published"):
@@ -879,6 +884,7 @@ def _omnisweep_step(
             # MECE round-6 (luna-max F6-C018): a CLEAN sweep publishes
             # nothing — that is success, never a publication failure
             st["omni_published"] = True
+            st["omni_report_version"] = 2
         report.alerts.append(f"omnisweep complete: {len(findings)} findings across {total} files")
         if config.omnisweep.fix and findings:
             _omni_fix_phase(config, primary, st, report)
@@ -979,7 +985,7 @@ def _omnisweep_step(
             + (f" ({unscannable} unscannable — model failed twice, skipped + recorded)" if unscannable else "")
             + (f" ({quarantined} unfetchable — recorded, not audited)" if quarantined else "")
         )
-        if st.get("omni_findings"):
+        if st.get("omni_findings") or st.get("omni_issue"):
             _omni_upsert_issue(
                 config, primary, st, st.get("omni_findings", []),
                 total, total, complete=True, report=report,
@@ -994,6 +1000,7 @@ def _omnisweep_step(
             # MECE round-6 (luna-max F6-C018): clean sweeps publish nothing —
             # that IS success, never a publication failure
             st["omni_published"] = True
+            st["omni_report_version"] = 2
         if config.omnisweep.fix and st.get("omni_findings"):
             _omni_fix_phase(config, primary, st, report)
     else:
@@ -1017,7 +1024,7 @@ def _omni_reset_sweep(st: dict) -> None:
     field goes — the old partial resets left stale failure/quarantine counts
     that prematurely quarantined new content, and stale totals contaminated
     the completion report. omni_issue survives: the next audit reuses it."""
-    for key in ("omni_complete", "omni_published", "omni_cursor", "omni_head",
+    for key in ("omni_complete", "omni_published", "omni_clean_published", "omni_cursor", "omni_head",
                 "omni_fp", "omni_findings", "omni_next_id", "omni_total",
                 "omni_scanned_total", "omni_file_fails", "omni_unscannable",
                 "omni_unfetchable", "omni_truncated_seen"):
@@ -1062,7 +1069,7 @@ def _omni_upsert_issue(
     degrades to next-cycle retry, never data loss. On a COMPLETE publish the
     state records omni_published — the retry contract the complete fast path
     honors (MECE round-5, sol F5-002)."""
-    if config.shadow or not findings:
+    if config.shadow or (not findings and (not complete or not st.get("omni_issue"))):
         return
     if complete:
         _score, _label = _omni_readiness(findings)
@@ -1071,12 +1078,20 @@ def _omni_upsert_issue(
     number = st.get("omni_issue")
     if number:
         if not primary.update_issue(config.repo, number, body):
+            st["omni_published"] = False
             # F12-C006: a DEAD issue id (deleted/forbidden) used to fail
             # forever — every completed fast path retried the same id and no
             # replacement was ever created. After bounded consecutive
             # failures the id is reconciled away (recreate next cycle); a
             # transient error keeps retrying.
             fails = int(st.get("omni_pub_fail", 0)) + 1
+            if not findings:
+                # Recreating an empty issue would leave the previous findings
+                # visible forever. Keep its identity until the clean update lands.
+                st["omni_pub_fail"] = fails
+                report.alerts.append(
+                    f"omnisweep: clean update of issue #{number} failed ({fails} attempts) — retrying next cycle")
+                return
             if fails >= 3:
                 report.alerts.append(
                     f"omnisweep: issue #{number} update failed {fails}x — id "
@@ -1093,6 +1108,7 @@ def _omni_upsert_issue(
         if complete:
             st["omni_published"] = True
             st["omni_report_version"] = 2
+            st["omni_clean_published"] = not findings
         return
     created = primary.open_issue(
         config.repo, f"omnisweep: full-tree audit of {config.repo}", body,

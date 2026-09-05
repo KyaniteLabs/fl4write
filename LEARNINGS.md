@@ -704,3 +704,15 @@ write permission from a script should retain owner execute permission; ordinary
 source files remain non-executable. A real tracked shell-helper invocation
 reproduces the PermissionError that Python-only test entry points concealed.
 Neither repair creates a fresh clean round or clears failed generated trials.
+
+## 65. Preserve identities across presentation, publication and pagination (2026-09-05)
+
+Round20 found three defects. A scrubbed path is display text, not a lossless
+model-decision key: use collision-free aliases when formatting changes paths,
+and map both keep and demotion decisions consistently. A clean rescan must
+replace an existing findings report; publication is acknowledged only after
+the update succeeds, with legacy state repaired and failures retried. Finally,
+pagination must use the adapter's actual page-size parameter: Forgejo's limit
+and GitHub's per_page are different contracts. Test a server that honors those
+parameters and enough rows to force fallback, rather than counting invented
+short fixture pages. Thirteen regressions cover these repairs.

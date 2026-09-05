@@ -1,5 +1,18 @@
 # Recovered historical audit ledger
 
+## Successor round20 — September5
+
+Fresh functional review of46c27ef found three defects: F20-001(Minor) path
+identity loss in gatekeeper decisions; F20-002(Major) stale findings left on
+an existing audit issue after a clean rescan; F20-003(Major) Forgejo issue
+fallback used the wrong pagination parameter. All three manual repairs have
+independent scoped clearance and thirteen regression cases. Full default
+suite881pass3paidlive-skips plus Ruff; exact live verification is next.
+The separate generated pagination trial failed fixed-green and created no PR;
+its original19call/84000reserved budget evidence remains intact. See
+ROUND20-REPAIR-CHECKPOINT.md. Fresh clean counter remains0/3; remaining
+security review and delivery gates stay open.
+
 ## Successor rounds 17–19 — September 5
 
 Round17 found eight defects, subsequently repaired and independently rechecked;

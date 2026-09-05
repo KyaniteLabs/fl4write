@@ -66,10 +66,11 @@ def collect_new_issues(forge: ForgeAdapter, repo: str, last_number: int,
         # manual pagination loop; ANY failure returns [] so the watermark
         # holds and the issues stay collectable next cycle.
         all_issues = []
+        size_param = getattr(forge, "page_size_param", "per_page")
         try:
             for page in range(1, 11):
                 batch = forge._call(
-                    "GET", f"/repos/{repo}/issues?state=open&per_page=100&page={page}")
+                    "GET", f"/repos/{repo}/issues?state=open&{size_param}=100&page={page}")
                 if not isinstance(batch, list):
                     return _IssueList(complete=False)  # malformed envelope
                 all_issues += batch
