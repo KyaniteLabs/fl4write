@@ -48,5 +48,12 @@ The combined local suite passed 1028 tests with three paid-model skips in
 passed. The generated merge was fast-forwarded into the working candidate;
 the separately reviewed manual repairs and deeper tests remain included.
 
+Exact committed combined candidate
+`795d8326bf83d1bff971e15db35c225ad8581803` passed all 1031 live tests
+with zero skips and Ruff. Canonical Forgejo CI passed at that exact commit.
+The live suite consumed six calls and 24000 reserved output tokens.
+JUnit SHA256:
+`0a2eeff864f88a00699b4137a437e7e073d503166a23132e86a908ecc624ff45`.
+
 Three fresh clean rounds, full recon/quorum dogfood, security review, CEO
 quality verdicts and final main/mirror/sole-runner delivery remain open.

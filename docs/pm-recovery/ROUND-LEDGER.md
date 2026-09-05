@@ -9,7 +9,8 @@ passed 1028 tests with three paid-model skips and Ruff, including thirteen new
 regressions. The real generated repair trial automatically merged PR21 at
 cdf2b78 and passed all 1022 post-merge live tests, consuming 25 calls and
 108000 reserved output tokens. This closes one automatic lifecycle proof.
-The combined 1031-test live run remains pending; fresh clean remains 0/3.
+Exact committed 795d832 passed all 1031 live tests with zero skips, Ruff and
+canonical CI. Fresh clean remains 0/3.
 See ROUND26-REPAIR-CHECKPOINT.md for exact evidence and remaining gates.
 
 ## Successor round25 — September 5
