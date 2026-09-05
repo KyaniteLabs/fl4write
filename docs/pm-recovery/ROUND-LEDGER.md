@@ -1,5 +1,17 @@
 # Recovered historical audit ledger
 
+## Successor round28 — September 5
+
+Fresh independent review of exact81a97d5 found no new functional defect.
+1036 default tests passed with three paid-model skips; Ruff, shell syntax,
+131 configuration loads and offline state/archive/scheduler probes passed.
+Functional clean candidate count is1/3; this is not exhaustive certification.
+Real full-recon preflight requires280 model calls. The actual invocation
+deferred on its first call; an exact-payload diagnostic returned HTTP402.
+Two calls/8000 reserved tokens are preserved in the durable budget. Provider
+access restoration, remaining review and release gates are open. See
+ROUND28-REVIEW-CHECKPOINT.md.
+
 ## Successor round27 — September 5
 
 Fresh review of 795d832 found two P2 CI-watch defects: cancelled checks
