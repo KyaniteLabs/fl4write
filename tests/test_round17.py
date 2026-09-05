@@ -52,7 +52,8 @@ def test_source_survives_actual_model_transport(monkeypatch, transport):
     assert json.loads(captured[0]["messages"][1]["content"])["sources"]["page.html"] == source
 
 
-def test_expired_retro_park_retries_after_older_pr_advances_cursor(tmp_path, monkeypatch):
+@pytest.mark.parametrize("deferred_retries", [0, 1, 3])
+def test_expired_retro_park_retries_after_older_pr_advances_cursor(tmp_path, monkeypatch, deferred_retries):
     newer = _r4_pr(number=1, merged_at=_r4_date(20))
     older = _r4_pr(number=2, merged_at=_r4_date(21))
     forge = _R4Forge(merged=[newer, older])
@@ -74,10 +75,15 @@ def test_expired_retro_park_retries_after_older_pr_advances_cursor(tmp_path, mon
     assert state.load_state(path)["retro_cursor"] == older.merged_at
     now = engine.time.time()
     monkeypatch.setattr(engine.time, "time", lambda: now + 90000)
+    for _ in range(deferred_retries):
+        _r4_cycle(forge, monkeypatch, path, config)
+        assert "1" in state.load_state(path)["retro_parked"]
+    if deferred_retries == 3:
+        monkeypatch.setattr(engine.time, "time", lambda: now + 180000)
     recovered = True
     _r4_cycle(forge, monkeypatch, path, config)
     final = state.load_state(path)
-    assert calls == [1, 1, 1, 2, 1]
+    assert calls == [1, 1, 1, 2] + [1] * (deferred_retries + 1)
     assert final["retro_cursor"] == older.merged_at
     assert "1" not in final.get("retro_parked", {})
 

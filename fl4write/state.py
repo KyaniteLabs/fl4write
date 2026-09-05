@@ -429,7 +429,10 @@ def prune_closed(state: dict[str, Any], open_numbers: set[int]) -> None:
         now_i = int(_t.time())
         state["retro_parked"] = {
             k: v for k, v in parked.items()
-            if isinstance(v, int) and v > now_i  # expired parks are garbage
+            if isinstance(v, int) and (v > now_i or (
+                str(k).isascii() and str(k).isdigit() and int(k) in open_numbers))
+            # A still-listed unresolved PR needs its expired park as a retry
+            # identity until the retro lane succeeds or it leaves the window.
         }
     ci_keys = [k for k in state if k.startswith("ci_acted:")]
     if len(ci_keys) > 100:  # insertion-ordered: drop the oldest markers

@@ -1197,7 +1197,10 @@ def _retro_sweep(
         reverse=True,  # newest unprocessed first: recent mistakes matter most
     )[: config.retro_audit.max_per_cycle]
 
-    considered: set[int] = set()
+    # A listed parked PR remains unresolved even when the work cap or deadline
+    # postpones its retry. Preserve its identity through end-of-cycle pruning.
+    parked_ids = active_park | expired_park
+    considered: set[int] = {p.number for p in listed if p.number in parked_ids}
     oldest_processed: str | None = None
     for pr in pending:
         considered.add(pr.number)
@@ -1692,6 +1695,7 @@ def run_cycle(
                 # cycle's merged records before prune could drop them.
                 if deadline is not None and (deadline - time.monotonic()) < REVIEW_BUDGET_S:
                     report.alerts.append("cycle deadline reached — post-merge deferred")
+                    report._merged_listing_incomplete = True
                 else:
                     try:
                         merged_keep = _post_merge_sweep(
@@ -1713,6 +1717,7 @@ def run_cycle(
             if config.retro_audit.enabled:
                 if deadline is not None and (deadline - time.monotonic()) < REVIEW_BUDGET_S:
                     report.alerts.append("cycle deadline reached — retro deferred")
+                    report._merged_listing_incomplete = True
                 else:
                     try:
                         merged_keep |= _retro_sweep(
