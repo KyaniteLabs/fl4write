@@ -275,7 +275,7 @@ def run_issues_cycle(config: RepoConfig, st: dict[str, Any], forge: ForgeAdapter
     # MECE round-1 (luna F1-07): a failed triage must RETRY — a later
     # success used to advance the watermark past it forever
     for issue in new_issues:
-        if deadline is not None and deadline - time.time() < 5:
+        if deadline is not None and deadline - time.monotonic() < 5:
             # F12-C004: the lane honors the cycle deadline — remaining issues
             # stay un-triaged (watermark holds) rather than overrunning
             log.warning("issues cycle deadline reached — %d issue(s) deferred", len(new_issues))
