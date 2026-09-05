@@ -97,6 +97,7 @@ class CycleReport:
     fix_attempts: int = 0
     fix_failures: int = 0
     _fix_failure_notes: list = field(default_factory=list)
+    _merged_listing_incomplete: bool = False
     alerts: list[str] = field(default_factory=list)
 
 
@@ -409,20 +410,24 @@ def _post_merge_sweep(
     except ForgeError as exc:
         report.alerts.append(f"post-merge listing failed (skipped this cycle): {exc}")
         log.warning("merged-PR listing failed for %s: %s", config.repo, exc)
+        report._merged_listing_incomplete = True
         return set()
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         # UltraQA round 3: shape drift degrades the lane, never crashes
         report.alerts.append(f"post-merge listing degraded (skipped this cycle): {exc}")
+        report._merged_listing_incomplete = True
         return set()
     if not isinstance(merged_prs, list):
         # MECE round-6 (luna-max F6-C012): a truthy non-list envelope
         # (dict/None) crashed the row filter below — degrade loudly
         report.alerts.append(
             f"post-merge listing wrong shape ({type(merged_prs).__name__}; skipped this cycle)")
+        report._merged_listing_incomplete = True
         return set()
     _raw_rows = merged_prs
     merged_prs = [p for p in merged_prs if isinstance(p, PullRequest)]
     if len(merged_prs) != len(_raw_rows):
+        report._merged_listing_incomplete = True
         first_bad = next(i for i, r in enumerate(_raw_rows) if not isinstance(r, PullRequest))
         report.alerts.append(
             f"post-merge: {len(_raw_rows) - len(merged_prs)} malformed merged rows "
@@ -929,7 +934,7 @@ def _omnisweep_step(
             log.warning("omnisweep model unavailable at %s (attempt %d): %s", path, fails, exc)
             break  # one retry next cycle, cursor holds
         findings = doc.findings
-        if findings:
+        if findings and config.gatekeeper:
             findings, dropped, failed_open = gatekeeper.filter_findings(findings, config)
             report.gatekeeper_dropped += dropped
             if failed_open:
@@ -1130,10 +1135,12 @@ def _retro_sweep(
         listed = primary.list_merged_prs(config.repo, boundary)
     except ForgeError as exc:
         report.alerts.append(f"retro listing failed (skipped this cycle): {exc}")
+        report._merged_listing_incomplete = True
         return set()
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         # UltraQA round 2: API shape drift degrades the lane, never crashes
         report.alerts.append(f"retro listing degraded (skipped this cycle): {exc}")
+        report._merged_listing_incomplete = True
         return set()
 
     # F9-C001: envelope guard — a truthy dict iterated its keys as 'rows',
@@ -1141,6 +1148,7 @@ def _retro_sweep(
     if not isinstance(listed, list):
         report.alerts.append(
             f"retro listing wrong envelope ({type(listed).__name__}; skipped this cycle)")
+        report._merged_listing_incomplete = True
         return set()
 
     # row-shape guard (UltraQA round 2): one malformed merged row must not
@@ -1148,6 +1156,7 @@ def _retro_sweep(
     # terminal 'clean audit' — completion is blocked while rows are bad
     _dropped_rows = sum(1 for p in listed if not isinstance(p, PullRequest))
     if _dropped_rows:
+        report._merged_listing_incomplete = True
         report.alerts.append(
             f"retro listing: {_dropped_rows} malformed merged rows \u2014 "
             "completion BLOCKED (retry next cycle)")
@@ -1177,9 +1186,11 @@ def _retro_sweep(
     # reset needed
     active_park = {int(k) for k, v in parked.items()
                    if str(k).isdigit() and str(v).isdigit() and int(v) > now_i}
+    expired_park = {int(k) for k, v in parked.items()
+                    if str(k).isdigit() and str(v).isdigit() and int(v) <= now_i}
     pending = sorted(
         (p for p in listed
-         if p.merged_at <= cursor and p.number not in seen
+         if (p.merged_at <= cursor or p.number in expired_park) and p.number not in seen
          and p.number not in active_park
          and (not config.shadow or shadow_belt.get(str(p.number)) != p.head_sha)),
         key=lambda p: p.merged_at,
@@ -1199,6 +1210,9 @@ def _retro_sweep(
             st["retro_seen"] = {int(n): True for n in seen}
         if not state.needs_review(st, pr.number, pr.head_sha):
             if not config.shadow:
+                parked.pop(str(pr.number), None)
+                parked.pop(pr.number, None)
+                st["retro_parked"] = parked
                 oldest_processed = pr.merged_at
             continue  # already reviewed at this SHA while it was open — nothing to catch
         try:
@@ -1249,6 +1263,9 @@ def _retro_sweep(
         # success clears it (one- or two-attempt counters used to survive
         # successful reviews forever)
         st.pop(f"retro_defer:{pr.number}:{pr.head_sha[:10]}", None)
+        parked.pop(str(pr.number), None)
+        parked.pop(pr.number, None)
+        st["retro_parked"] = parked
         oldest_processed = pr.merged_at
 
     if config.shadow and shadow_belt:
@@ -1258,7 +1275,7 @@ def _retro_sweep(
     elif not config.shadow and isinstance(st.get("retro_shadow_seen"), dict):
         st.pop("retro_shadow_seen", None)  # live runs stop honoring the belt
     if oldest_processed:
-        st["retro_cursor"] = oldest_processed
+        st["retro_cursor"] = min(cursor, oldest_processed)
     if oldest_processed is None and not pending and not active_park and not config.shadow:
         # window exhausted between boundary and cursor — nothing left to audit
         # (also fires for repos with no merges in the window: stop re-listing).
@@ -1721,7 +1738,8 @@ def run_cycle(
             # MECE round-6 (luna-max F6-C003): never prune under shadow either
             # — a dry-run must not delete live records
             if (not listing_failed and not truncated_by_deadline
-                    and not config.shadow and not merged_lane_failed):
+                    and not config.shadow and not merged_lane_failed
+                    and not report._merged_listing_incomplete):
                 st["open_ids"] = sorted(open_numbers)  # F8-C002: for tiers
                 state.prune_closed(st, open_numbers | merged_keep)
 

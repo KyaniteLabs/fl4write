@@ -211,7 +211,7 @@ def _call_model(route: ModelRoute, prompt: str, mode: str = "pr", system: str | 
         "model": route.model,
         "messages": [
             {"role": "system", "content": system if system is not None else _system_prompt(mode)},
-            {"role": "user", "content": scrub.scrub(prompt)},
+            {"role": "user", "content": prompt},
         ],
         "temperature": route.temperature,
         "max_tokens": route.max_tokens,

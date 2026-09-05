@@ -722,14 +722,14 @@ def verify_diff_tests(pr: PullRequest, config: RepoConfig, test_files: list[str]
         verify_askpass.append(pull_env)
         if _run(["git", "fetch", "-q", "--depth", "1", fetch_url, pr.head_sha],
                 cwd=workdir, timeout=180, env=pull_env).returncode != 0:
-            return None
             _v_unverified('git fetch failed')
+            return None
         _drop_askpass(pull_env)  # MECE round-3 (sol F3-002): the token helper
         # must be gone BEFORE untrusted test code executes — it used to live
         # until finally, readable by same-user tests during the run
         if _run(["git", "checkout", "-q", "--detach", "FETCH_HEAD"], cwd=workdir).returncode != 0:
-            return None
             _v_unverified('git checkout failed')
+            return None
         # ONLY the diff's own test files — the whole-suite default would
         # attribute MAIN's pre-existing red to this diff (audit A3: a
         # false-Critical machine wearing the word 'deterministic').
