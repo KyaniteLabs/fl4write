@@ -52,25 +52,35 @@ def _git_diff_path(line: str) -> str | None:
     # rstrip('"') trimmed real content characters (a file named foo\" lost
     # its quote and its secrets finding was demoted). Scan for the closing
     # quote honoring backslash escapes, then decode the whole token's bytes.
-    i = line.rfind(" b/")  # F14-A01: unquoted paths may contain spaces —
-    # the LAST ' b/' token is the new-file side (git quotes only when needed)
-    if line.startswith("diff --git a/"):
-        # A literal ' b/' may occur inside BOTH filenames. For a normal
-        # same-path diff, the equal halves identify the actual separator.
-        old_start = len("diff --git a/")
-        for match in re.finditer(" b/", line):
-            if line[old_start:match.start()] == line[match.end():]:
-                i = match.start()
-                break
-    quoted = False
-    if i != -1:
-        tok = line[i + 3:]
-    else:
-        j = line.find('"b/')
-        if j == -1:
+    # Quoted token boundaries take precedence over spaces inside filenames.
+    # This matters for deletion/binary blocks without destination metadata.
+    destination = None
+    if line.startswith('diff --git "'):
+        match = re.match(r'diff --git "(?:\\.|[^"\\])*" (.*)', line)
+        if match is None:
             return None
-        quoted = True
-        tok = line[j + 3:]
+        destination = match.group(1)
+    elif ' "b/' in line:
+        destination = line[line.index(' "b/') + 1:]
+    if destination is not None:
+        quoted = destination.startswith('"b/')
+        if not quoted and not destination.startswith('b/'):
+            return None
+        tok = destination[3:] if quoted else destination[2:]
+    else:
+        # Unquoted header fallback: complete blocks prefer destination metadata.
+        i = line.rfind(" b/")
+        if line.startswith("diff --git a/"):
+            # Same-path equal halves disambiguate literal ' b/' in both names.
+            old_start = len("diff --git a/")
+            for match in re.finditer(" b/", line):
+                if line[old_start:match.start()] == line[match.end():]:
+                    i = match.start()
+                    break
+        if i == -1:
+            return None
+        quoted = False
+        tok = line[i + 3:]
     if quoted:
         out = []
         backslashes = 0
@@ -105,38 +115,64 @@ def _git_diff_path(line: str) -> str | None:
     return tok
 
 
+def _diff_block_path(header: str, lines: list[str]) -> str | None:
+    """Prefer unambiguous destination metadata before the diff body starts."""
+    for line in lines:
+        if line.startswith(("@@", "GIT binary patch", "Binary files ")):
+            break
+        rename = line.startswith(("rename to ", "copy to "))
+        if rename:
+            raw = line.split(" to ", 1)[1]
+        elif line.startswith("+++ "):
+            raw = line[4:].split("\t", 1)[0]
+        else:
+            continue
+        if raw.startswith('"'):
+            if not raw.endswith('"'):
+                continue
+            import codecs
+
+            try:
+                raw = codecs.escape_decode(raw[1:-1].encode("utf-8"))[0].decode("utf-8")
+            except (ValueError, UnicodeError):
+                continue
+        if rename and raw:
+            return raw
+        if raw.startswith("b/"):
+            return raw[2:]
+    return _git_diff_path(header)
+
+
 def _diff_path_texts(diff_text: str) -> dict[str, str]:
     """Split a unified diff into {path: its hunks} for per-path grounding."""
     out: dict[str, str] = {}
-    cur: str | None = None
+    header: str | None = None
     parts: list[str] = []
     for line in diff_text.splitlines():
         if line.startswith("diff --git "):
-            if cur is not None:
-                out[cur] = "\n".join(parts)
-            cur = _git_diff_path(line)
+            if header is not None and (path := _diff_block_path(header, parts)) is not None:
+                out[path] = "\n".join(parts)
+            header = line
             parts = []
-        elif cur is not None:
+        elif header is not None:
             parts.append(line)
-    if cur is not None:
-        out[cur] = "\n".join(parts)
+    if header is not None and (path := _diff_block_path(header, parts)) is not None:
+        out[path] = "\n".join(parts)
     return out
 
 
 def _diff_line_spans(diff_text: str) -> dict[str, list[tuple[int, int]]]:
     """New-file line spans per path from the hunk headers (@@ -a,b +c,d @@)."""
     spans: dict[str, list[tuple[int, int]]] = {}
-    cur: str | None = None
-    for line in diff_text.splitlines():
-        if line.startswith("diff --git "):
-            cur = _git_diff_path(line)
-            spans.setdefault(cur or "", [])
-        elif cur is not None and line.startswith("@@"):
-            m = re.search(r"\+(\d+)(?:,(\d+))? @@", line)
-            if m:
-                start = int(m.group(1))
-                count = int(m.group(2) or "1")
-                spans.setdefault(cur, []).append((start, start + max(count - 1, 0)))
+    for path, text in _diff_path_texts(diff_text).items():
+        spans[path] = []
+        for line in text.splitlines():
+            if line.startswith("@@"):
+                m = re.search(r"\+(\d+)(?:,(\d+))? @@", line)
+                if m:
+                    start = int(m.group(1))
+                    count = int(m.group(2) or "1")
+                    spans[path].append((start, start + max(count - 1, 0)))
     return spans
 
 

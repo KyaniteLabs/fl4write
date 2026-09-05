@@ -981,12 +981,10 @@ class ForgejoAdapter(ForgeAdapter):
             return None
         if not raw or not raw.startswith("diff --git"):
             return None
-        # F14-D012: shared diff --git header parser (quoted/control-bearing
-        # paths used to be invisible and every finding rejected as off-diff)
-        from .analyzer import _git_diff_path
-        files = {p for line in raw.splitlines()
-                 if line.startswith("diff --git ")
-                 for p in [_git_diff_path(line)] if p}
+        # Shared complete-block destination parsing handles rename ambiguity
+        # and Git's quoted paths consistently with analyzer grounding.
+        from .analyzer import _diff_path_texts
+        files = set(_diff_path_texts(raw))
         if not files:
             files = set(re.findall(r"^\+\+\+ b/(.+)$", raw, re.MULTILINE))
         if not files:

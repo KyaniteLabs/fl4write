@@ -88,6 +88,9 @@ achieved 1036 passing + 3 skipped by default, or 1039 passing + 0 skipped live;
 its exact validation status is recorded in the audit ledger.
 The round29 metrics repair targets 1050 passing + 3 skipped by default,
 or 1053 passing + 0 skipped live. Live validation is pending provider access.
+The round30 renamed-path repair achieved 1062 passing + 3 skipped by default
+and targets 1065 passing + 0 skipped live. Its validation is recorded in the ledger;
+the live gate remains blocked by the configured provider's HTTP 402 response.
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
 runtime model credentials. The default suite skips those three paid model

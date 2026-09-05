@@ -1,5 +1,19 @@
 # Recovered historical audit ledger
 
+## Successor round30 — September 5
+
+Fresh independent offline review of `a946bd9` found one Minor renamed-path
+defect: an unquoted destination containing ` b/` loses its directory identity,
+dropping a valid finding and producing a false clean review. The baseline
+passed 1050 default tests with three paid-model skips, Ruff, 131 configuration
+loads and shell syntax checks. The final repair covers complete-block metadata
+and quoted header fallback, with twelve new regression cases. Independent
+scoped review approved all sixteen real-Git controls and 64 targeted tests.
+Full combined default validation passed 1062 tests with three paid-model skips
+in 194.33 seconds; Ruff passed. Clean functional reviews remain 0/3. Exact live
+validation remains blocked by configured provider HTTP 402. See
+ROUND30-REPAIR-CHECKPOINT.md.
+
 ## Successor round29 — September 5
 
 Fresh independent review of `81a97d5` found one Minor resolved-metrics defect:

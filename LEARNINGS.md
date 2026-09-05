@@ -793,3 +793,11 @@ when file identities contain backticks; a single-backtick marker pattern
 silently drops resolved findings and changes the acceptance denominator.
 Test real renderer-to-metrics output while retaining line anchoring and
 near-match controls so quoted message text cannot inflate counts.
+
+## 74. Resolve renamed paths from complete diff blocks (2026-09-05)
+
+Unquoted Git headers can contain the separator text inside both filenames.
+Same-path heuristics cannot identify every rename destination. Use destination
+metadata before the first hunk or binary body, and share that identity across
+forge intake, source grounding and line spans. Test real Git renames against
+the final rendered review so a dropped finding cannot masquerade as clean.
