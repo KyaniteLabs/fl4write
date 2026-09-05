@@ -23,3 +23,28 @@ subsequent changes. Its scope was functional correctness of the isolated runtime
 its exhaustive integration, and staged-byte comparison. It is neither whole-project
 nor security certification. The earlier security review remains incomplete after
 an automatic cybersecurity restriction; the stopped experiment was not repeated.
+
+## Independent follow-up
+
+The same reviewer independently checked the repairs at
+`f53b7b191166f63f266f0e49893847680037d8af`: **APPROVE for these bounded repairs**.
+All three findings cleared, 79 focused tests passed, and no new material functional
+finding was identified. This follow-up is not a new whole-project clean round.
+The parent full local suite and real isolated-container suite each passed 781
+cases with three paid live-model skips at that checkpoint. Repository-wide Ruff
+also passed. Security and full live certification remain open.
+
+## CI diagnosis
+
+Forgejo run 7227 failed in `actions/setup-python@v5`, before dependency installation
+or tests: Python 3.12 was unavailable for the runner's Debian ARM64 image. The
+workflow now selects the immutable Python 3.12 image used by the isolated runtime
+and installs Git and Node before checkout. Forgejo requires Node in the job image
+for JavaScript actions; see the [official Actions documentation](https://forgejo.org/docs/latest/user/actions/actions/).
+Shared runner configuration is unchanged. This workflow correction still requires
+a successful live CI run.
+
+The install also now declares `pyjwt[crypto]`: App authentication signs RS256
+tokens, which needs PyJWT's cryptographic dependency. A regression generates an
+ephemeral key and verifies a real App JWT without contacting a forge or reading
+operator credentials. See [PyJWT installation guidance](https://pyjwt.readthedocs.io/en/stable/installation.html).

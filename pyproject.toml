@@ -7,7 +7,7 @@ name = "fl4write"
 version = "0.4.0"
 description = "Self-hosted multi-forge code review bot - the org's CodeRabbit replacement."
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2.5", "pyyaml>=6", "pyjwt>=2.8"]  # pyjwt: appauth is the primary auth path
+dependencies = ["pydantic>=2.5", "pyyaml>=6", "pyjwt[crypto]>=2.8"]  # RSA signing is the primary App auth path
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.16.5"]
