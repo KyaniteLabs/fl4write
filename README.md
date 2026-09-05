@@ -85,7 +85,7 @@ The bounded model-transport repairs at `6af8898` passed all 795 tests with zero
 skips in the real isolated live suite. The default suite has 792 passing tests
 and three paid live-model skips. Canonical Forgejo CI also passed at that head.
 The current round-budget, base-selection and compact-edit integration targets
-886 passing + 0 skipped live, or 883 passing + 3 skipped by default.
+907 passing + 0 skipped live, or 904 passing + 3 skipped by default.
 The latest completed isolated live run at `4b1a141` passed 805 tests with zero
 skips. Fresh whole-project review at that head found eight correctness defects;
 those findings keep the candidate unready for merge despite the passing suite.

@@ -51,7 +51,7 @@ def _git_diff_path(line: str) -> str | None:
     # F13-A11 (reopened F4-002): decode ONE complete quoted pathname token —
     # rstrip('"') trimmed real content characters (a file named foo\" lost
     # its quote and its secrets finding was demoted). Scan for the closing
-    # quote honoring backslash escapes, then ast-decode the whole token.
+    # quote honoring backslash escapes, then decode the whole token's bytes.
     i = line.rfind(" b/")  # F14-A01: unquoted paths may contain spaces —
     # the LAST ' b/' token is the new-file side (git quotes only when needed)
     if line.startswith("diff --git a/"):
@@ -96,13 +96,11 @@ def _git_diff_path(line: str) -> str | None:
         # Return them directly; only the quoted branch decodes C escapes.
         return tok
     try:
-        import ast as _ast
-        decoded = _ast.literal_eval('"' + tok + '"')
-        if isinstance(decoded, str):
-            # git octal-escapes non-ASCII bytes (caf\303\251.py): ast yields
-            # latin-1 chars; re-decode as utf-8 for the true name
-            return decoded.encode("latin-1", "replace").decode("utf-8", "replace")
-    except (ValueError, SyntaxError, UnicodeError):
+        import codecs as _codecs
+        # C escapes encode bytes; literal Unicode must contribute its UTF-8
+        # bytes without passing through a lossy Latin-1 conversion.
+        return _codecs.escape_decode(tok.encode("utf-8"))[0].decode("utf-8")
+    except (ValueError, UnicodeError):
         pass
     return tok
 
