@@ -319,8 +319,11 @@ def _validated(value: Any, path: str, start: int, end: int, source: str):
         ):
             raise Deferred("model finding is not grounded at its claimed archived line")
         clean = {str(k): scrub.redact_credentials(scrub.scrub(str(v))) for k, v in row.items()}
-        clean["line"] = line
+        # This is the already-grounded internal file identity, used by repair
+        # and evidence replay. Presentation text remains sanitized; the public
+        # ledger's allowlisted DTO excludes findings and source paths.
         clean["path"] = path
+        clean["line"] = line
         out.append(clean)
     return out
 

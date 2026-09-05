@@ -1,5 +1,17 @@
 # Recovered historical audit ledger
 
+## Successor round26 — September 5
+
+Fresh review of 965d787 found two Major defects: grounded source paths were
+transformed during recon, and Git path enumeration misread quoted filenames.
+Both repairs received independent scoped approval. Combined default validation
+passed 1028 tests with three paid-model skips and Ruff, including thirteen new
+regressions. The real generated repair trial automatically merged PR21 at
+cdf2b78 and passed all 1022 post-merge live tests, consuming 25 calls and
+108000 reserved output tokens. This closes one automatic lifecycle proof.
+The combined 1031-test live run remains pending; fresh clean remains 0/3.
+See ROUND26-REPAIR-CHECKPOINT.md for exact evidence and remaining gates.
+
 ## Successor round25 — September 5
 
 Fresh review of f63addb found three P2 defects: persisted numeric identities

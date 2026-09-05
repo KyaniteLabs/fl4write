@@ -69,11 +69,22 @@ def _git(args: list[str], cwd: Path | None = None, env: dict[str, str] | None = 
     if env:
         clean.update(env)
     p = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", *args],
-                       cwd=cwd, env=clean, capture_output=True, text=True,
+                       cwd=cwd, env=clean, capture_output=True, text="-z" not in args,
                        timeout=timeout)
     if p.returncode:
-        raise FixError(f"git {args[0]} failed: {(p.stderr or p.stdout)[:240]}")
-    return p.stdout.strip()
+        raise FixError(f"git {args[0]} failed: {os.fsdecode(p.stderr or p.stdout)[:240]}")
+    output = os.fsdecode(p.stdout)
+    return output if "-z" in args else output.strip()
+
+
+def _git_paths(args: list[str], tree: Path) -> set[str]:
+    """Read literal Git paths without display quoting or line/space loss."""
+    return {path for path in _git([args[0], "-z", *args[1:]], tree).split("\0") if path}
+
+
+def _changed_paths(tree: Path) -> set[str]:
+    return (_git_paths(["diff", "--name-only", "HEAD", "--"], tree)
+            | _git_paths(["ls-files", "--others", "--exclude-standard"], tree))
 
 
 def _safe_path(raw: object) -> str:
@@ -275,7 +286,7 @@ def _prove_patch(source: Path, reviewed_head: str, files: dict[str, str],
     baseline, pin_only, fixed = (work_root / n for n in ("baseline", "pin-only", "fixed"))
     for tree in (baseline, pin_only, fixed):
         _clone_at(source, tree, reviewed_head)
-    tracked = set(_git(["ls-files"], baseline).splitlines())
+    tracked = _git_paths(["ls-files"], baseline)
     evidence_dir.mkdir(parents=True, exist_ok=True)
     baseline_ids, _ = _verify_unchanged(test_command, baseline,
                                        evidence_dir / "baseline.xml", test_timeout, verify_suite, tracked)
@@ -666,8 +677,7 @@ def attempt_fix_with_regression_pin(
         fixed, test_ids, junit_hash, _ = _prove_patch(
             repo, reviewed_head, files, regressions, test_command,
             evidence_dir, verify_suite, test_timeout, work_root=Path(workspace.name))
-        changed = set(_git(["diff", "--name-only", "HEAD", "--"], fixed).splitlines())
-        changed.update(_git(["ls-files", "--others", "--exclude-standard"], fixed).splitlines())
+        changed = _changed_paths(fixed)
         if changed != set(files):
             raise FixError(
                 "tested patch paths differ from the structured model patch: "

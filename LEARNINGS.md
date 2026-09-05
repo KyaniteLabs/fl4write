@@ -769,3 +769,11 @@ lifecycle test matters for retry parks: normalizing only a local copy can
 leave persisted values that pruning drops. Numeric identities need conversion
 validation, not isdigit alone; include Unicode forms and conversion-size
 limits in bounded-reconciliation tests.
+
+## 71. Keep internal file identities exact (2026-09-05)
+
+Grounded source paths are repair identities. Preserve them through recon,
+sealed evidence and cached replay; sanitize presentation at its own boundary.
+Git filename output needs NUL delimiters and byte-faithful decoding. Exercise
+real repositories with Unicode, whitespace and newline-bearing filenames so
+tests cover Git quoting and source hashing together.
