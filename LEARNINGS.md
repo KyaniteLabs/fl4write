@@ -777,3 +777,11 @@ sealed evidence and cached replay; sanitize presentation at its own boundary.
 Git filename output needs NUL delimiters and byte-faithful decoding. Exercise
 real repositories with Unicode, whitespace and newline-bearing filenames so
 tests cover Git quoting and source hashing together.
+
+## 72. Classify CI evidence before applying action caps (2026-09-05)
+
+Use forge conclusion spellings at the decision boundary; cancellation must
+not consume a later real failure's SHA action marker. A failed check can
+contain informational annotations. Filter explicit notice/warning levels
+before the actionable annotation cap so those rows neither direct repairs
+nor hide a real failure. Verify persisted cycles and mixed rows at a cap of one.

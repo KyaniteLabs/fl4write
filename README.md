@@ -82,6 +82,10 @@ rounds, full recon/quorum dogfood, security review, CEO quality adjudication
 and final main/mirror/runner delivery remain open. These candidate results
 do not describe a production rollout. See the [current audit ledger](docs/pm-recovery/ROUND-LEDGER.md)
 and [round26 evidence](docs/pm-recovery/ROUND26-REPAIR-CHECKPOINT.md).
+The round-13 desk pass reported 605 passing tests; that historical count is
+superseded by the linked recovery checkpoints. The round27 repair candidate
+targets 1036 passing + 3 skipped by default, or 1039 passing + 0 skipped live;
+its exact validation status is recorded in the audit ledger.
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
 runtime model credentials. The default suite skips those three paid model

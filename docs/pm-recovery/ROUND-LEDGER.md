@@ -1,5 +1,16 @@
 # Recovered historical audit ledger
 
+## Successor round27 — September 5
+
+Fresh review of 795d832 found two P2 CI-watch defects: cancelled checks
+created false red-head escalations, and notice/warning annotations directed
+automatic repairs. Both are repaired locally with eight new regression cases;
+31 focused tests and Ruff pass. Independent recheck approved both repairs
+with 33 tests and seven adapter/persistence controls. Full combined default
+validation passed 1036 tests with three paid-model skips in 173.12 seconds.
+Exact committed live validation and CI are pending. Fresh clean remains 0/3. See
+ROUND27-REPAIR-CHECKPOINT.md.
+
 ## Successor round26 — September 5
 
 Fresh review of 965d787 found two Major defects: grounded source paths were

@@ -585,7 +585,7 @@ def _post_merge_sweep(
 
 
 # CI-watch conclusions that mean RED (everything not in the benign set).
-_CI_BENIGN = {"success", "skipped", "neutral", "canceled"}
+_CI_BENIGN = {"success", "skipped", "neutral", "canceled", "cancelled"}
 
 
 def _fix_freshness_gate(primary: ForgeAdapter, config: RepoConfig, finding,
@@ -1577,9 +1577,11 @@ def _ci_watch_step(
         # MECE round-6 (luna-max F6-C012): adapter envelopes are forge-
         # external — a truthy non-list (dict/None) used to crash the slice
         anns = _anns_raw if isinstance(_anns_raw, list) else []
-        for a in anns[: config.ci_watch.max_annotations]:
-            if not isinstance(a, dict):  # MECE round-4 (luna F4-005): null rows
-                continue
+        # Informational rows cannot direct repairs or consume the failure cap.
+        # Missing levels retain compatibility with legacy forge annotations.
+        actionable = [a for a in anns if isinstance(a, dict)
+                      and a.get("level") not in ("notice", "warning")]
+        for a in actionable[: config.ci_watch.max_annotations]:
             if not a.get("path") or not a.get("message"):
                 continue
             try:
