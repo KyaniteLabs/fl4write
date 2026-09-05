@@ -1,10 +1,12 @@
 # Round 17 repair checkpoint
 
-PR15 remains a draft. Candidate `4831797` passed canonical Forgejo CI24.
-The next repair, `e87db37`, corrects the Forgejo branch-head API discovered by
-real execution; 48 focused tests and Ruff pass. Seven fresh-review findings
-are repaired and independently cleared. The issue-deadline model patch passed
-real baseline/red/fixed tests, but publication and lint gates remain open. No main
+PR15 remains a draft. Candidate `dcaf4c7` passed canonical Forgejo CI25.
+Repair `e87db37` corrects the Forgejo branch-head API discovered by
+real execution; 48 independent tests and Ruff pass. Seven fresh-review findings
+are repaired and independently cleared. The eighth issue-deadline repair now
+has independent clearance and was manually merged through PR16 after two full
+baseline/red/fixed proofs and canonical CI26. Its merged-tree check passed all
+841 tests with zero skips and Ruff. No main
 merge, production deployment or exhaustive certification is claimed.
 
 ## Independent review
@@ -16,7 +18,7 @@ tests with no skips; that result does not cancel the review findings.
 
 | Finding | Repair and current evidence |
 | --- | --- |
-| R17-001: incompatible issue deadline clocks | Model-generated monotonic-clock repair and two tests exist; real regression-red proof confirmed the new future-deadline test fails on the original source. Not merged. |
+| R17-001: incompatible issue deadline clocks | Model-generated monotonic-clock repair and two tests independently cleared; real regression-red proof confirmed the new future-deadline test fails on the original source. Manually merged via PR16 at `e52ed40`; merged-tree 841 tests and Ruff passed. |
 | R17-002: transport rewrites source | Transport preserves the complete caller prompt; HTTP and proxy payload pins cover ordinary HTML/CSS. Independently cleared. |
 | R17-003: retro retry lost behind cursor | Expired parks remain eligible independently of cursor progress, survive pruning while the PR is still listed, and clear on success. Pins cover immediate recovery, another deferral, and re-parking. Independently cleared after a second review caught the pruning gap. |
 | R17-004: merged listing failure permits pruning | Listing exceptions, malformed envelopes/rows and deadline skips preserve the prune barrier. Both real lane call paths are pinned. Independently cleared. |
@@ -77,6 +79,50 @@ across 19 calls; the earlier failed trial's 28000-token record remains separate.
 The lint defect also needs a corrected generation; subsequent proof must run
 Ruff as well as the full test suite. The target is the draft feature branch,
 leaving production unchanged.
+
+Subsequent exact-head trials at `dcaf4c7` retained these separate outcomes:
+
+- First baseline: all 839 tests passed, but Ruff attempted to write its cache
+  into the read-only source tree. The command now uses `ruff check --no-cache .`.
+  Seven calls reserved 40000 output tokens; no PR was created.
+- Next baseline: 839 tests and Ruff passed. Inspection found invalid generated
+  test fixtures; the trial was intentionally interrupted during regression-red.
+  Cleanup left no container recovery records. Ten calls reserved 52000 output
+  tokens; this is an aborted trial, not a passing result.
+- Stronger-model generation: baseline 839 passed and regression-red proved the
+  clock defect. The fixed run collected 841 cases; both clock tests passed, but
+  the README exact-count test failed because the model omitted the README row.
+  The full-suite gate rejected the patch before publication. Nineteen calls
+  reserved 88000 output tokens. The failed patch and evidence remain intact.
+- A separate complete-counts request produced all three required files.
+  Baseline 839 passed; pin-only 841 cases failed on the new future-deadline
+  regression and README count; the fixed suite passed all 841 tests with zero
+  skips and Ruff passed. Nineteen calls reserved 88000 output tokens. The
+  executor opened PR16 at `2c283a6d2ed460408604b4e87e0c58c3513024be`, targeting
+  the feature branch. It initially stopped pending required checks.
+  The independent exact-patch recheck passed 46 targeted tests and Ruff;
+  see `ROUND17-CLOCK-REVIEW.md`. Generation uses the stronger route after repeated
+  cheaper-model fixture failures; live suite evaluation retains the original
+  route and the same durable per-trial budget limit. Fixed-suite JUnit SHA-256:
+  `9c98c800d5ad48774eb5f77760789abd30285143c34273b8a06dc8ed9b0fc41b`.
+
+The existing CI workflow triggers only for main pushes and PRs targeting main.
+PR16 therefore had no check statuses. Temporary draft PR17 targets main at the
+same exact repair commit ran canonical CI26 successfully. PR17 was closed
+without merge after verification. During the cached repair resume, both PRs
+were still open when the executor checked its stable branch, so the executor
+correctly rejected the ambiguous pair. The repeated baseline839 / red841 /
+fixed841 proof had passed; cumulative reservations were 37 calls / 160000 tokens.
+The automated error receipt is retained and is not an end-to-end success.
+
+With PR17 closed, the PM rechecked bot identity, canonical non-fork repository,
+exact head/base, and passing canonical checks, then manually merged PR16.
+Feature merge: `e52ed400a222c07c849ba2d5e7b51f423903a1ab`. The final full isolated
+merged-tree check passed 841 tests with zero skips and Ruff. JUnit SHA-256:
+`e861d293468285daf49b7e6682a215531b347a1decff91f0d78b30a1ea47a61e`.
+The trial finished at 43 calls / 184000 reserved output tokens; no cap was raised
+or ledger reset. The one-line independently approved CI trigger correction is committed
+as `cfb71e5`, so future PRs targeting the feature branch can run checks directly.
 
 Fresh whole-project zero-defect fully green rounds remain 0/3. Remaining work:
 complete the real repair/CI/owned-PR merge/refresh lifecycle, resolve every
