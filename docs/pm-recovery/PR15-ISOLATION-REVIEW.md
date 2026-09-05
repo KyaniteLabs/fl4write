@@ -41,8 +41,10 @@ or tests: Python 3.12 was unavailable for the runner's Debian ARM64 image. The
 workflow now selects the immutable Python 3.12 image used by the isolated runtime
 and installs Git and Node before checkout. Forgejo requires Node in the job image
 for JavaScript actions; see the [official Actions documentation](https://forgejo.org/docs/latest/user/actions/actions/).
-Shared runner configuration is unchanged. This workflow correction still requires
-a successful live CI run.
+Shared runner configuration is unchanged. [Live Forgejo CI run 13](https://git.kyanitelabs.tech/KyaniteLabs/fl4write/actions/runs/13)
+passed on `8386ffa9e9338a2491ccc18b36f69973f20d4b80` in 55 seconds. Checkout,
+dependency installation, repository-wide lint and the full default suite all
+completed successfully; combined commit status is success.
 
 The install also now declares `pyjwt[crypto]`: App authentication signs RS256
 tokens, which needs PyJWT's cryptographic dependency. A regression generates an
