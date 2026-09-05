@@ -1,0 +1,15 @@
+{
+  "observed_at": "2026-09-05T04:40:56.296404+00:00",
+  "status": "unmerged draft; not approved for shipment",
+  "base_commit": "4a0b09ac4beec31d6c3140a9dbe46c5e6a7a1017",
+  "passed": 698,
+  "skipped": 3,
+  "failures": 0,
+  "live_model_evaluation": false,
+  "junit_sha256": "9a3b95b110ed5aec8175c0304f3bc7706240e2db6876f5a1c13e1784b44d7280",
+  "source_sha256": {
+    "fl4write/exhaustive.py": "af746a37df176ba33fd0da84fc5101e6f4403bddfc0b24f8b96519e3bed3d716",
+    "tests/test_exhaustive.py": "c3e102e04fb2fe3cba663358f94ea5296b9ee81b349831e7b8456803071d3b11"
+  },
+  "note": "After full-suite start, an unused import was removed; lint passed. No functional source change."
+}
