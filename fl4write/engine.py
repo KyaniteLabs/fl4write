@@ -1174,8 +1174,15 @@ def _retro_sweep(
     boundary = (
         datetime.now(timezone.utc) - timedelta(days=config.retro_audit.lookback_days)
     ).isoformat()
-    upper = state.merged_watermark(st) or datetime.now(timezone.utc).isoformat()
-    cursor = st.get("retro_cursor") or upper
+    from .timestamps import parse_iso
+
+    upper = state.merged_watermark(st)
+    if parse_iso(upper) is None:
+        upper = datetime.now(timezone.utc).isoformat()
+    cursor = st.get("retro_cursor")
+    if parse_iso(cursor) is None:
+        cursor = upper
+    cursor_instant = parse_iso(cursor)
 
     try:
         listed = primary.list_merged_prs(config.repo, boundary)
@@ -1200,13 +1207,14 @@ def _retro_sweep(
     # row-shape guard (UltraQA round 2): one malformed merged row must not
     # abort the sweep. F10-C001: a malformed listing must never become a
     # terminal 'clean audit' — completion is blocked while rows are bad
-    _dropped_rows = sum(1 for p in listed if not isinstance(p, PullRequest))
+    _dropped_rows = sum(1 for p in listed
+                        if not isinstance(p, PullRequest) or parse_iso(p.merged_at) is None)
     if _dropped_rows:
         report._merged_listing_incomplete = True
         report.alerts.append(
             f"retro listing: {_dropped_rows} malformed merged rows \u2014 "
             "completion BLOCKED (retry next cycle)")
-    listed = [p for p in listed if isinstance(p, PullRequest)]
+    listed = [p for p in listed if isinstance(p, PullRequest) and parse_iso(p.merged_at) is not None]
 
     # MECE round-2 (terra F2-002): JSON persistence turns int keys into
     # strings — the seen-set belt was comparing int numbers against str keys
@@ -1236,10 +1244,10 @@ def _retro_sweep(
                     if str(k).isdigit() and str(v).isdigit() and int(v) <= now_i}
     pending = sorted(
         (p for p in listed
-         if (p.merged_at <= cursor or p.number in expired_park) and p.number not in seen
+         if (parse_iso(p.merged_at) <= cursor_instant or p.number in expired_park) and p.number not in seen
          and p.number not in active_park
          and (not config.shadow or shadow_belt.get(str(p.number)) != p.head_sha)),
-        key=lambda p: p.merged_at,
+        key=lambda p: parse_iso(p.merged_at),
         reverse=True,  # newest unprocessed first: recent mistakes matter most
     )[: config.retro_audit.max_per_cycle]
 
@@ -1324,7 +1332,7 @@ def _retro_sweep(
     elif not config.shadow and isinstance(st.get("retro_shadow_seen"), dict):
         st.pop("retro_shadow_seen", None)  # live runs stop honoring the belt
     if oldest_processed:
-        st["retro_cursor"] = min(cursor, oldest_processed)
+        st["retro_cursor"] = min(cursor, oldest_processed, key=parse_iso)
     if oldest_processed is None and not pending and not active_park and not config.shadow:
         # window exhausted between boundary and cursor — nothing left to audit
         # (also fires for repos with no merges in the window: stop re-listing).

@@ -189,23 +189,10 @@ def load_state(path: Path) -> dict[str, Any]:
 
 
 def _valid_iso(value: str) -> bool:
-    """MECE round-6 (luna-max F6-C011): ISO-8601 stamp check for the persisted
-    watermarks/cursors. F14-C007: DATE-ONLY values ('2026-09-01') used to
-    pass and then compare lexically against full timestamps, permanently
-    skipping every merge on that date — a cursor needs the TIME and a
-    timezone."""
-    import datetime as _dt
+    """Use the same aware timestamp contract for intake and persisted state."""
+    from .timestamps import parse_iso
 
-    v = value.strip()
-    if len(v) < 19 or "T" not in v:
-        return False
-    try:
-        parsed = _dt.datetime.fromisoformat(v.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    if parsed.tzinfo is None:
-        return False  # naive stamps cannot compare with aware watermarks
-    return True
+    return parse_iso(value) is not None
 
 
 def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
@@ -454,6 +441,9 @@ def merged_watermark(state: dict[str, Any]) -> str | None:
 
 def advance_merged_watermark(state: dict[str, Any], iso: str) -> None:
     """Only ever advances — a rewind would re-list already-swept merges."""
-    current = merged_watermark(state)
-    if current is None or iso > current:
+    from .timestamps import parse_iso
+
+    incoming = parse_iso(iso)
+    current = parse_iso(merged_watermark(state))
+    if incoming is not None and (current is None or incoming > current):
         state[MERGED_SINCE_KEY] = iso

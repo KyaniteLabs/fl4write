@@ -1,5 +1,19 @@
 # Recovered historical audit ledger
 
+## Successor round 23 — September 5
+
+Fresh review of 8fc1de5 found R23-001 (Major), timestamp ordering that could
+permanently skip capped merged-PR intake, and R23-002 (Minor), double encoding
+of resolved finding paths. Both repairs have independent scoped approval.
+Twenty-nine chronology regressions and two path lifecycle regressions join
+the suite: combined default verification passed 972 tests with three paid-model
+skips and Ruff. The generated path trial passed 944 baseline and 946 fixed
+live tests, with expected regression failures and exact PR20 CI green;
+automatic resume then failed the planted unsorted-median live-model test and
+stopped without merging (37 calls, 156000 reserved output tokens). The approved
+path repair is integrated manually. Fresh clean remains 0/3. See
+ROUND23-REPAIR-CHECKPOINT.md for evidence and remaining delivery gates.
+
 ## Successor round 22 — September 5
 
 Fresh review of 56af12b found two P2 defects: F22-001 permanently lost

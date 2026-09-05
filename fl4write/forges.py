@@ -24,6 +24,7 @@ from typing import Any
 from .config import ForgeBinding
 from . import renderer
 from .models import PullRequest
+from .timestamps import parse_iso as _parse_iso
 
 import logging
 
@@ -57,22 +58,6 @@ def _log_row(adapter_name, label, row) -> str:
 
 def is_own_identity(author: str, bot_login: str) -> bool:
     return author == bot_login or author in LEGACY_BOT_LOGINS
-
-
-def _parse_iso(raw: str):
-    """ISO timestamps from forges (trailing Z) and from our own state file
-    (+00:00) into one comparable datetime; None when unparseable.
-    F14-D011: timezone-NAIVE stamps are refused — comparing them with the
-    aware watermark raised TypeError and discarded every valid sibling row."""
-    from datetime import datetime
-
-    try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        return None
-    if parsed.tzinfo is None:
-        return None
-    return parsed
 
 
 class ForgeError(RuntimeError):
@@ -548,7 +533,7 @@ class GitHubAdapter(ForgeAdapter):
                 self._pr_rows_dropped += 1
                 continue
             prs.append(pr)
-        prs.sort(key=lambda pr: pr.merged_at)  # oldest first: catch-up order
+        prs.sort(key=lambda pr: _parse_iso(pr.merged_at))  # oldest instant first
         # F14-D007: malformed rows were discarded — the enumeration is
         # INCOMPLETE; returning a filtered list as complete lets the engine
         # prune live state or advance watermarks past unseen rows
@@ -753,7 +738,7 @@ class ForgejoAdapter(ForgeAdapter):
                 self._pr_rows_dropped += 1
                 continue
             prs.append(pr)
-        prs.sort(key=lambda pr: pr.merged_at)
+        prs.sort(key=lambda pr: _parse_iso(pr.merged_at))
         # F14-D007: malformed rows were discarded — the enumeration is
         # INCOMPLETE; returning a filtered list as complete lets the engine
         # prune live state or advance watermarks past unseen rows

@@ -739,3 +739,12 @@ passed its live tests yet violated shadow preservation, so independent review
 rejected it. Completed audits also need current scope evidence, not just an
 unchanged HEAD. Validate the effective fingerprint before reusing completion,
 and migrate unknown legacy scope through publication retry and a fresh audit.
+
+## 68. Compare instants and preserve encoded identities (2026-09-05)
+
+ISO timestamp strings do not sort chronologically across fractional precision
+and timezone offsets. Filtering, ordering and cursor advancement must share
+aware datetime comparisons, and persistence validation must accept the same
+spellings as parsing. Test capped cycles and actual save/load, not just isolated
+comparisons. Presentation identities also need one encoding boundary: a parsed
+finding path is already encoded, so resolving it must reuse that identity.

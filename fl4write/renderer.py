@@ -284,7 +284,7 @@ def render_review(
             )
         if resolved:
             lines = "\n".join(
-                f"- ✅ {_code_span('~' + path_key(f.path) + ':' + str(f.line))} "
+                f"- ✅ {_code_span('~' + f.path + ':' + str(f.line))} "
                 f"({_code_span(_rule_display(f.rule_id))})" for f in resolved)
             sections.append(f"### ✅ Resolved since last review\n\n{lines}")
         body = "\n\n---\n\n".join(sections)
