@@ -33,9 +33,18 @@ class Deferred(RuntimeError):
 
 
 def _request_identity(args, config):
+    isolation = getattr(args, "isolation", "docker")
+    test_image = getattr(args, "test_image", None)
+    if isolation == "docker":
+        from .exhaustive_sandbox import SandboxUnavailable, validate_runtime
+
+        try:
+            validate_runtime(test_image)
+        except SandboxUnavailable as exc:
+            raise Deferred(str(exc)) from exc
     executable = shutil.which(args.test_command[0]) if args.test_command else None
     selected = Path(executable).resolve() if executable else None
-    if selected is None:
+    if selected is None and isolation != "docker":
         raise Deferred("selected test executable is unavailable")
     value = {
         "test_command": args.test_command, "executable": str(selected),
@@ -44,6 +53,7 @@ def _request_identity(args, config):
         "test_timeout": args.test_timeout, "process_timeout": args.process_timeout,
         "max_model_calls": args.max_model_calls, "max_output_tokens": args.max_output_tokens,
         "chunk_chars": args.chunk_chars,
+        "isolation": isolation, "test_image": test_image,
         "environment": {k: os.environ.get(k) for k in ("FL4WRITE_EVAL", "FL4WRITE_EVAL_CONFIG", "PYTHONPATH")},
     }
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -454,21 +464,39 @@ def _junit(path: Path):
     return ids, green, hashlib.sha256(raw).hexdigest()
 
 
-def _test(command: list[str], tree: Path, evidence: Path, timeout: int):
+def _test(command: list[str], tree: Path, evidence: Path, timeout: int, *, isolation="process", image=None):
     argv = [str(evidence) if x == "{junit}" else x for x in command]
     if str(evidence) not in argv:
         raise NonGreen("test command requires standalone {junit}")
-    home = tempfile.mkdtemp(prefix="fl4write-exhaustive-test-")
-    try:
-        done = _run(argv, tree, timeout, _sandbox_env_for(home))
-    finally:
-        shutil.rmtree(home, ignore_errors=True)
+    if isolation == "docker":
+        from .exhaustive_sandbox import SandboxUnavailable, run_isolated
+
+        try:
+            done = run_isolated(command, tree, evidence, timeout, image)
+        except SandboxUnavailable as exc:
+            raise Deferred(str(exc)) from exc
+    elif isolation == "process":
+        home = tempfile.mkdtemp(prefix="fl4write-exhaustive-test-")
+        try:
+            done = _run(argv, tree, timeout, _sandbox_env_for(home))
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+    else:
+        raise Deferred("unknown test isolation mode")
     ids, green, digest = _junit(evidence)
     if done.returncode or not green:
         raise NonGreen(
             f"full suite not green (exit={done.returncode})", {"test_ids": sorted(ids), "junit_sha256": digest}
         )
     return ids, digest
+
+
+def _suite_runner(args):
+    if getattr(args, "isolation", "docker") == "process":
+        return _test
+    from functools import partial
+
+    return partial(_test, isolation="docker", image=getattr(args, "test_image", None))
 
 
 def _escalate(path: Path, reason: str, state: dict[str, Any]):
@@ -510,11 +538,13 @@ def _request_owned_fixes(repo, config, head, findings, args, evidence_dir):
     """Enter the atomic executor only after explicit runtime capability checks."""
     if config.shadow or not config.fix.enabled or not config.fix.merge_own_prs:
         raise Deferred("exhaustive fixes require non-shadow config, fix.enabled and merge_own_prs")
+    if getattr(args, "isolation", "docker") != "docker":
+        raise Deferred("automatic fixes require the isolated container test runtime")
     from .exhaustive_fix import attempt_fix_with_regression_pin
 
     result = attempt_fix_with_regression_pin(
         repo, config, head, findings, args.test_command, evidence_dir,
-        verify_suite=_test,
+        verify_suite=_suite_runner(args),
     )
     if result.get("status") != "merged" or not _valid_sha(result.get("merged_head")):
         raise Deferred(f"atomic fix {result.get('status', 'error')}: {result.get('reason', 'unproven')}")
@@ -695,7 +725,7 @@ def run(args: argparse.Namespace) -> int:
                         if _git(repo, "rev-parse", "HEAD") != fix["merged_head"]:
                             raise Deferred("local refresh did not reach verified merged HEAD")
                         refreshed, _ = _pack(repo, fix["merged_head"], rd / "post-fix")
-                        _test(args.test_command, refreshed, rd / "post-fix.xml", args.test_timeout)
+                        _suite_runner(args)(args.test_command, refreshed, rd / "post-fix.xml", args.test_timeout)
                         _non_green(state, state_path, head, "findings fixed and merged; fresh recon required",
                                    {**common, "fix": fix})
                         continue
@@ -707,7 +737,7 @@ def run(args: argparse.Namespace) -> int:
                         raise
                 _atomic_json(state_path, state)
                 try:
-                    test_ids, junit_hash = _test(args.test_command, tree, rd / "full-suite.xml", args.test_timeout)
+                    test_ids, junit_hash = _suite_runner(args)(args.test_command, tree, rd / "full-suite.xml", args.test_timeout)
                 except NonGreen as exc:
                     _non_green(state, state_path, head, str(exc), {**common, **exc.evidence})
                     raise Deferred(str(exc)) from exc
@@ -793,6 +823,9 @@ def _parser():
     p.add_argument("--test-timeout", type=int, default=3600)
     p.add_argument("--ledger-issue", type=int)
     p.add_argument("--enable-fixes", action="store_true")
+    p.add_argument("--isolation", choices=("docker", "process"), default="docker",
+                   help="Docker is required for automatic fixes; process is for trusted local diagnostics")
+    p.add_argument("--test-image", help="immutable image SHA-256 of the installed test runtime")
     return p
 
 

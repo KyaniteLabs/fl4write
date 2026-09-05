@@ -59,6 +59,8 @@ def _args(repo: Path, state: Path, fake: Path, rounds=1, test_command=None):
         chunk_chars=48_000,
         process_timeout=30,
         test_timeout=60,
+        isolation="process",
+        test_image=None,
         ledger_issue=13,
         _forge_adapter=_Forge(),
         _fake_responses=fake,

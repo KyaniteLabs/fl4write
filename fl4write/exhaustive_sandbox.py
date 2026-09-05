@@ -1,0 +1,97 @@
+"""Docker test isolation with no host output mount or forge credentials."""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import uuid
+
+
+class SandboxUnavailable(RuntimeError):
+    pass
+
+
+WORKER = "/opt/fl4write-test-worker.py"
+MAX_REPORT = 16 * 1024 * 1024
+
+
+def container_command(command: list[str], tree: Path, image: str, name: str, timeout: int) -> list[str]:
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", image or ""):
+        raise SandboxUnavailable("test image must be an immutable local image SHA-256")
+    if not tree.is_dir() or "," in str(tree.resolve()):
+        raise SandboxUnavailable("test tree is unavailable or has an unsupported mount path")
+    if not command or any(not isinstance(arg, str) or "\x00" in arg for arg in command):
+        raise SandboxUnavailable("test command must be fixed argv")
+    if "{junit}" not in command:
+        raise SandboxUnavailable("isolated test command requires standalone {junit}")
+    argv = ["/evidence/report.xml" if arg == "{junit}" else arg for arg in command]
+    uid = os.getuid() or 65534
+    gid = os.getgid() if os.getuid() else 65534
+    return [
+        "docker", "run", "--detach", "--name", name, "--network", "none", "--read-only",
+        "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
+        "--security-opt", "no-new-privileges", "--pids-limit", "256", "--memory", "2g", "--cpus", "2",
+        "--tmpfs", "/tmp:rw,nosuid,size=268435456,mode=1777",
+        "--tmpfs", "/evidence:rw,nosuid,noexec,size=16777216,mode=1777",
+        "--tmpfs", "/control:rw,nosuid,noexec,size=65536,mode=0700",
+        "--mount", f"type=bind,src={tree.resolve()},dst=/work,readonly",
+        "--workdir", "/work", "--user", "0:0", "--entrypoint", "/usr/local/bin/python3",
+        image, "-I", WORKER, "run", str(uid), str(gid), str(timeout), json.dumps(argv),
+    ]
+
+
+def _docker(argv, timeout, *, binary=False):
+    try:
+        return subprocess.run(argv, timeout=timeout, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=not binary)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SandboxUnavailable("container runtime unavailable or timed out") from exc
+
+
+def validate_runtime(image: str):
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", image or ""):
+        raise SandboxUnavailable("test image must be an immutable local image SHA-256")
+    inspected = _docker(["docker", "image", "inspect", "--format",
+                         '{{.Id}} {{index .Config.Labels "org.fl4write.test-runtime"}}', image], 30)
+    if inspected.returncode or inspected.stdout.strip() != image + " 1":
+        raise SandboxUnavailable("selected image is not the installed FL4WRITE test runtime")
+
+
+def run_isolated(command: list[str], tree: Path, evidence: Path, timeout: int, image: str):
+    name = "fl4write-test-" + uuid.uuid4().hex
+    argv = container_command(command, tree, image, name, timeout)
+    validate_runtime(image)
+    try:
+        started = _docker(argv, 30)
+        if started.returncode:
+            raise SandboxUnavailable("isolated test container could not start")
+        finished = _docker(["docker", "exec", name, "python3", "-I", WORKER,
+                            "wait", str(timeout + 10)], timeout + 20)
+        if finished.returncode:
+            raise SandboxUnavailable("isolated test supervisor did not complete")
+        try:
+            result = json.loads(finished.stdout)
+        except (ValueError, TypeError) as exc:
+            raise SandboxUnavailable("isolated supervisor returned invalid evidence") from exc
+        if not isinstance(result, dict) or result.get("kind") != "completed" or type(result.get("returncode")) is not int:
+            raise SandboxUnavailable("isolated test process was unavailable or timed out")
+        report = _docker(["docker", "exec", name, "python3", "-I", WORKER, "report"], 20, binary=True)
+        if report.returncode or len(report.stdout) > MAX_REPORT:
+            raise SandboxUnavailable("isolated test report is missing or invalid")
+        evidence.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=evidence.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(report.stdout)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            temporary.replace(evidence)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return subprocess.CompletedProcess(command, result["returncode"], "", "")
+    finally:
+        # This generated name belongs only to this invocation.
+        _docker(["docker", "rm", "--force", name], 30)

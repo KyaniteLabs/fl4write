@@ -81,6 +81,8 @@ def _safe_path(raw: object) -> str:
             or "\\" in raw or ".." in Path(raw).parts \
             or any(ord(c) < 0x20 for c in raw):
         raise FixError("model returned an unsafe patch path")
+    if any(part.casefold().rstrip(" .") == ".git" for part in Path(raw).parts):
+        raise FixError("repository metadata cannot be patched")
     return raw
 
 
@@ -179,6 +181,14 @@ def _clone_at(source: Path, destination: Path, sha: str) -> None:
 
 def _tree_hash(tree: Path) -> str:
     return _git(["write-tree"], tree)
+
+
+def _assert_index_matches_worktree(tree: Path, paths: set[str]) -> None:
+    for path in sorted(paths):
+        raw_blob = _git(["hash-object", "--no-filters", "--", path], tree)
+        staged_blob = _git(["rev-parse", ":" + path], tree)
+        if raw_blob != staged_blob:
+            raise FixError("staged source bytes differ from the tested worktree")
 
 
 def _source_hashes(tree: Path, paths: set[str]) -> dict[str, str]:
@@ -590,6 +600,7 @@ def attempt_fix_with_regression_pin(
                 "tested patch paths differ from the structured model patch: "
                 f"changed={sorted(changed)!r} expected={sorted(files)!r}")
         _git(["add", "--", *sorted(files)], fixed)
+        _assert_index_matches_worktree(fixed, set(files))
         tested_tree = _tree_hash(fixed)
         commit_time = _git(["show", "-s", "--format=%ct", reviewed_head], fixed) + " +0000"
         _git(["-c", "user.name=fl4write bot", "-c", "user.email=fl4write@invalid",

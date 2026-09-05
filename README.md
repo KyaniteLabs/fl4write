@@ -76,8 +76,9 @@ across GitHub + Forgejo in hourly cycles; the tier scheduler selects due repos
 tests green** (752 passing + 3 skipped at repair checkpoint `0217dcb`;
 the round-13 desk pass reported 605 passing). The integrated live suite also
 passes: 755 passing + 0 skipped at that checkpoint. The next repair candidate
-passes 767 passing + 3 skipped by default. Its live target is 770 passing + 0 skipped;
-the latest live run is blocked at 769 passed and one median-recall failure.
+passes 767 passing + 3 skipped by default at `36c6173`. The isolation candidate's
+default suite passes 777 passing + 3 skipped; its live target is 780 passing + 0 skipped.
+The latest completed live run remains blocked at 769 passed and one median-recall failure.
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
 runtime model credentials. The default suite skips those three paid model
@@ -90,6 +91,8 @@ loop** — repeated fresh-eyes recon→fix→refresh→note rounds (new context 
 THREE CONSECUTIVE 100%-green loops with zero regressions, then the repo is certified
 exhaustively flushed. Spec: [EXHAUSTIVE-BUG-RESOLUTION.md](EXHAUSTIVE-BUG-RESOLUTION.md) ·
 tracker: issue #13. Feature tranche; delegate-audited before fleet enablement.
+The draft's isolated test runtime and its validation limits are documented in
+[the runtime guide](tools/exhaustive-runtime/README.md).
 
 Honest status line (post 2026-09-03 adjudication): the bot is NOT yet
 declared fit-for-use at scale — the desk's own adjudicated sample found the

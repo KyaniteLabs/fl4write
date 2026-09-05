@@ -87,6 +87,21 @@ def test_structured_patch_rejects_unsafe_paths(path):
             {"path": "good.py", "content": "y", "regression": False}]}))
 
 
+@pytest.mark.parametrize("path", [".git/config", ".GIT/config", ".git /config"])
+def test_model_patch_excludes_repository_metadata(path):
+    with pytest.raises(ef.FixError, match="metadata"):
+        ef._safe_path(path)
+
+
+def test_git_normalization_cannot_change_tested_bytes_before_commit(tmp_path):
+    repo, _ = _repo(tmp_path)
+    (repo / ".gitattributes").write_text("calc.py text eol=lf\n")
+    (repo / "calc.py").write_bytes(b"def add(a, b):\r\n    return a + b\r\n")
+    _run("git", "add", ".gitattributes", "calc.py", cwd=repo)
+    with pytest.raises(ef.FixError, match="staged source bytes"):
+        ef._assert_index_matches_worktree(repo, {"calc.py"})
+
+
 def test_real_git_patch_proves_red_pin_green_fix_and_preserves_baseline(tmp_path):
     repo, head = _repo(tmp_path)
     fixed, ids, digest, baseline = ef._prove_patch(
