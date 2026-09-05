@@ -23,6 +23,8 @@ credentials, container socket and writable host output directories are not mount
 The supervisor records the exit status in a separate root-owned directory. The
 host reads a bounded regular JUnit file through the supervisor and removes its
 own container after each invocation. Runtime failures and timeouts defer the round.
+The bounded `/tmp` filesystem permits execution so tests can create ordinary
+helper programs. Evidence and supervisor filesystems remain non-executable.
 
 ## Execution evidence and limits
 
@@ -40,3 +42,8 @@ These probes validate the runtime boundary only. They do not prove a full projec
 repair, publication, merge or three-round certification. This runtime currently
 has no model-service transport: FL4WRITE's three paid live model tests cannot run
 inside it. Full live validation and independent review remain open release gates.
+
+The first archived full-project execution exposed Docker's implicit `noexec`
+default on `/tmp`: two Git-command shim tests bypassed their generated helpers,
+and the nested README truth check repeated those failures. The container mount
+now explicitly permits test helper execution; the earlier red result is retained.

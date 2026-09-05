@@ -34,7 +34,7 @@ def container_command(command: list[str], tree: Path, image: str, name: str, tim
         "docker", "run", "--detach", "--name", name, "--network", "none", "--read-only",
         "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
         "--security-opt", "no-new-privileges", "--pids-limit", "256", "--memory", "2g", "--cpus", "2",
-        "--tmpfs", "/tmp:rw,nosuid,size=268435456,mode=1777",
+        "--tmpfs", "/tmp:rw,exec,nosuid,size=268435456,mode=1777",
         "--tmpfs", "/evidence:rw,nosuid,noexec,size=16777216,mode=1777",
         "--tmpfs", "/control:rw,nosuid,noexec,size=65536,mode=0700",
         "--mount", f"type=bind,src={tree.resolve()},dst=/work,readonly",

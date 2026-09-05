@@ -23,6 +23,8 @@ def test_container_has_only_readonly_source_mount_and_bounded_private_outputs(tm
     assert argv.count("--mount") == 1
     assert argv[argv.index("--mount") + 1] == f"type=bind,src={tmp_path.resolve()},dst=/work,readonly"
     assert any(arg.startswith("/evidence:") and "size=16777216" in arg for arg in argv)
+    # Test runners may generate helper executables; Docker defaults tmpfs to noexec.
+    assert any(arg.startswith("/tmp:") and "exec" in arg.split(":", 1)[1].split(",") for arg in argv)
     assert any(arg.startswith("/control:") and "mode=0700" in arg for arg in argv)
     assert json.loads(argv[-1])[-1] == "/evidence/report.xml"
 

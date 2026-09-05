@@ -28,3 +28,24 @@ needs independent clearance.
 PR15 remains draft. Real fix/pin/owned-PR/merge/refresh execution, three consecutive
 fresh clean rounds, review clearance, merge and mirror/runner synchronization are
 still open. None of the runtime smoke tests counts as exhaustive certification.
+
+## Full container execution follow-up
+
+The first full archived-tree run collected 780 cases: 774 passed, three failed and
+three live-model tests skipped. Two helper-command tests failed because Docker
+implicitly mounted `/tmp` with `noexec`; the README check repeated their failures.
+The actual mount flags confirmed that cause. JUnit SHA-256:
+`603aa555caf441a5033195a82ec91c57cf33a3db08430b0772877b2ebbf3b471`.
+
+After adding explicit `exec` to the bounded temporary filesystem, the real
+container full suite passed 777 cases with three live-model skips. The source was
+the `302a93c` archive plus that runtime mount correction. JUnit SHA-256:
+`819a5d9174bcc59e29e6dce324b3d47696c276ac9410a45587f11781390e767f`.
+The updated mount regression assertion and affected local tests also passed
+(20 cases). Repository-wide Ruff passed and no invocation containers remained.
+
+The subsequent bounded correctness worker D037 failed to launch: its recorded
+PID was dead, its log empty and no report existed. Its stale dispatch record was
+finalized. That review remains owed. Forgejo CI for `302a93c` is independently red
+(run 7225, repository run 10, five-second failure); its cause is not yet verified.
+These results do not clear the live-model, independent-review or merge gates.
