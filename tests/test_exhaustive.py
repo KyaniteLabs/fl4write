@@ -133,7 +133,10 @@ def test_recovery_cannot_forget_pending_findings(tmp_path: Path):
     state["pending_round"] = {"reviewed_head": _git(repo, "rev-parse", "HEAD"), "finding_count": 1}
     exhaustive._atomic_json(target, state)
     assert exhaustive.run(_args(repo, state_dir, _responses(tmp_path))) == 2
-    assert _state(state_dir)["ledger"][0]["reason"] == "recovered interrupted pending round"
+    recovered = _state(state_dir)
+    assert recovered["pending_round"] == state["pending_round"]
+    assert recovered["ledger"] == []
+    assert recovered["consecutive_green"] == 0
 
 
 def test_failed_suite_after_two_green_resets(tmp_path: Path):
@@ -161,7 +164,8 @@ def test_malformed_junit_is_contained(tmp_path: Path, xml: str):
 def test_aggregate_bad_junit_is_rejected_without_child_nodes(tmp_path: Path, attribute: str):
     path = tmp_path / "junit.xml"
     path.write_text(f'<testsuite tests="1" {attribute}="1"><testcase name="x"/></testsuite>')
-    assert exhaustive._junit(path)[1] is False
+    with pytest.raises(exhaustive.NonGreen, match="aggregate"):
+        exhaustive._junit(path)
 
 
 def test_head_drift_during_test_resets(tmp_path: Path):
@@ -255,25 +259,38 @@ class _Forge:
     def __init__(self, outcomes=None):
         self.outcomes = list(outcomes or [])
         self.bodies = []
+        self.body = "<!-- fl4write:exhaustive-ledger:v1 repo=fixture/repo -->"
+        self.author = "fl4write[bot]"
 
-    def update_issue(self, repo, number, body):
-        self.bodies.append((repo, number, body))
-        return self.outcomes.pop(0) if self.outcomes else True
+    def _call(self, method, path, payload=None):
+        if path == "/user":
+            return {"login": self.bot_login}
+        if path == "/repos/fixture/repo":
+            return {"full_name": "fixture/repo"}
+        assert path == "/repos/fixture/repo/issues/13"
+        if method == "PATCH":
+            self.bodies.append(payload["body"])
+            if self.outcomes and not self.outcomes.pop(0):
+                raise OSError("forge unavailable")
+            self.body = payload["body"]
+        return {"number": 13, "body": self.body, "user": {"login": self.author}}
 
 
-def test_quarantined_publication_never_calls_forge_or_advances_state(tmp_path: Path):
+def test_unowned_publication_never_writes_or_advances_counter(tmp_path: Path):
     repo = _repo(tmp_path)
     state_dir = tmp_path / "state"
     forge = _Forge()
+    forge.author = "human"
     args = _args(repo, state_dir, _responses(tmp_path), rounds=3)
     args.ledger_issue = 13
     args._forge_adapter = forge
     assert exhaustive.run(args) == 2
     assert forge.bodies == []
-    assert not list(state_dir.glob("*/state.json"))
+    assert _state(state_dir)["consecutive_green"] == 0
+    assert _state(state_dir)["round"] == 0
 
 
-def test_quarantined_publication_retry_stays_disabled(tmp_path: Path):
+def test_publication_retry_replays_identical_body_before_new_recon(tmp_path: Path, monkeypatch):
     repo = _repo(tmp_path)
     state_dir = tmp_path / "state"
     forge = _Forge([True, True, False])
@@ -281,22 +298,24 @@ def test_quarantined_publication_retry_stays_disabled(tmp_path: Path):
     args.ledger_issue = 13
     args._forge_adapter = forge
     assert exhaustive.run(args) == 2
+    assert _state(state_dir)["consecutive_green"] == 2
+    assert _state(state_dir)["round"] == 2
+    monkeypatch.setattr(exhaustive, "_recon", lambda *a: pytest.fail("recon before replay"))
     retry = _args(repo, state_dir, _responses(tmp_path), rounds=1)
     retry.ledger_issue = 13
     retry._forge_adapter = forge
-    assert exhaustive.run(retry) == 2
-    assert forge.bodies == []
-    with pytest.raises(exhaustive.Deferred, match="quarantined"):
-        exhaustive._publish(forge, "fixture/repo", 13, exhaustive._fresh_state("repo"))
-    assert forge.bodies == []
+    assert exhaustive.run(retry) == 0
+    assert len(forge.bodies) == 4 and forge.bodies[2] == forge.bodies[3]
+    assert _state(state_dir)["consecutive_green"] == 3
 
 
 def test_public_ledger_scrubs_credentials():
     state = exhaustive._fresh_state("repo")
     state["round"] = 1
-    state["ledger"] = [{"round": 1, "reason": "token ghp_" + "abcdefghijklmnopqrstuvwxyz123456"}]
+    state["ledger"] = [{"round": 1, "green": False, "reviewed_head": "a" * 40,
+                        "reason": "token ghp_" + "abcdefghijklmnopqrstuvwxyz123456"}]
     body = exhaustive._ledger_body(state)
-    assert "ghp_" not in body and "[redacted]" in body
+    assert "ghp_" not in body and "reason" not in body
 
 
 def test_public_ledger_drops_private_artifact_paths():
@@ -307,10 +326,10 @@ def test_public_ledger_drops_private_artifact_paths():
         "pack_manifest": "/Users/operator/private/artifacts/manifest.json",
     }]
     body = exhaustive._ledger_body(state)
-    assert "/Users/" not in body and '"pack_manifest": "manifest.json"' in body
+    assert "/Users/" not in body and "pack_manifest" not in body
 
 
-def test_forgejo_fix_is_explicitly_deferred(tmp_path: Path):
+def test_fix_requires_explicit_config_capability(tmp_path: Path):
     repo = _repo(tmp_path)
     state_dir = tmp_path / "state"
     values = [{"findings": []}, {"findings": []}, {"findings": [
@@ -319,4 +338,25 @@ def test_forgejo_fix_is_explicitly_deferred(tmp_path: Path):
     args = _args(repo, state_dir, _responses(tmp_path, values))
     args.enable_fixes = True
     assert exhaustive.run(args) == 2
-    assert "Forgejo exhaustive fix adapter unsupported" in _state(state_dir)["ledger"][-1]["reason"]
+    assert _state(state_dir)["pending_round"]["finding_count"] == 1
+    assert _state(state_dir)["consecutive_green"] == 0
+
+
+def test_runner_outage_retries_sealed_recon_without_another_model_call(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    state_dir = tmp_path / "state"
+    args = _args(repo, state_dir, _responses(tmp_path))
+    original_test = exhaustive._test
+    def unavailable(*args):
+        raise exhaustive.Deferred("test runner unavailable")
+    monkeypatch.setattr(exhaustive, "_test", unavailable)
+    assert exhaustive.run(args) == 2
+    before = _state(state_dir)
+    assert before["round"] == 0 and before["pending_round"]
+    monkeypatch.setattr(exhaustive, "_test", original_test)
+    monkeypatch.setattr(exhaustive, "_recon", lambda *a: pytest.fail("repeated recon"))
+    args.max_rounds = 1
+    assert exhaustive.run(args) == 2
+    after = _state(state_dir)
+    assert after["round"] == 1 and after["consecutive_green"] == 1
+    assert after["pending_round"] is None

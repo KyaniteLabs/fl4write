@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -20,11 +21,11 @@ from typing import Any, Callable
 from . import scrub
 from .config import ModelRoute, load_config
 from .executor import _sandbox_env_for
-from .forges import ForgeAdapter, _is_github_base, adapter_for
-from .models import Finding
+from .exhaustive_evidence import EvidenceError, seal_bundle, verify_bundle
+from .forges import ForgeAdapter, adapter_for
 from .state import CycleLock, CycleLockHeld
 
-VERSION, GREEN_REQUIRED, DEFAULT_CHUNK_CHARS = 2, 3, 48_000
+VERSION, GREEN_REQUIRED, DEFAULT_CHUNK_CHARS = 3, 3, 48_000
 
 
 class Deferred(RuntimeError):
@@ -80,6 +81,7 @@ def _fresh_state(identity: str) -> dict[str, Any]:
     return {
         "version": VERSION,
         "repo_identity": identity,
+        "head": None,
         "round": 0,
         "consecutive_green": 0,
         "green_baseline": [],
@@ -100,7 +102,7 @@ def _valid_ledger(rows: Any) -> bool:
             return False
         if row["green"]:
             ids = row.get("test_ids")
-            if (not isinstance(ids, list)
+            if (not isinstance(ids, list) or not ids
                     or any(not isinstance(v, str) or not v for v in ids)
                     or len(set(ids)) != len(ids)
                     or not isinstance(row.get("junit_sha256"), str)
@@ -130,6 +132,7 @@ def _load_state(path: Path, identity: str) -> dict[str, Any]:
     keys = {
         "version",
         "repo_identity",
+        "head",
         "round",
         "consecutive_green",
         "green_baseline",
@@ -144,6 +147,7 @@ def _load_state(path: Path, identity: str) -> dict[str, Any]:
         or set(data) != keys
         or data.get("version") != VERSION
         or data.get("repo_identity") != identity
+        or data.get("head") is not None and not _valid_sha(data.get("head"))
         or len(ints) != 2
         or any(isinstance(x, bool) or not isinstance(x, int) or x < 0 for x in ints)
         or data.get("consecutive_green", 0) > GREEN_REQUIRED
@@ -162,7 +166,49 @@ def _load_state(path: Path, identity: str) -> dict[str, Any]:
     )
     if bad:
         raise Deferred("state shape, counters, or repository identity invalid")
+    trailing = 0
+    for row in reversed(data["ledger"]):
+        if not row["green"] or row["reviewed_head"] != data["head"]:
+            break
+        trailing += 1
+    if data["pending_round"] and data["pending_round"]["finding_count"]:
+        trailing = 0
+    baseline = next((row["test_ids"] for row in reversed(data["ledger"]) if row["green"]), [])
+    if (trailing != data["consecutive_green"]
+            or data["green_sha"] != (data["head"] if trailing else None)
+            or sorted(data["green_baseline"]) != sorted(baseline)):
+        raise Deferred("state counters disagree with verified ledger history")
+    try:
+        for row in data["ledger"]:
+            paths = verify_bundle(row.get("evidence_bundle"))
+            manifest = json.loads(paths["manifest.json"].read_bytes())
+            if manifest.get("head") != row["reviewed_head"]:
+                raise EvidenceError("round archive does not match reviewed HEAD")
+            if row["green"]:
+                if row.get("tested_head") != row["reviewed_head"] or row.get("finding_count") != 0:
+                    raise EvidenceError("green round lacks matching tested HEAD or zero findings")
+                ids, green, digest = _junit(paths["full-suite.xml"])
+                if not green or sorted(ids) != sorted(row["test_ids"]) or digest != row["junit_sha256"]:
+                    raise EvidenceError("green round disagrees with its full-suite evidence")
+    except (EvidenceError, NonGreen, OSError, ValueError, KeyError) as exc:
+        raise Deferred(f"round evidence invalid: {exc}") from exc
     return data
+
+
+def _bind_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Bind a completed round to sealed copies, never mutable working artifacts."""
+    if "evidence_bundle" in evidence:
+        verify_bundle(evidence["evidence_bundle"])
+        return evidence
+    try:
+        source = Path(evidence["pack_manifest"]).parent
+        reference = seal_bundle(source, source.parent.parent / "bundles")
+        paths = verify_bundle(reference)
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        raise Deferred("round evidence cannot be sealed") from exc
+    return {**evidence, "evidence_bundle": reference,
+            "pack_manifest": str(paths["manifest.json"]),
+            "coverage_manifest": str(paths["coverage-manifest.json"])}
 
 
 def _pack(repo: Path, head: str, output: Path) -> tuple[Path, Path]:
@@ -334,32 +380,59 @@ def _recon(
 
 
 def _number(v: str | None, name: str) -> int:
-    try:
-        n = int(v or "0")
-    except (TypeError, ValueError) as exc:
-        raise NonGreen(f"JUnit {name} is not an integer") from exc
-    if n < 0:
-        raise NonGreen(f"JUnit {name} is negative")
-    return n
+    if not isinstance(v, str) or not re.fullmatch(r"[0-9]+", v):
+        raise NonGreen(f"JUnit {name} is not a nonnegative integer")
+    return int(v)
 
 
 def _junit(path: Path):
     try:
         raw = path.read_bytes()
+        if b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+            raise NonGreen("JUnit document declarations are unsupported")
         root = ET.fromstring(raw)
     except (OSError, ET.ParseError) as exc:
         raise NonGreen(f"JUnit evidence unreadable: {exc}") from exc
-    suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
-    if not suites:
-        raise NonGreen("JUnit has no test suites")
-    aggregate_bad = any(_number(s.get(k), k) for s in suites for k in ("failures", "errors", "skipped"))
-    declared = sum(_number(s.get("tests"), "tests") for s in suites)
-    cases = list(root.iter("testcase"))
-    ids = {f"{c.get('classname', '')}::{c.get('name', '')}" for c in cases if c.get("name")}
-    child_bad = any(c.find(k) is not None for c in cases for k in ("failure", "error", "skipped"))
-    if declared <= 0 or len(cases) != declared or len(ids) != len(cases):
-        raise NonGreen("JUnit empty, inconsistent, or duplicate IDs")
-    return ids, not aggregate_bad and not child_bad, hashlib.sha256(raw).hexdigest()
+    ids: set[str] = set()
+
+    def walk(node):
+        if node.tag not in {"testsuites", "testsuite"}:
+            raise NonGreen("JUnit unsupported root, namespace, or suite")
+        counts = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
+        for child in node:
+            if child.tag in {"testsuite", "testsuites"}:
+                subtotal = walk(child)
+                for key in counts:
+                    counts[key] += subtotal[key]
+            elif child.tag == "testcase" and node.tag == "testsuite":
+                name = child.get("name", "")
+                identity = f"{child.get('classname', '')}::{name}"
+                if not name.strip() or identity in ids:
+                    raise NonGreen("JUnit missing or duplicate test ID")
+                ids.add(identity)
+                counts["tests"] += 1
+                outcomes = []
+                for detail in child:
+                    if detail.tag in {"failure", "error", "skipped"}:
+                        outcomes.append(detail.tag)
+                    elif detail.tag not in {"properties", "system-out", "system-err"}:
+                        raise NonGreen("JUnit unsupported testcase shape")
+                if len(outcomes) > 1:
+                    raise NonGreen("JUnit contradictory testcase outcomes")
+                for outcome in outcomes:
+                    counts[{"failure": "failures", "error": "errors", "skipped": "skipped"}[outcome]] += 1
+            elif child.tag not in {"properties", "system-out", "system-err"}:
+                raise NonGreen("JUnit unsupported suite child")
+        for key, actual in counts.items():
+            if key in node.attrib and _number(node.get(key), key) != actual:
+                raise NonGreen(f"JUnit contradictory {key} aggregate")
+        return counts
+
+    counts = walk(root)
+    if not counts["tests"]:
+        raise NonGreen("JUnit has no test cases")
+    green = not any(counts[k] for k in ("failures", "errors", "skipped"))
+    return ids, green, hashlib.sha256(raw).hexdigest()
 
 
 def _test(command: list[str], tree: Path, evidence: Path, timeout: int):
@@ -369,8 +442,6 @@ def _test(command: list[str], tree: Path, evidence: Path, timeout: int):
     home = tempfile.mkdtemp(prefix="fl4write-exhaustive-test-")
     try:
         done = _run(argv, tree, timeout, _sandbox_env_for(home))
-    except Deferred as exc:
-        raise NonGreen(str(exc)) from exc
     finally:
         shutil.rmtree(home, ignore_errors=True)
     ids, green, digest = _junit(evidence)
@@ -394,88 +465,45 @@ def _escalate(path: Path, reason: str, state: dict[str, Any]):
     )
 
 
-def _public_value(value: Any) -> Any:
-    """Recursively scrub values before they cross the forge boundary."""
-    if isinstance(value, dict):
-        out = {}
-        for key, item in value.items():
-            clean_key = scrub.inline(str(key), 80)
-            if clean_key in {"pack_manifest", "coverage_manifest"} and isinstance(item, str):
-                out[clean_key] = Path(item).name
-            else:
-                out[clean_key] = _public_value(item)
-        return out
-    if isinstance(value, list):
-        return [_public_value(v) for v in value]
-    if isinstance(value, str):
-        return scrub.redact_credentials(scrub.scrub(value))
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return scrub.inline(str(value), 300)
+def _ledger_body(state: dict[str, Any], certification: bool = False, repo: str = "fixture/repo") -> str:
+    from .exhaustive_publication import ledger_body
 
-
-def _ledger_body(state: dict[str, Any], certification: bool = False) -> str:
-    """Deterministic issue body: PATCH retries repeat the identical write."""
-    rows = _public_value(state["ledger"])
-    payload = json.dumps(rows, indent=2, sort_keys=True)
-    heading = "FL4WRITE exhaustive certification" if certification else "FL4WRITE exhaustive round ledger"
-    status = (
-        f"Certified: exhaustively flushed @ `{state['certified_sha']}`"
-        if certification
-        else f"Rounds: {state['round']}; consecutive clean: {state['consecutive_green']}/{GREEN_REQUIRED}"
-    )
-    return f"## {heading}\n\n{status}\n\n```json\n{payload}\n```\n"
+    return ledger_body(state, repo, certification)
 
 
 def _publish(adapter: ForgeAdapter, repo: str, issue: int, state: dict[str, Any], certification: bool = False) -> None:
-    raise Deferred("draft quarantined: forge publication requires unresolved safety repairs and independent approval")
+    from .exhaustive_publication import PublicationError, publish_owned
+
+    try:
+        publish_owned(adapter, repo, issue, adapter.bot_login, _ledger_body(state, certification, repo))
+    except PublicationError as exc:
+        raise Deferred(str(exc)) from exc
 
 
 def _primary(config, injected: ForgeAdapter | None = None) -> tuple[Any, ForgeAdapter]:
     binding = next(b for b in config.forges.values() if b.role == "primary")
-    return binding, injected or adapter_for(binding)
+    adapter = injected or adapter_for(binding)
+    adapter.bot_login = config.bot_login
+    return binding, adapter
 
 
-def _request_owned_fixes(config, binding, adapter: ForgeAdapter, head: str, findings: list[dict[str, Any]]):
-    """Enter the authenticated fix lane, failing closed at its missing batch API.
+def _request_owned_fixes(repo, config, head, findings, args, evidence_dir):
+    """Enter the atomic executor only after explicit runtime capability checks."""
+    if config.shadow or not config.fix.enabled or not config.fix.merge_own_prs:
+        raise Deferred("exhaustive fixes require non-shadow config, fix.enabled and merge_own_prs")
+    from .exhaustive_fix import attempt_fix_with_regression_pin
 
-    executor.attempt_fix can only replace one finding's source file. Feature 13
-    requires one tested PR containing both the fix and a regression pin, so
-    opening its current one-file PR would create an artifact that cannot meet
-    the contract. Keep this integration boundary explicit until executor grows
-    the API described in the returned blocker.
-    """
-    if not _is_github_base(binding.api_base):
-        raise Deferred("Forgejo exhaustive fix adapter unsupported; human escalation required")
-    if config.shadow or not config.fix.enabled:
-        raise Deferred("GitHub exhaustive fixes require non-shadow config with fix.enabled")
-    from .appauth import install_token_to_env
-
-    install_token_to_env(repo=config.repo)
-    token = os.environ.get("CODESITTER_GITHUB_TOKEN", "")
-    if not token:
-        raise Deferred("GitHub App installation token unavailable")
-    if binding.token_env:
-        os.environ[binding.token_env] = token
-    # Validate finding construction now, before any future external mutation.
-    for row in findings:
-        try:
-            Finding(
-                rule_id=str(row.get("rule_id") or "general"), severity=str(row["severity"]),
-                path=str(row["path"]), line=row["line"], message=str(row["message"]),
-                proposal=str(row.get("proposal") or ""),
-            )
-        except Exception as exc:
-            raise Deferred(f"finding cannot enter fix lane: {type(exc).__name__}") from exc
-    raise Deferred(
-        "GitHub App authentication established, but executor lacks an atomic "
-        "attempt_fix_with_regression_pin(pr, findings, config) API returning "
-        "PR number, author, fork flag, base SHA, changed paths, test IDs, and "
-        "JUnit hash; refusing one-file PRs that cannot prove regression pins"
+    result = attempt_fix_with_regression_pin(
+        repo, config, head, findings, args.test_command, evidence_dir,
+        verify_suite=_test,
     )
+    if result.get("status") != "merged" or not _valid_sha(result.get("merged_head")):
+        raise Deferred(f"atomic fix {result.get('status', 'error')}: {result.get('reason', 'unproven')}")
+    return result
 
 
 def _non_green(state, state_path, head, reason, evidence=None):
+    evidence = _bind_evidence(evidence or {})
     state["round"] += 1
     state["consecutive_green"] = 0
     state["green_sha"] = None
@@ -500,20 +528,32 @@ def run(args: argparse.Namespace) -> int:
     state_path = state_dir / "state.json"
     state = _fresh_state(identity)
     try:
-        if getattr(args, "ledger_issue", None) is not None:
-            raise Deferred("draft quarantined: forge publication is disabled")
         with CycleLock(state_dir / "loop.lock"):
             state = _load_state(state_path, identity)
+            config = load_config(args.config or repo / ".fl4write.yaml")
+            ledger_issue = getattr(args, "ledger_issue", None)
+            binding, forge = _primary(config, getattr(args, "_forge_adapter", None))
+            from .exhaustive_transaction import publish_round, replay_publication
+
+            if replay_publication(repo, state_path, forge, config, ledger_issue):
+                state = _load_state(state_path, identity)
+                if state["certified_sha"]:
+                    return 0
+                raise Deferred("publication recovered; next invocation starts a fresh round")
             current = _git(repo, "rev-parse", "HEAD")
-            if state["pending_round"]:
-                pending = state["pending_round"]
-                _non_green(
-                    state,
-                    state_path,
-                    pending.get("reviewed_head", current),
-                    "recovered interrupted pending round",
-                    pending,
-                )
+            if state["head"] != current:
+                if state["certified_sha"]:
+                    _atomic_json(
+                        state_dir / "certification.json",
+                        {"status": "invalidated", "reason": "HEAD moved",
+                         "previous_sha": state["certified_sha"]},
+                    )
+                state["head"] = current
+                state["consecutive_green"] = 0
+                state["green_sha"] = None
+                state["certified_sha"] = None
+                if state_path.exists():
+                    _atomic_json(state_path, state)
             if state["certified_sha"]:
                 if state["certified_sha"] == current:
                     return 0
@@ -526,9 +566,6 @@ def run(args: argparse.Namespace) -> int:
                     {"status": "invalidated", "reason": "HEAD moved", "previous_sha": old},
                 )
                 _atomic_json(state_path, state)
-            config = load_config(args.config or repo / ".fl4write.yaml")
-            ledger_issue = getattr(args, "ledger_issue", None)
-            binding, forge = _primary(config, getattr(args, "_forge_adapter", None))
             if state["consecutive_green"] == GREEN_REQUIRED and state["green_sha"] == current:
                 if ledger_issue is None:
                     return 0
@@ -551,24 +588,46 @@ def run(args: argparse.Namespace) -> int:
                 head = _git(repo, "rev-parse", "HEAD")
                 if state["green_sha"] is not None and state["green_sha"] != head:
                     state["consecutive_green"] = 0
-                    state["green_baseline"] = []
                     state["green_sha"] = None
                     _atomic_json(state_path, state)
+                state["head"] = head
                 rd = state_dir / "artifacts" / f"round-{state['round'] + 1:04d}-{head[:12]}-{time.time_ns()}"
                 tree, manifest = _pack(repo, head, rd)
                 ledger = rd / "ledger-input.json"
                 _atomic_json(ledger, {"ledger": state["ledger"]})
-                findings, coverage, usage = _recon(
-                    tree,
-                    ledger,
-                    config.model,
-                    args.max_model_calls,
-                    args.max_output_tokens,
-                    args.process_timeout,
-                    rd,
-                    args.chunk_chars,
-                    getattr(args, "_fake_responses", None),
-                )
+                pending = state["pending_round"]
+                if pending:
+                    try:
+                        paths = verify_bundle(pending.get("evidence_bundle"))
+                        if pending["reviewed_head"] != head:
+                            _non_green(state, state_path, pending["reviewed_head"],
+                                       "HEAD changed during pending round", pending)
+                            continue
+                        old_manifest = json.loads(paths["manifest.json"].read_bytes())
+                        if old_manifest != json.loads(manifest.read_bytes()):
+                            raise EvidenceError("pending archive differs from current HEAD archive")
+                        for name in ("worker-result.json", "worker-request.json", "coverage-manifest.json"):
+                            shutil.copyfile(paths[name], rd / name)
+                        result = json.loads(paths["worker-result.json"].read_bytes())
+                        findings = result["findings"]
+                        if findings != pending["findings"] or len(findings) != pending["finding_count"]:
+                            raise EvidenceError("pending findings disagree with sealed recon")
+                        usage = pending["model_usage"]
+                        coverage = rd / "coverage-manifest.json"
+                    except (EvidenceError, OSError, ValueError, KeyError, TypeError) as exc:
+                        raise Deferred("pending recon evidence invalid; retained for recovery") from exc
+                else:
+                    findings, coverage, usage = _recon(
+                        tree,
+                        ledger,
+                        config.model,
+                        args.max_model_calls,
+                        args.max_output_tokens,
+                        args.process_timeout,
+                        rd,
+                        args.chunk_chars,
+                        getattr(args, "_fake_responses", None),
+                    )
                 common = {
                     "pack_manifest": str(manifest),
                     "coverage_manifest": str(coverage),
@@ -579,20 +638,34 @@ def run(args: argparse.Namespace) -> int:
                 if _git(repo, "rev-parse", "HEAD") != head:
                     _non_green(state, state_path, head, "HEAD changed during recon", common)
                     raise Deferred("HEAD changed during recon")
+                state["pending_round"] = {"reviewed_head": head, **_bind_evidence(common)}
                 if findings:
-                    state["pending_round"] = {"reviewed_head": head, **common}
                     state["consecutive_green"] = 0
                     state["green_sha"] = None
                     _atomic_json(state_path, state)
                     try:
                         if not getattr(args, "enable_fixes", False):
                             raise Deferred("findings recorded; authenticated owned-PR exhaustive fixes are disabled")
-                        _request_owned_fixes(config, binding, forge, head, findings)
+                        fix = _request_owned_fixes(repo, config, head, findings, args,
+                                                   state_dir / "fixes" / head)
+                        if _git(repo, "rev-parse", "HEAD") != head or _git(repo, "status", "--porcelain"):
+                            raise Deferred("local checkout changed during atomic fix")
+                        _git(repo, "fetch", "origin", fix["merged_head"])
+                        _git(repo, "merge", "--ff-only", fix["merged_head"])
+                        if _git(repo, "rev-parse", "HEAD") != fix["merged_head"]:
+                            raise Deferred("local refresh did not reach verified merged HEAD")
+                        refreshed, _ = _pack(repo, fix["merged_head"], rd / "post-fix")
+                        _test(args.test_command, refreshed, rd / "post-fix.xml", args.test_timeout)
+                        _non_green(state, state_path, head, "findings fixed and merged; fresh recon required",
+                                   {**common, "fix": fix})
+                        continue
                     except Deferred as exc:
-                        _non_green(state, state_path, head, str(exc), common)
-                        if ledger_issue is not None:
-                            _publish(forge, config.repo, ledger_issue, state)
+                        if not getattr(args, "enable_fixes", False):
+                            _non_green(state, state_path, head, str(exc), common)
+                            if ledger_issue is not None:
+                                _publish(forge, config.repo, ledger_issue, state)
                         raise
+                _atomic_json(state_path, state)
                 try:
                     test_ids, junit_hash = _test(args.test_command, tree, rd / "full-suite.xml", args.test_timeout)
                 except NonGreen as exc:
@@ -616,6 +689,8 @@ def run(args: argparse.Namespace) -> int:
                         },
                     )
                     continue
+                common = _bind_evidence(common)
+                state["pending_round"] = None
                 state["round"] += 1
                 state["consecutive_green"] += 1
                 state["green_sha"] = head
@@ -643,26 +718,13 @@ def run(args: argparse.Namespace) -> int:
                             "sha": head,
                         },
                     )
-                _atomic_json(state_path, state)
                 if ledger_issue is not None:
-                    publish_state = dict(state)
-                    if ready_to_certify:
-                        publish_state["certified_sha"] = head
-                    _publish(forge, config.repo, ledger_issue, publish_state, certification=ready_to_certify)
                     if ready_to_certify:
                         state["certified_sha"] = head
-                        _atomic_json(state_path, state)
-                        _atomic_json(
-                            state_dir / "certification.json",
-                            {
-                                "status": "forge_published",
-                                "scope": "archived text recon and configured full test command",
-                                "sha": head,
-                                "ledger_issue": ledger_issue,
-                            },
-                        )
-                elif locally_complete:
-                    state["certified_sha"] = head
+                    publish_round(repo, state_path, forge, config, ledger_issue, state, ready_to_certify)
+                else:
+                    if locally_complete:
+                        state["certified_sha"] = head
                     _atomic_json(state_path, state)
                 if state["certified_sha"]:
                     return 0

@@ -4384,7 +4384,8 @@ class TestMECERound13OpsReal:
         (repo / "x.py").write_text("x = 1\n")
         subprocess.run(["git", "-C", str(repo), "add", "x.py"], check=True)
         subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t",
-                        "-c", "user.name=t", "commit", "-q", "-m", "c"], check=True)
+                        "-c", "user.name=t", "-c", "commit.gpgsign=false",
+                        "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "c"], check=True)
         r = subprocess.run(["bash", str(REPO_ROOT / "check-dirty.sh")],
                            capture_output=True, text=True,
                            env={"PATH": "/usr/bin:/bin",
