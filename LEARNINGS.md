@@ -672,3 +672,10 @@ CI and quiet subsequent cycles. Existing freshness fixtures now accept the
 selected revision. The fifth finding, issue retries erased after incomplete
 listing, remains open pending its real automated repair trial. Fresh green
 rounds remain 0/3; these repairs do not establish certification.
+
+Independent repair review caught two boundary regressions before delivery:
+post-merge repairs still need default-branch freshness, and the normal merge
+executor remains GitHub-only. Thread the post-merge mode into the freshness
+choice and retain the primary-forge gate on the cycle drain. Two additional
+real-cycle regressions reproduce the incorrect repaired behavior and pass
+after these boundaries are restored.

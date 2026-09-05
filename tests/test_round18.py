@@ -5,9 +5,9 @@ import pytest
 
 from fl4write import analyzer, engine, executor, metrics
 from fl4write.forges import ForgeAdapter, ForgeError
-from fl4write.models import Finding
+from fl4write.models import Finding, ReviewDoc
 from test_gauntlet_fixes import (
-    _NO_EXTRA_LANES, _R4Forge, _r4_cycle, _r4_pr, _r4_seed, make_config,
+    _NO_EXTRA_LANES, _R4Forge, _r4_cycle, _r4_date, _r4_pr, _r4_seed, make_config,
 )
 
 
@@ -88,3 +88,56 @@ def test_owned_fix_ci_is_revisited_without_new_source_review(tmp_path, monkeypat
     assert first.reviewed == second.reviewed == 0
     assert len(polls) == 2
     assert first.fix_prs_merged == 0 and second.fix_prs_merged == 1
+
+
+def test_post_merge_fix_keeps_current_default_branch_freshness(tmp_path, monkeypatch):
+    pr = _r4_pr(merged_at=_r4_date(1))
+    requests = []
+    attempts = []
+
+    class Forge(_R4Forge):
+        path_exists = ForgeAdapter.path_exists
+
+        def _call(self, method, path, **kwargs):
+            requests.append(path)
+            if "?ref=" in path:
+                return {"type": "file"}
+            raise ForgeError("HTTP 404: reviewed file has since been deleted")
+
+    forge = Forge(merged=[pr])
+    finding = Finding(path="x.py", line=1, severity="Major", rule_id="general",
+                      message="The reviewed source raises on import.")
+    reviewed = []
+
+    def analyze(pr, *args, **kwargs):
+        reviewed.append(pr.number)
+        return ReviewDoc(pr=pr, findings=[finding])
+
+    monkeypatch.setattr(analyzer, "analyze", analyze)
+    monkeypatch.setattr(executor, "attempt_fix", lambda *args:
+                        attempts.append(args) or {"status": "nofix"})
+    monkeypatch.setattr(metrics, "acceptance_snapshot", lambda *args: None)
+    state_path = tmp_path / "state.json"
+    _r4_seed(state_path)
+    config = {**_NO_EXTRA_LANES, "post_merge": {"enabled": True},
+              "fix": {"enabled": True, "merge_own_prs": False}, "gatekeeper": False}
+    report = _r4_cycle(forge, monkeypatch, state_path, config, run_fixes=True)
+    assert reviewed == [pr.number]
+    assert report.fix_attempts == 0 and attempts == []
+    assert f"/repos/{pr.repo}/contents/x.py" in requests
+    assert not any("?ref=" in path for path in requests)
+
+
+def test_forgejo_cycle_never_calls_github_merge_executor(tmp_path, monkeypatch):
+    class Forge(_R4Forge):
+        name = "forgejo"
+
+    calls = []
+    monkeypatch.setattr(executor, "check_and_merge_own_prs", lambda *args:
+                        calls.append(args) or [])
+    monkeypatch.setattr(metrics, "acceptance_snapshot", lambda *args: None)
+    path = tmp_path / "state.json"
+    _r4_seed(path)
+    config = {**_NO_EXTRA_LANES, "fix": {"enabled": True, "merge_own_prs": True}}
+    _r4_cycle(Forge(), monkeypatch, path, config, run_fixes=True)
+    assert calls == []

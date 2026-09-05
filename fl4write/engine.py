@@ -320,7 +320,7 @@ def _review_pr(
                                        fixlane.escalate(pr, escalatable, blocked))
                 report.fix_escalations += len(escalatable)
         else:
-            _fix_lane(pr, findings_for_fix, config, primary, st, report)
+            _fix_lane(pr, findings_for_fix, config, primary, st, report, post_merge=post_merge)
 
     return "shadow" if config.shadow else "reviewed"
 
@@ -332,6 +332,7 @@ def _fix_lane(
     primary: ForgeAdapter,
     st: dict[str, Any],
     report: CycleReport,
+    *, post_merge: bool = False,
 ) -> None:
     """Attempt fixes for Critical/Major findings; capped by fix_depth in state
     (which now PERSISTS across pushes — mark_reviewed merges, not replaces)."""
@@ -348,7 +349,7 @@ def _fix_lane(
             primary.create_comment(config.repo, pr.number, body)
             report.fix_escalations += 1
             continue
-        if not _fix_freshness_gate(primary, config, f, pr.head_sha):
+        if not _fix_freshness_gate(primary, config, f, None if post_merge else pr.head_sha):
             continue
         report.fix_attempts += 1
         result = executor.attempt_fix(pr, f, config)
@@ -1787,7 +1788,8 @@ def run_cycle(
                 else:
                     report.acceptance = metrics.acceptance_snapshot(primary, config)
 
-            if (run_fixes and config.fix.enabled and config.fix.merge_own_prs
+            if (run_fixes and primary.name == "github"
+                    and config.fix.enabled and config.fix.merge_own_prs
                     and not config.shadow):
                 if deadline is not None and (deadline - time.monotonic()) < REVIEW_BUDGET_S:
                     report.alerts.append("cycle deadline reached — owned fix merges deferred")
