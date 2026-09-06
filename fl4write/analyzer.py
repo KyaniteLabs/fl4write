@@ -234,17 +234,7 @@ def _system_prompt(mode: str = "pr") -> str:
     return base + "\n\n" + SYSTEM_PROMPT_ADDENDUM
 
 
-def _call_model(route: ModelRoute, prompt: str, mode: str = "pr", system: str | None = None) -> str:
-    proxy = os.environ.get("FL4WRITE_MODEL_PROXY_SOCKET")
-    key = os.environ.get(route.key_env, "") if route.key_env else ""
-    if route.key_env and not key and not proxy:
-        raise RuntimeError(
-            f"route {route.model}: key env var {route.key_env} is not set — "
-            "set it or fix key_env in the config"
-        )
-    headers = {"Content-Type": "application/json", "User-Agent": "fl4write/0.4"}
-    if key:
-        headers["Authorization"] = f"Bearer {key}"
+def _model_payload(route: ModelRoute, prompt: str, mode: str = "pr", system: str | None = None) -> dict:
     payload: dict = {
         "model": route.model,
         "messages": [
@@ -256,6 +246,21 @@ def _call_model(route: ModelRoute, prompt: str, mode: str = "pr", system: str | 
     }
     if route.seed is not None:
         payload["seed"] = route.seed
+    return payload
+
+
+def _call_model(route: ModelRoute, prompt: str, mode: str = "pr", system: str | None = None) -> str:
+    proxy = os.environ.get("FL4WRITE_MODEL_PROXY_SOCKET")
+    key = os.environ.get(route.key_env, "") if route.key_env else ""
+    if route.key_env and not key and not proxy:
+        raise RuntimeError(
+            f"route {route.model}: key env var {route.key_env} is not set — "
+            "set it or fix key_env in the config"
+        )
+    headers = {"Content-Type": "application/json", "User-Agent": "fl4write/0.4"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    payload = _model_payload(route, prompt, mode, system)
 
     _t0 = time.time()
     if proxy:

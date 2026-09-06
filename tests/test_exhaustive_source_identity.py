@@ -82,3 +82,105 @@ def test_internal_path_still_requires_exact_grounding():
         exhaustive._validated({'findings': [{
             'path': 'fl4write/exhaustive_sandbox.py', 'line': 1, 'evidence': 'VALUE = 1',
         }]}, 'fl4write/exhaustive_budget.py', 1, 1, 'VALUE = 1\n')
+
+
+@pytest.mark.parametrize('fenced', [False, True])
+def test_recon_displays_absolute_line_numbers_across_chunks_and_preserves_source(tmp_path, fenced):
+    tree = tmp_path / 'tree'
+    tree.mkdir()
+    source = 'alpha\nbeta\ngamma\n'
+    (tree / 'value.txt').write_text(source)
+    ledger = tmp_path / 'ledger.json'
+    ledger.write_text('{}')
+    result = tmp_path / 'result.json'
+    request = tmp_path / 'request.json'
+    request.write_text(json.dumps({
+        'tree': str(tree), 'ledger': str(ledger), 'result': str(result),
+        'route': _config().model.model_dump(), 'chunk_chars': 6,
+        'max_calls': 3, 'max_tokens': 3 * _config().model.max_tokens,
+    }))
+    inputs = []
+
+    def model(route, prompt, mode, system):
+        value = json.loads(prompt)
+        inputs.append(value)
+        if value['start_line'] == 2:
+            assert value['content'] == '2: beta\n'
+            response = json.dumps({'findings': [{
+                'path': 'value.txt', 'line': 2, 'evidence': 'beta',
+                'severity': 'Major', 'message': 'fixture finding',
+            }]})
+            return f'```json\n{response}\n```' if fenced else response
+        return '```json\n{"findings": []}\n```' if fenced else '{"findings": []}'
+
+    assert exhaustive._worker(request, caller=model) == 0
+    assert [v['start_line'] for v in inputs] == [1, 2, 3]
+    value = json.loads(result.read_text())
+    assert value['findings'][0]['line'] == 2
+    assert value['findings'][0]['evidence'] == 'beta'
+    assert {row['sha256'] for row in value['coverage']} == {hashlib.sha256(source.encode()).hexdigest()}
+    assert (tree / 'value.txt').read_text() == source
+
+
+@pytest.mark.parametrize('line,evidence', [(1, 'beta'), (2, '2: beta')])
+def test_recon_numbering_does_not_relax_original_line_grounding(line, evidence):
+    with pytest.raises(exhaustive.Deferred, match='not grounded'):
+        exhaustive._validated({'findings': [{
+            'path': 'value.txt', 'line': line, 'evidence': evidence,
+        }]}, 'value.txt', 1, 3, 'alpha\nbeta\ngamma\n')
+
+
+@pytest.mark.parametrize('source,ledger', [
+    ('x\n' * 48000, {}),
+    ('\U0001f600\n' * 24000, {}),
+    ('x\n' * 24000, {'history': '\\"' * 20000}),
+])
+def test_numbered_recon_requests_fit_real_transport_and_cover_every_source_line(source, ledger):
+    from fl4write.model_proxy import MAX_REQUEST, _encode
+
+    route = _config().model
+    route.seed = 7
+    requests = list(exhaustive._recon_prompts(source, 48000, ledger, 'value.txt', route))
+    assert len(requests) > 1
+    next_line = 1
+    restored = []
+    for start, end, prompt in requests:
+        assert start == next_line
+        next_line = end + 1
+        raw = _encode({'endpoint': route.endpoint,
+                       'payload': analyzer._model_payload(route, prompt, 'file', exhaustive._RECON_SYSTEM)}, MAX_REQUEST)
+        assert len(raw) <= MAX_REQUEST
+        content = json.loads(prompt)['content']
+        for line, numbered in enumerate(content.splitlines(keepends=True), start):
+            assert numbered.startswith(f'{line}: ')
+            restored.append(numbered.removeprefix(f'{line}: '))
+    assert next_line == len(source.splitlines()) + 1
+    assert ''.join(restored) == source
+
+
+@pytest.mark.parametrize('source,ledger', [('\U0001f600' * 48000, {}), ('x', {'history': 'x' * 262144})])
+def test_unsplittable_recon_request_defers_before_inference(source, ledger):
+    with pytest.raises(exhaustive.Deferred, match='exceeds transport limit'):
+        list(exhaustive._recon_prompts(source, 48000, ledger, 'value.txt', _config().model))
+
+
+@pytest.mark.parametrize('response', [
+    '{"findings": [], "findings": []}',
+    '```json\n{"findings": []}\n```\n{"findings": [{"line": 1}]}',
+])
+def test_recon_worker_rejects_duplicate_or_ambiguous_fenced_envelopes(tmp_path, response):
+    tree = tmp_path / 'tree'
+    tree.mkdir()
+    (tree / 'value.txt').write_text('alpha\n')
+    ledger = tmp_path / 'ledger.json'
+    ledger.write_text('{}')
+    result = tmp_path / 'result.json'
+    request = tmp_path / 'request.json'
+    request.write_text(json.dumps({
+        'tree': str(tree), 'ledger': str(ledger), 'result': str(result),
+        'route': _config().model.model_dump(), 'chunk_chars': 48000,
+        'max_calls': 1, 'max_tokens': _config().model.max_tokens,
+    }))
+    with pytest.raises(exhaustive.Deferred, match='unusable output'):
+        exhaustive._worker(request, caller=lambda *_: response)
+    assert not result.exists()
