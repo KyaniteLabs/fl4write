@@ -301,7 +301,8 @@ def main() -> int:
             config = config.model_copy(update={"bot_login": "fl4write[bot]"})
         except Exception as exc:
             print(f"WARNING: GitHub App auth failed ({exc}); falling back to PAT", file=sys.stderr)
-            config = config.model_copy(update={"bot_login": "simongonzalezdc"})
+            # The configured identity belongs to the selected PAT account.
+            # Keep it so existing comments remain recognizable on fallback.
     _org_model_keys()
     state_path = Path.home() / ".fl4write" / f"{config.repo.replace('/', '__')}.state.json"
     budget_s = _cycle_budget_s()
