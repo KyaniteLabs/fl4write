@@ -7,6 +7,7 @@ import pytest
 
 from fl4write import exhaustive
 from fl4write.exhaustive_adjudication import AdjudicationError, actionable, fingerprint, read_decision
+from fl4write.exhaustive_evidence import seal_bundle, verify_bundle
 from fl4write.exhaustive_publication import PublicationError, ledger_body
 from test_exhaustive import _args, _git, _repo, _responses, _state
 
@@ -187,6 +188,49 @@ def test_repository_cannot_supply_its_own_desk_directory(tmp_path):
     args.desk_adjudications = repo / "desk"
     assert exhaustive.run(args) == 2
     assert not list(args.state_dir.glob("*/state.json"))
+
+
+@pytest.mark.parametrize("marker", [None, {"enabled": False}], ids=["absent", "disabled"])
+def test_pending_desk_requires_sealed_opt_in(tmp_path, marker):
+    repo, args = _setup(tmp_path)
+    assert exhaustive.run(args) == 2
+    path = next(args.state_dir.glob("*/state.json"))
+    identity = exhaustive._identity(repo)[1]
+    state = exhaustive._load_state(path, identity)
+    pending = state["pending_round"]
+    source = tmp_path / "different-mode"
+    source.mkdir()
+    for name, original in verify_bundle(pending["evidence_bundle"]).items():
+        if name == "desk-mode.json":
+            continue
+        target = source / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(original.read_bytes())
+    if marker is not None:
+        (source / "desk-mode.json").write_text(json.dumps(marker))
+    reference = seal_bundle(source, tmp_path / "different-bundles")
+    pending.update(evidence_bundle=reference, recon_evidence_bundle=reference)
+    path.write_text(json.dumps(state))
+    with pytest.raises(exhaustive.Deferred, match="pending desk evidence invalid"):
+        exhaustive._load_state(path, identity)
+
+
+@pytest.mark.parametrize("certified", [False, True], ids=["three-local-greens", "certified"])
+def test_completed_state_cannot_carry_pending_recon(tmp_path, certified):
+    repo, args = _setup(tmp_path)
+    args._fake_responses = _responses(tmp_path)
+    args.max_rounds = 3
+    assert exhaustive.run(args) == 2
+    path = next(args.state_dir.glob("*/state.json"))
+    identity = exhaustive._identity(repo)[1]
+    state = exhaustive._load_state(path, identity)
+    assert state["consecutive_green"] == 3
+    if certified:
+        state["certified_sha"] = state["head"]
+    state["pending_round"] = {"reviewed_head": state["head"], "finding_count": 0}
+    path.write_text(json.dumps(state))
+    with pytest.raises(exhaustive.Deferred, match="completed state cannot carry pending recon"):
+        exhaustive._load_state(path, identity)
 
 
 def test_real_budget_survives_missing_decisions_and_unavailable_live_suite(tmp_path, monkeypatch):

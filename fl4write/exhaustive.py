@@ -23,7 +23,7 @@ from . import scrub
 from .config import ModelRoute, load_config
 from .executor import _sandbox_env_for
 from .exhaustive_evidence import EvidenceError, seal_bundle, verify_bundle
-from .exhaustive_adjudication import AdjudicationError, actionable, fingerprint, read_decision, verified_findings
+from .exhaustive_adjudication import AdjudicationError, apply_decision, verified_findings
 from .model_proxy import ProxyError
 from .forges import ForgeAdapter, adapter_for
 from .state import CycleLock, CycleLockHeld
@@ -651,31 +651,6 @@ def _non_green(state, state_path, head, reason, evidence=None):
     _atomic_json(state_path, state)
 
 
-def _desk_decision(directory: Path, head: str, common: dict, artifacts: Path, pending: dict) -> list[dict]:
-    recon = pending.get("recon_evidence_bundle", pending["evidence_bundle"])
-    if "adjudication_sha256" in pending:
-        # Accepted bytes are already sealed; external edits cannot change a retry.
-        source = verify_bundle(pending["evidence_bundle"])["desk-adjudication.json"]
-    else:
-        source = directory / (recon["sha256"] + ".json")
-        if not source.exists():
-            _atomic_json(artifacts / "desk-request.json", {
-                "filename": source.name,
-                "findings": common["findings"],
-                "template": {"version": 1, "reviewed_head": head, "recon_sha256": recon["sha256"],
-                             "reviewer": "", "decisions": [
-                                 {"finding_id": ident, "verdict": "REVIEW_REQUIRED", "rationale": ""}
-                                 for ident in sorted({fingerprint(row) for row in common["findings"]})]},
-            })
-            raise Deferred(f"desk decisions required for recon {recon['sha256']}; see desk-request.json")
-    value, raw = read_decision(source)
-    active = actionable(value, head, recon, common["findings"])
-    (artifacts / "desk-adjudication.json").write_bytes(raw)
-    common.update(recon_evidence_bundle=recon, adjudication_sha256=hashlib.sha256(raw).hexdigest(),
-                  valid_finding_count=len(active))
-    return active
-
-
 def run(args: argparse.Namespace) -> int:
     repo, identity = _identity(args.repo.resolve())
     state_dir = args.state_dir.resolve() / identity
@@ -840,7 +815,7 @@ def run(args: argparse.Namespace) -> int:
                         state["pending_round"]["recon_evidence_bundle"] = common["recon_evidence_bundle"]
                     _atomic_json(state_path, state)
                     if findings:
-                        active_findings = _desk_decision(desk, head, common, rd, state["pending_round"])
+                        active_findings = apply_decision(desk, head, common, rd, state["pending_round"])
                         state["pending_round"] = {"reviewed_head": head, "desk_adjudication": True,
                                                   **_bind_evidence(common)}
                         verified_findings(state["pending_round"])
