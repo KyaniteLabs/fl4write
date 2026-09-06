@@ -137,11 +137,11 @@ def _review_pr(
     deadline: float | None = None,
 ) -> str:
     """Review one PR. Contained: any failure logs and returns — the cycle and
-    its state survive. Returns the outcome: terminal outcomes ("reviewed",
-    "shadow", "dependency-skip", "model-failed-cap") advance the post-merge
-    watermark; deferred ones ("diff-unavailable", "model-unavailable",
-    "deferred", "fix-deferred") do
-    not — the PR must be retried by a later sweep."""
+    its state survive. The post-merge sweep treats "reviewed" and
+    "model-failed-cap" as terminal. It records "shadow" separately for live
+    cutover and stops on deferred outcomes ("diff-unavailable",
+    "model-unavailable", "deferred", "fix-deferred") for later retry.
+    Dependency filtering occurs separately before this function is called."""
     from .analyzer import ModelUnavailable, analyze
 
     diff = get_diff(pr)
