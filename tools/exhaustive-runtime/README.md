@@ -25,6 +25,9 @@ host reads a bounded regular JUnit file through the supervisor and removes its
 own container after each invocation. Runtime failures and timeouts defer the round.
 The bounded `/tmp` filesystem permits execution so tests can create ordinary
 helper programs. Evidence and supervisor filesystems remain non-executable.
+Docker's init process reaps orphaned test descendants. This prevents exited
+children from accumulating against the unchanged 256-process limit during
+nested or repeated test runs.
 
 ## Execution evidence and limits
 

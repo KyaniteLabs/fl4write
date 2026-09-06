@@ -45,7 +45,7 @@ def container_command(command: list[str], tree: Path, image: str, name: str, tim
         route["key_env"] = ""
         worker_args = ["live-model", json.dumps(route)]
     return [
-        "docker", "run", "--detach", "--name", name, "--network", "none", "--read-only",
+        "docker", "run", "--detach", "--init", "--name", name, "--network", "none", "--read-only",
         "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
         "--security-opt", "no-new-privileges", "--pids-limit", "256", "--memory", "2g", "--cpus", "2",
         "--tmpfs", "/tmp:rw,exec,nosuid,size=268435456,mode=1777",

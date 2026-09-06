@@ -19,6 +19,8 @@ def test_container_has_only_readonly_source_mount_and_bounded_private_outputs(tm
     argv = sandbox.container_command(["python3", "-m", "pytest", "--junitxml", "{junit}"],
                                      tmp_path, IMAGE, "fixture", 30)
     assert argv[argv.index("--network") + 1] == "none"
+    assert "--init" in argv  # Reap orphaned test descendants without raising the process cap.
+    assert argv[argv.index("--pids-limit") + 1] == "256"
     assert "--read-only" in argv and argv[argv.index("--cap-drop") + 1] == "ALL"
     assert argv.count("--mount") == 1
     assert argv[argv.index("--mount") + 1] == f"type=bind,src={tmp_path.resolve()},dst=/work,readonly"
