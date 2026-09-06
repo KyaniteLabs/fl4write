@@ -134,7 +134,7 @@ def test_recon_numbering_does_not_relax_original_line_grounding(line, evidence):
     ('x\n' * 48000, {}),
     ('\U0001f600\n' * 24000, {}),
     ('x\n' * 24000, {'history': '\\"' * 20000}),
-])
+], ids=['short-lines', 'unicode', 'large-ledger'])
 def test_numbered_recon_requests_fit_real_transport_and_cover_every_source_line(source, ledger):
     from fl4write.model_proxy import MAX_REQUEST, _encode
 
@@ -158,7 +158,8 @@ def test_numbered_recon_requests_fit_real_transport_and_cover_every_source_line(
     assert ''.join(restored) == source
 
 
-@pytest.mark.parametrize('source,ledger', [('\U0001f600' * 48000, {}), ('x', {'history': 'x' * 262144})])
+@pytest.mark.parametrize('source,ledger', [('\U0001f600' * 48000, {}), ('x', {'history': 'x' * 262144})],
+                         ids=['long-unicode-line', 'oversized-ledger'])
 def test_unsplittable_recon_request_defers_before_inference(source, ledger):
     with pytest.raises(exhaustive.Deferred, match='exceeds transport limit'):
         list(exhaustive._recon_prompts(source, 48000, ledger, 'value.txt', _config().model))
