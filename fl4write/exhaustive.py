@@ -22,7 +22,7 @@ from typing import Any, Callable
 from . import scrub
 from .config import ModelRoute, load_config
 from .executor import _sandbox_env_for
-from .exhaustive_evidence import EvidenceError, seal_bundle, verify_bundle
+from .exhaustive_evidence import EvidenceError, recon_ledger_context, seal_bundle, verify_bundle
 from .exhaustive_adjudication import AdjudicationError, apply_decision, verified_findings
 from .model_proxy import ProxyError
 from .forges import ForgeAdapter, adapter_for
@@ -360,6 +360,8 @@ def _recon_prompts(source: str, limit: int, ledger: dict, path: str, route: Mode
     """Keep source boundaries, splitting further when the encoded request is too large."""
     from .analyzer import _model_payload
     from .model_proxy import MAX_REQUEST, _encode
+
+    ledger = recon_ledger_context(ledger)
 
     def fit(start, end, body):
         lines = body.splitlines(keepends=True)

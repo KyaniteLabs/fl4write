@@ -39,6 +39,12 @@ pin + LEARNINGS entry.**
    round ledger. The ledger is the only thing that crosses rounds.
 5. **FRESH CONTEXT** — next round starts from the ledger, not from this round's context.
 
+Model prompts carry each prior test-ID list as a count and SHA256 digest of its
+ordered canonical JSON (sorted keys, compact separators, trailing newline).
+All other ledger fields remain available to the model. Complete test IDs remain
+in the archived ledger input and canonical state for regression and replay checks;
+the prompt summary is never verification authority.
+
 **EXIT CONTRACT — three consecutive green loops.** A round is GREEN iff:
 
 - recon produced ZERO new valid defects (desk-verified; dup/invalid verdicts recorded), AND

@@ -18,6 +18,22 @@ def _canonical(value) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
+def recon_ledger_context(ledger: dict) -> dict:
+    """Summarize test identities for inference only; preserve the evidence ledger."""
+    if "ledger" not in ledger:
+        return ledger
+    rows = []
+    for row in ledger["ledger"]:
+        projected = {key: value for key, value in row.items() if key != "test_ids"}
+        if "test_ids" in row:
+            projected["test_ids_summary"] = {
+                "count": len(row["test_ids"]),
+                "sha256": hashlib.sha256(_canonical(row["test_ids"])).hexdigest(),
+            }
+        rows.append(projected)
+    return {**ledger, "ledger": rows}
+
+
 def seal_bundle(source: Path, destination: Path) -> dict[str, str]:
     """Copy completed evidence; the archive is the authority for the source tree."""
     destination.mkdir(parents=True, exist_ok=True)

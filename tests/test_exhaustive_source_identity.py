@@ -130,6 +130,65 @@ def test_recon_numbering_does_not_relax_original_line_grounding(line, evidence):
         }]}, 'value.txt', 1, 3, 'alpha\nbeta\ngamma\n')
 
 
+def test_recon_projects_large_test_history_without_changing_evidence(tmp_path):
+    from fl4write.model_proxy import MAX_REQUEST, _encode
+
+    ids = [f'tests/test_case.py::test_{i}[unicode-\u03bb-"-\\]' for i in range(6000)]
+    row = {'round': 1, 'green': True, 'test_ids': ids, 'junit_sha256': 'a' * 64,
+           'regressions': ['retain me'], 'evidence': {'path': 'bundle.json'}}
+    ledger = {'ledger': [row, {**row, 'round': 2}], 'other': 'preserved'}
+    archive = tmp_path / 'ledger-input.json'
+    archive.write_text(json.dumps(ledger))
+    original = archive.read_bytes()
+    source = 'alpha\nbeta\ngamma\n'
+    route = _config().model
+    restored = []
+    prompts = list(exhaustive._recon_prompts(source, 6, ledger, 'value.txt', route))
+    assert len(prompts) == 3
+    for start, end, prompt in prompts:
+        projected = json.loads(prompt)
+        assert len(prompt) < 2000
+        assert projected['ledger']['other'] == 'preserved'
+        for index, actual in enumerate(projected['ledger']['ledger']):
+            summary = actual.pop('test_ids_summary')
+            canonical_ids = (json.dumps(ids, sort_keys=True, separators=(',', ':')) + '\n').encode()
+            assert summary == {'count': len(ids), 'sha256': hashlib.sha256(canonical_ids).hexdigest()}
+            assert actual == {k: v for k, v in ledger['ledger'][index].items() if k != 'test_ids'}
+        encoded = _encode({'endpoint': route.endpoint,
+                           'payload': analyzer._model_payload(route, prompt, 'file', exhaustive._RECON_SYSTEM)},
+                          MAX_REQUEST)
+        assert len(encoded) <= MAX_REQUEST
+        assert start == end
+        restored.append(projected['content'].removeprefix(f'{start}: '))
+    assert ''.join(restored) == source
+    assert archive.read_bytes() == original
+    assert ledger == json.loads(original)
+
+
+@pytest.mark.parametrize('rows', [[], [{'round': 1}], [{'test_ids': []}]])
+def test_recon_test_history_handles_absent_and_empty_ids(rows):
+    from fl4write.exhaustive_evidence import recon_ledger_context
+
+    ledger = {'ledger': rows}
+    original = json.dumps(ledger)
+    projected = recon_ledger_context(ledger)
+    assert json.dumps(ledger) == original
+    if rows and 'test_ids' in rows[0]:
+        assert projected['ledger'][0]['test_ids_summary']['count'] == 0
+    else:
+        assert projected == ledger
+
+
+def test_recon_test_history_digest_binds_identity_and_order():
+    from fl4write.exhaustive_evidence import recon_ledger_context
+
+    def digest(ids):
+        return recon_ledger_context({'ledger': [{'test_ids': ids}]})['ledger'][0]['test_ids_summary']['sha256']
+
+    assert digest(['\u03bb', '"\\']) == digest(['\u03bb', '"\\'])
+    assert len({digest(['a', 'b']), digest(['a', 'c']), digest(['b', 'a'])}) == 3
+
+
 @pytest.mark.parametrize('source,ledger', [
     ('x\n' * 48000, {}),
     ('\U0001f600\n' * 24000, {}),
