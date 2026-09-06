@@ -139,7 +139,8 @@ def _review_pr(
     """Review one PR. Contained: any failure logs and returns — the cycle and
     its state survive. Returns the outcome: terminal outcomes ("reviewed",
     "shadow", "dependency-skip", "model-failed-cap") advance the post-merge
-    watermark; deferred ones ("diff-unavailable", "model-unavailable") do
+    watermark; deferred ones ("diff-unavailable", "model-unavailable",
+    "deferred", "fix-deferred") do
     not — the PR must be retried by a later sweep."""
     from .analyzer import ModelUnavailable, analyze
 
