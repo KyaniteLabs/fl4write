@@ -97,6 +97,8 @@ The isolated evaluation-route regression repair targets 1074 passing + 3 skipped
 by default and 1077 passing + 0 skipped live; current-head validation is pending.
 The recon line-location, request-size, and parsing regressions target 1085 passing + 3 skipped
 by default and 1088 passing + 0 skipped live; current-head validation is pending.
+The optional source-bound desk-disposition path targets 1113 passing + 3 skipped
+by default and 1116 passing + 0 skipped live; current-head validation is pending.
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
 runtime model credentials. The default suite skips those three paid model

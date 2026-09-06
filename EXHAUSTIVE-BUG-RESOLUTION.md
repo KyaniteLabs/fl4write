@@ -52,6 +52,35 @@ counter to 0 (after its fixes land). The loop ends only when the counter reaches
 project may be certified **exhaustively flushed @ `<sha>`**, with the ledger as evidence.
 Never declare exhaustion early; exhaustion is a certification, not a feeling.
 
+### Optional local desk dispositions
+
+The CLI accepts `--desk-adjudications DIR` as an explicit trust choice by the local
+operator. The directory must be outside the reviewed checkout. Without this option,
+every grounded finding remains actionable through the existing fix gates.
+
+With this option, a round with findings pauses before tests or fixes and writes a
+`desk-request.json` artifact. That request includes the raw findings, a decision
+template, and the required filename. An independent desk reviewer fills the template
+and places it in the selected directory using that filename. The reviewer label is
+provenance, not authentication; selecting the directory is what authorizes its input.
+Repository files and model responses are never treated as desk authorization.
+
+Each decision must match the exact reviewed HEAD and sealed recon digest and cover
+every unique finding fingerprint once, with a nonempty rationale. The accepted
+verdicts are `valid`, `invalid`, and `duplicate`. Only `invalid` excludes a finding
+from repair; a duplicate label remains actionable and cannot hide an unresolved
+defect. Repeated identical raw findings share one fingerprint decision while their
+raw occurrence count remains intact. Empty recon results need no desk file.
+
+Resume with the same HEAD and request settings. Pending recon and its reservations
+are reused. Once accepted, decision bytes are sealed before testing; later edits to
+the external file cannot change a retry. Adjudicated round evidence retains the raw
+findings, the original recon reference, and accepted decisions. Eligible green rounds
+also require full-suite JUnit. Recovery recomputes valid counts from that evidence.
+Public adjudicated rows include raw and valid counts plus the decision digest; private findings and rationales stay
+out. An invalid-only round still needs the complete green suite, unchanged test
+coverage, and all three rounds before the existing certification/publication gates.
+
 **Why:** round-N reviewers are structurally blind to round-N bugs; every fix round can introduce
 new bugs; only fresh-eyes re-entry plus a hard 3-clean-rounds bar reliably exhausts a codebase.
 

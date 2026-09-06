@@ -47,6 +47,19 @@ def _round_dto(row: Any) -> dict[str, Any]:
         "reviewed_head": _hash(row.get("reviewed_head"), _COMMIT, "reviewed head"),
         "finding_count": _integer(row.get("finding_count", 0), "finding count"),
     }
+    if "valid_finding_count" in row:
+        count = _integer(row["valid_finding_count"], "valid finding count")
+        if count > dto["finding_count"]:
+            raise PublicationError("valid findings exceed raw findings")
+        from .exhaustive_adjudication import AdjudicationError, verified_findings
+
+        try:
+            verified_findings(row)
+        except AdjudicationError as exc:
+            raise PublicationError("desk evidence cannot support published count") from exc
+        dto["valid_finding_count"] = count
+        if "adjudication_sha256" in row:
+            dto["adjudication_sha256"] = _hash(row["adjudication_sha256"], _SHA256, "desk decision hash")
     tested = row.get("tested_head")
     if tested is not None:
         dto["tested_head"] = _hash(tested, _COMMIT, "tested head")
@@ -80,7 +93,7 @@ def _certification_sha(state: dict[str, Any], rows: list[dict[str, Any]]) -> str
             not row["green"]
             or row["reviewed_head"] != certified
             or row.get("tested_head") != certified
-            or row["finding_count"] != 0
+            or row.get("valid_finding_count", row["finding_count"]) != 0
             or "junit_sha256" not in row
         ):
             raise PublicationError("certification rounds do not match the certified head")

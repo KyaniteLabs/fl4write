@@ -23,6 +23,7 @@ from . import scrub
 from .config import ModelRoute, load_config
 from .executor import _sandbox_env_for
 from .exhaustive_evidence import EvidenceError, seal_bundle, verify_bundle
+from .exhaustive_adjudication import AdjudicationError, actionable, fingerprint, read_decision, verified_findings
 from .model_proxy import ProxyError
 from .forges import ForgeAdapter, adapter_for
 from .state import CycleLock, CycleLockHeld
@@ -62,6 +63,9 @@ def _request_identity(args, config):
         "base_branch": getattr(args, "base_branch", None),
         "environment": {k: os.environ.get(k) for k in ("FL4WRITE_EVAL", "FL4WRITE_EVAL_CONFIG", "PYTHONPATH")},
     }
+    desk = getattr(args, "desk_adjudications", None)
+    if desk is not None:
+        value["desk_adjudications"] = str(desk.resolve())
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
@@ -204,8 +208,22 @@ def _load_state(path: Path, identity: str) -> dict[str, Any]:
         if not row["green"] or row["reviewed_head"] != data["head"]:
             break
         trailing += 1
-    if data["pending_round"] and data["pending_round"]["finding_count"]:
-        trailing = 0
+    pending = data["pending_round"]
+    if pending:
+        if data["certified_sha"] or data["consecutive_green"] == GREEN_REQUIRED:
+            raise Deferred("completed state cannot carry pending recon")
+        if pending.get("desk_adjudication") is True:
+            try:
+                paths = verify_bundle(pending.get("evidence_bundle"))
+                if json.loads(paths["desk-mode.json"].read_bytes()) != {"enabled": True}:
+                    raise AdjudicationError("pending desk mode differs from sealed evidence")
+                active = verified_findings(pending, paths)
+            except (EvidenceError, AdjudicationError, OSError, ValueError, KeyError) as exc:
+                raise Deferred("pending desk evidence invalid") from exc
+            if "adjudication_sha256" in pending and active:
+                trailing = 0
+        elif pending["finding_count"]:
+            trailing = 0
     baseline = next((row["test_ids"] for row in reversed(data["ledger"]) if row["green"]), [])
     if (trailing != data["consecutive_green"]
             or data["green_sha"] != (data["head"] if trailing else None)
@@ -219,13 +237,14 @@ def _load_state(path: Path, identity: str) -> dict[str, Any]:
                 raise EvidenceError("round archive does not match reviewed HEAD")
             if json.loads(paths["selected-request.json"].read_bytes()) != {"sha256": row.get("request_sha256")}:
                 raise EvidenceError("round selected request does not match sealed evidence")
+            active = verified_findings(row, paths)
             if row["green"]:
-                if row.get("tested_head") != row["reviewed_head"] or row.get("finding_count") != 0:
+                if row.get("tested_head") != row["reviewed_head"] or active:
                     raise EvidenceError("green round lacks matching tested HEAD or zero findings")
                 ids, green, digest = _junit(paths["full-suite.xml"])
                 if not green or sorted(ids) != sorted(row["test_ids"]) or digest != row["junit_sha256"]:
                     raise EvidenceError("green round disagrees with its full-suite evidence")
-    except (EvidenceError, NonGreen, OSError, ValueError, KeyError) as exc:
+    except (EvidenceError, AdjudicationError, NonGreen, OSError, ValueError, KeyError) as exc:
         raise Deferred(f"round evidence invalid: {exc}") from exc
     return data
 
@@ -632,12 +651,42 @@ def _non_green(state, state_path, head, reason, evidence=None):
     _atomic_json(state_path, state)
 
 
+def _desk_decision(directory: Path, head: str, common: dict, artifacts: Path, pending: dict) -> list[dict]:
+    recon = pending.get("recon_evidence_bundle", pending["evidence_bundle"])
+    if "adjudication_sha256" in pending:
+        # Accepted bytes are already sealed; external edits cannot change a retry.
+        source = verify_bundle(pending["evidence_bundle"])["desk-adjudication.json"]
+    else:
+        source = directory / (recon["sha256"] + ".json")
+        if not source.exists():
+            _atomic_json(artifacts / "desk-request.json", {
+                "filename": source.name,
+                "findings": common["findings"],
+                "template": {"version": 1, "reviewed_head": head, "recon_sha256": recon["sha256"],
+                             "reviewer": "", "decisions": [
+                                 {"finding_id": ident, "verdict": "REVIEW_REQUIRED", "rationale": ""}
+                                 for ident in sorted({fingerprint(row) for row in common["findings"]})]},
+            })
+            raise Deferred(f"desk decisions required for recon {recon['sha256']}; see desk-request.json")
+    value, raw = read_decision(source)
+    active = actionable(value, head, recon, common["findings"])
+    (artifacts / "desk-adjudication.json").write_bytes(raw)
+    common.update(recon_evidence_bundle=recon, adjudication_sha256=hashlib.sha256(raw).hexdigest(),
+                  valid_finding_count=len(active))
+    return active
+
+
 def run(args: argparse.Namespace) -> int:
     repo, identity = _identity(args.repo.resolve())
     state_dir = args.state_dir.resolve() / identity
     state_path = state_dir / "state.json"
     state = _fresh_state(identity)
     try:
+        desk = getattr(args, "desk_adjudications", None)
+        if desk is not None:
+            desk = desk.resolve()
+            if desk.is_relative_to(repo) or desk.exists() and not desk.is_dir():
+                raise Deferred("desk decisions must be in an external directory")
         with CycleLock(state_dir / "loop.lock"), ExitStack() as transports:
             state = _load_state(state_path, identity)
             config = load_config(args.config or repo / ".fl4write.yaml")
@@ -725,6 +774,8 @@ def run(args: argparse.Namespace) -> int:
                 rd = state_dir / "artifacts" / f"round-{state['round'] + 1:04d}-{head[:12]}-{time.time_ns()}"
                 tree, manifest = _pack(repo, head, rd)
                 _atomic_json(rd / "selected-request.json", {"sha256": request_sha})
+                if desk is not None:
+                    _atomic_json(rd / "desk-mode.json", {"enabled": True})
                 ledger = rd / "ledger-input.json"
                 _atomic_json(ledger, {"ledger": state["ledger"]})
                 pending = state["pending_round"]
@@ -742,6 +793,8 @@ def run(args: argparse.Namespace) -> int:
                             raise EvidenceError("pending archive differs from current HEAD archive")
                         for name in ("worker-result.json", "worker-request.json", "coverage-manifest.json"):
                             shutil.copyfile(paths[name], rd / name)
+                        if "desk-adjudication.json" in paths:
+                            shutil.copyfile(paths["desk-adjudication.json"], rd / "desk-adjudication.json")
                         result = json.loads(paths["worker-result.json"].read_bytes())
                         findings = result["findings"]
                         if findings != pending["findings"] or len(findings) != pending["finding_count"]:
@@ -770,18 +823,38 @@ def run(args: argparse.Namespace) -> int:
                     "finding_count": len(findings),
                     "findings": findings,
                 }
+                if pending and pending.get("desk_adjudication") is True:
+                    common["recon_evidence_bundle"] = pending.get("recon_evidence_bundle", pending["evidence_bundle"])
+                if pending and "adjudication_sha256" in pending:
+                    common.update({key: pending[key] for key in
+                                   ("recon_evidence_bundle", "adjudication_sha256", "valid_finding_count")})
                 if _git(repo, "rev-parse", "HEAD") != head:
                     _non_green(state, state_path, head, "HEAD changed during recon", common)
                     raise Deferred("HEAD changed during recon")
                 state["pending_round"] = {"reviewed_head": head, **_bind_evidence(common)}
-                if findings:
+                active_findings = findings
+                if desk is not None:
+                    state["pending_round"]["desk_adjudication"] = True
+                    if findings:
+                        common.setdefault("recon_evidence_bundle", state["pending_round"]["evidence_bundle"])
+                        state["pending_round"]["recon_evidence_bundle"] = common["recon_evidence_bundle"]
+                    _atomic_json(state_path, state)
+                    if findings:
+                        active_findings = _desk_decision(desk, head, common, rd, state["pending_round"])
+                        state["pending_round"] = {"reviewed_head": head, "desk_adjudication": True,
+                                                  **_bind_evidence(common)}
+                        verified_findings(state["pending_round"])
+                        if active_findings:
+                            state["consecutive_green"], state["green_sha"] = 0, None
+                        _atomic_json(state_path, state)
+                if active_findings:
                     state["consecutive_green"] = 0
                     state["green_sha"] = None
                     _atomic_json(state_path, state)
                     try:
                         if not getattr(args, "enable_fixes", False):
                             raise Deferred("findings recorded; authenticated owned-PR exhaustive fixes are disabled")
-                        fix = _request_owned_fixes(repo, config, head, findings, args,
+                        fix = _request_owned_fixes(repo, config, head, active_findings, args,
                                                    state_dir / "fixes" / head)
                         if _git(repo, "rev-parse", "HEAD") != head or _git(repo, "status", "--porcelain"):
                             raise Deferred("local checkout changed during atomic fix")
@@ -875,7 +948,7 @@ def run(args: argparse.Namespace) -> int:
     except CycleLockHeld as exc:
         print(scrub.inline(str(exc)), file=sys.stderr)
         return 3
-    except (Deferred, ProxyError) as exc:
+    except (Deferred, ProxyError, AdjudicationError) as exc:
         _escalate(state_dir / "escalation.json", str(exc), state)
         print(scrub.inline(str(exc)), file=sys.stderr)
         return 2
@@ -896,6 +969,8 @@ def _parser():
     p.add_argument("--test-timeout", type=int, default=3600)
     p.add_argument("--ledger-issue", type=int)
     p.add_argument("--enable-fixes", action="store_true")
+    p.add_argument("--desk-adjudications", type=Path,
+                   help="explicitly trust source-bound desk decision files in this external directory")
     p.add_argument("--base-branch", help="explicit existing repair target; defaults to the repository default branch")
     p.add_argument("--isolation", choices=("docker", "process"), default="docker",
                    help="Docker is required for automatic fixes; process is for trusted local diagnostics")
