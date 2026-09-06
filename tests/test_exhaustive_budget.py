@@ -65,6 +65,29 @@ def test_failed_real_worker_request_is_reserved_across_retry(tmp_path, monkeypat
     assert json.loads(budget_path.read_text())["usage"] == {"calls": 1, "reserved_output_tokens": 10}
 
 
+def test_partial_real_worker_resumes_with_failed_reservation_retained(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    args = _args(repo, tmp_path / "state", None)
+    args.max_model_calls, args.max_output_tokens = 4, 40
+    calls = []
+
+    def interrupted(self, payload):
+        calls.append(json.loads(payload["messages"][1]["content"])["path"])
+        if len(calls) == 2:
+            raise RuntimeError("fixture outage")
+        return _answer(payload)
+
+    monkeypatch.setattr(ModelProxy, "_forward", interrupted)
+    assert exhaustive.run(args) == 2
+    assert len(calls) == 2
+    assert exhaustive.run(args) == 2  # One complete green round is short of three.
+    assert len(calls) == 4 and calls[1] == calls[2] and calls.count(calls[0]) == 1
+    state = json.loads(next((tmp_path / "state").glob("*/state.json")).read_bytes())
+    assert state["consecutive_green"] == 1
+    budget_path = next((tmp_path / "state").glob("*/budgets/round-0001.json"))
+    assert json.loads(budget_path.read_bytes())["usage"] == {"calls": 4, "reserved_output_tokens": 40}
+
+
 @pytest.mark.parametrize("data", [{}, {"identity": {}, "usage": []}, "broken"])
 def test_unreadable_budget_never_resets_spend(tmp_path, data):
     path = tmp_path / "budget.json"

@@ -1,5 +1,11 @@
 # EXHAUSTIVE BUG-RESOLUTION LOOP — requested FL4WRITE behavior
 
+Interrupted recon retains a validated chunk prefix for the same round. Checkpoints
+bind the complete ledger, source archive, selected request and worker implementation;
+each new round requires fresh inference. Failed attempts remain charged, including
+calls interrupted before their response is checkpointed. Retries need room within
+the originally selected whole-round budget. Partial coverage never advances a round.
+
 **Status: feature request (CEO word 2026-09-04, PM-3 intake) — behavior spec, not yet
 implemented. Implementation = feature tranche; per standing authority #2 it ships only after a
 delegate quorum audit, and per org habit every defect found while building it lands a regression

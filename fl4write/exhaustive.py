@@ -387,44 +387,9 @@ def _recon_prompts(source: str, limit: int, ledger: dict, path: str, route: Mode
 
 
 def _worker(request_path: Path, caller: Callable | None = None) -> int:
-    from .analyzer import extract_json
+    from .exhaustive_recon import worker
 
-    request = json.loads(request_path.read_text(encoding="utf-8"))
-    route = ModelRoute.model_validate(request["route"])
-    tree, ledger = Path(request["tree"]), json.loads(Path(request["ledger"]).read_text())
-    fake = request.get("fake_responses")
-    if fake:
-        queue = list(json.loads(Path(fake).read_text()))
-
-        def call(*_args):
-            if not queue:
-                raise RuntimeError("fake response queue exhausted")
-            return json.dumps(queue.pop(0))
-    else:
-        if caller is None:
-            from .analyzer import _call_model
-
-            caller = _call_model
-        call = caller
-    findings, coverage, calls, reserved = [], [], 0, 0
-    for path, source, digest in _text_sources(tree):
-        for start, end, prompt in _recon_prompts(source, request["chunk_chars"], ledger, path, route):
-            if calls >= request["max_calls"] or reserved + route.max_tokens > request["max_tokens"]:
-                raise Deferred("model call or reserved output-token budget exhausted before full coverage")
-            calls += 1
-            reserved += route.max_tokens
-            try:
-                value = extract_json(call(route, prompt, "file", _RECON_SYSTEM), envelope_key="findings")
-            except Exception as exc:
-                raise Deferred(f"model unavailable or returned unusable output: {exc}") from exc
-            findings += _validated(value, path, start, end, source)
-            coverage.append(
-                {"path": path, "sha256": digest, "bytes": len(source.encode()), "start_line": start, "end_line": end}
-            )
-    Path(request["result"]).write_text(
-        json.dumps({"findings": findings, "coverage": coverage, "calls": calls, "reserved_output_tokens": reserved})
-    )
-    return 0
+    return worker(request_path, caller)
 
 
 def _recon(
@@ -437,6 +402,7 @@ def _recon(
     artifact_dir: Path,
     chunk_chars: int,
     fake_responses: Path | None = None,
+    checkpoint: Path | None = None,
 ):
     request, result = artifact_dir / "worker-request.json", artifact_dir / "worker-result.json"
     payload = {
@@ -450,6 +416,13 @@ def _recon(
     }
     if fake_responses:
         payload["fake_responses"] = str(fake_responses)
+    if checkpoint is not None:
+        payload["checkpoint"] = str(checkpoint)
+        payload["binding"] = {
+            "round": checkpoint.name, "repository_state": str(checkpoint.parent.resolve()),
+            "manifest": json.loads((artifact_dir / "manifest.json").read_bytes()),
+            "selected_request": json.loads((artifact_dir / "selected-request.json").read_bytes()),
+        }
     _atomic_json(request, payload)
     home = tempfile.mkdtemp(prefix="fl4write-exhaustive-worker-")
     try:
@@ -791,6 +764,7 @@ def run(args: argparse.Namespace) -> int:
                         rd,
                         args.chunk_chars,
                         getattr(args, "_fake_responses", None),
+                        state_dir / "recon-checkpoints" / f"round-{state['round']+1:04d}-{head}.json",
                     )
                 common = {
                     "request_sha256": request_sha,

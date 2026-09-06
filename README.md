@@ -101,8 +101,8 @@ The optional source-bound desk-disposition path targets 1113 passing + 3 skipped
 by default and 1116 passing + 0 skipped live; current-head validation is pending.
 The configured PAT identity and pending-state authority regressions target 1119
 passing + 3 skipped by default and 1122 passing + 0 skipped live; current-head validation is pending.
-The model-only test-history projection targets 1124 passing + 3 skipped by default
-and 1127 passing + 0 skipped live; current-head validation is pending.
+The resumable recon changes target 1144 passing + 3 skipped by default
+and 1147 passing + 0 skipped live; current-head validation is pending.
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
 runtime model credentials. The default suite skips those three paid model
