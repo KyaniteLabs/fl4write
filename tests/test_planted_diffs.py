@@ -12,6 +12,7 @@ new miss-classes appear in the wild (the corpus grows from production).
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 
 import pytest
@@ -133,6 +134,18 @@ class TestDeterministicLayer:
         assert case["test"] in finding.message  # auditable evidence (Sol-B2)
 
 
+def _live_config():
+    config = cfg.load_config(Path(os.environ.get(
+        "FL4WRITE_EVAL_CONFIG", str(Path(__file__).parents[1] / "fl4write.fl4write.yaml"))))
+    selected = os.environ.get("FL4WRITE_EVAL_MODEL")
+    if selected is not None:
+        if not os.environ.get("FL4WRITE_LIVE_EVAL_PROXY_SOCKET"):
+            raise ValueError("selected evaluation model requires the bounded proxy")
+        config.model = cfg.ModelRoute.model_validate(json.loads(selected))
+        config.fallback_model = None
+    return config
+
+
 @pytest.mark.skipif(os.environ.get("FL4WRITE_EVAL") != "1", reason="live eval (needs model keys)")
 class TestModelLayerLive:
     """Model recall on the corpus — the Q1 metric, measured when run with
@@ -148,8 +161,7 @@ class TestModelLayerLive:
         # The opt-in live lane must exercise a real configured route, not
         # the http://m unit-test fixture. Keys remain runtime-only.
         _org_model_keys()
-        live_config = cfg.load_config(Path(os.environ.get(
-            "FL4WRITE_EVAL_CONFIG", str(Path(__file__).parents[1] / "fl4write.fl4write.yaml"))))
+        live_config = _live_config()
         proxy = os.environ.get("FL4WRITE_LIVE_EVAL_PROXY_SOCKET")
         if proxy:
             monkeypatch.setenv("FL4WRITE_MODEL_PROXY_SOCKET", proxy)

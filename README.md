@@ -93,6 +93,8 @@ and targets 1065 passing + 0 skipped live. Its validation is recorded in the led
 the live gate remains blocked by the configured provider's HTTP 402 response.
 The round31 credential regressions achieved 1066 passing + 3 skipped by default
 and target 1069 passing + 0 skipped live; live validation remains pending.
+The isolated evaluation-route regression repair targets 1074 passing + 3 skipped
+by default and 1077 passing + 0 skipped live; current-head validation is pending.
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
 runtime model credentials. The default suite skips those three paid model

@@ -33,11 +33,17 @@ def container_command(command: list[str], tree: Path, image: str, name: str, tim
     uid = os.getuid() or 65534
     gid = os.getgid() if os.getuid() else 65534
     proxy_args = []
+    worker_args = []
     if model_proxy is not None:
         socket_path = model_proxy.socket_path
         if socket_path is None or not socket_path.is_socket() or "," in str(socket_path.parent):
             raise SandboxUnavailable("model test proxy is unavailable")
         proxy_args = ["--mount", f"type=bind,src={socket_path.parent},dst=/model-proxy,readonly"]
+        # The archived default may use a different provider from --config.
+        # Only route settings cross the test boundary; the key stays on the host.
+        route = model_proxy.route.model_dump()
+        route["key_env"] = ""
+        worker_args = ["live-model", json.dumps(route)]
     return [
         "docker", "run", "--detach", "--name", name, "--network", "none", "--read-only",
         "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
@@ -49,7 +55,7 @@ def container_command(command: list[str], tree: Path, image: str, name: str, tim
         *proxy_args,
         "--workdir", "/work", "--user", "0:0", "--entrypoint", "/usr/local/bin/python3",
         image, "-I", WORKER, "run", str(uid), str(gid), str(timeout), json.dumps(argv),
-        *(["live-model"] if model_proxy is not None else []),
+        *worker_args,
     ]
 
 
@@ -68,7 +74,7 @@ def validate_runtime(image: str, *, require_model_proxy=False):
     expected = image + " 1"
     if require_model_proxy:
         format_string += ' {{index .Config.Labels "org.fl4write.model-proxy"}}'
-        expected += " 1"
+        expected += " 2"
     inspected = _docker(["docker", "image", "inspect", "--format", format_string, image], 30)
     if inspected.returncode or inspected.stdout.strip() != expected:
         raise SandboxUnavailable("selected image is not the installed FL4WRITE test runtime")

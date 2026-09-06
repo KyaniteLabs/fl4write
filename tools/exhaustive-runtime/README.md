@@ -47,7 +47,11 @@ With `--live-model-tests`, it also exposes a Unix socket to the test container.
 It keeps provider
 credentials in owned host processes, fixes the endpoint/model/settings and caps calls
 and reserved output tokens. Failed calls still consume that budget. The runtime
-image must declare support for this transport. Recon, repair generation and live
+image must declare model-proxy capability version 2. The supervisor passes the
+selected route settings without the credential environment reference through
+`FL4WRITE_EVAL_MODEL`; live tests use that route and disable fallback. This keeps
+an external `--config` selection from silently reverting to the archived default.
+Rebuild older runtime images before using live evaluation. Recon, repair generation and live
 tests share the selected per-round call and reserved-output-token limits.
 Reservations are persisted before forwarding a call and retained across retries,
 including provider failures. Corrupt or mismatched budget records defer the run.

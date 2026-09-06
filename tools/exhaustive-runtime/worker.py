@@ -44,8 +44,14 @@ def main():
            "PYTHONPATH": "/work", "PYTHONDONTWRITEBYTECODE": "1",
            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
            "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"}
-    if len(sys.argv) == 7 and sys.argv[6] == "live-model":
-        env.update(FL4WRITE_EVAL="1", FL4WRITE_LIVE_EVAL_PROXY_SOCKET="/model-proxy/model.sock")
+    if len(sys.argv) > 6:
+        if len(sys.argv) != 8 or sys.argv[6] != "live-model":
+            return 2
+        route = json.loads(sys.argv[7])
+        if not isinstance(route, dict) or route.get("key_env") != "":
+            return 2
+        env.update(FL4WRITE_EVAL="1", FL4WRITE_LIVE_EVAL_PROXY_SOCKET="/model-proxy/model.sock",
+                   FL4WRITE_EVAL_MODEL=json.dumps(route))
     result = {"kind": "deferred", "reason": "test process unavailable"}
     try:
         process = subprocess.Popen(command, cwd="/work", env=env, user=uid, group=gid,
