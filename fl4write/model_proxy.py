@@ -218,6 +218,8 @@ class ModelProxy:
                     "max_tokens": self.route.max_tokens}
         if self.route.seed is not None:
             expected["seed"] = self.route.seed
+        if self.route.thinking is not None:
+            expected["thinking"] = {"type": self.route.thinking}
         if (value["endpoint"] != self.route.endpoint or not isinstance(payload, dict)
                 or set(payload) != set(expected) | {"messages"}
                 or any(payload[k] != v or type(payload[k]) is not type(v) for k, v in expected.items())):

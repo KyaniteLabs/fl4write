@@ -101,8 +101,12 @@ The optional source-bound desk-disposition path targets 1113 passing + 3 skipped
 by default and 1116 passing + 0 skipped live; current-head validation is pending.
 The configured PAT identity and pending-state authority regressions target 1119
 passing + 3 skipped by default and 1122 passing + 0 skipped live; current-head validation is pending.
-The resumable recon, proxy boundary and authenticated refresh changes target 1156 passing + 3 skipped by default
-and 1159 passing + 0 skipped live; current-head validation is pending.
+The resumable recon, proxy boundary and authenticated refresh changes target 1162 passing + 3 skipped by default
+and 1165 passing + 0 skipped live; current-head validation is pending.
+
+For providers that support it, a model route can set `thinking: enabled` or
+`thinking: disabled`. Omitting it preserves the provider default. The proxy pins
+this setting to the selected route, so isolated callers cannot override it.
 Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
 runtime model credentials. The default suite skips those three paid model

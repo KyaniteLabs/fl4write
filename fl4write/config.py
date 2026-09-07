@@ -136,6 +136,7 @@ class ModelRoute(_StrictModel):
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4000, ge=1, le=1_048_576)
     seed: int | None = None  # reproducibility for regression triage
+    thinking: typing.Literal["enabled", "disabled"] | None = None
 
 
 class FixLaneConfig(_StrictModel):

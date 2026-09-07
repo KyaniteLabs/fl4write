@@ -246,6 +246,8 @@ def _model_payload(route: ModelRoute, prompt: str, mode: str = "pr", system: str
     }
     if route.seed is not None:
         payload["seed"] = route.seed
+    if route.thinking is not None:
+        payload["thinking"] = {"type": route.thinking}
     return payload
 
 
