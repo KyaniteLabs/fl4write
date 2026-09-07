@@ -47,6 +47,62 @@ def _config(*, github: bool = True, enabled: bool = True) -> RepoConfig:
     })
 
 
+@pytest.mark.parametrize("github", [True, False])
+def test_merged_refresh_fetches_selected_repo_with_scoped_auth(tmp_path, monkeypatch, github):
+    repo, head = _repo(tmp_path)
+    remote = tmp_path / "remote"
+    _run("git", "clone", str(repo), str(remote), cwd=tmp_path)
+    (remote / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+    _run("git", "add", ".", cwd=remote)
+    _run("git", "-c", "user.name=T", "-c", "user.email=t@invalid",
+         "commit", "-m", "repair", cwd=remote)
+    merged = _run("git", "rev-parse", "HEAD", cwd=remote)
+    _run("git", "remote", "add", "origin", "https://unrelated.invalid/wrong.git", cwd=repo)
+    config = _config(github=github)
+    monkeypatch.setenv("TEST_FORGE_TOKEN", "synthetic-token")
+    monkeypatch.setattr("fl4write.appauth.get_repository_token", lambda *args: "synthetic-token")
+    real_git = ef._git
+    helpers = []
+    def fetch(args, cwd=None, env=None, timeout=120):
+        assert "synthetic-token" not in repr(args)
+        assert args[-2:] == [ef._remote_url(config.forges["origin"], config.repo), merged]
+        assert env["FL4WRITE_PUSH_TOKEN"] == "synthetic-token"
+        helpers.append(Path(env["GIT_ASKPASS"]))
+        assert helpers[-1].is_file()
+        assert "TEST_FORGE_TOKEN" not in os.environ
+        return real_git(["fetch", "--no-tags", "--", str(remote), merged], cwd, env, timeout)
+    monkeypatch.setattr(ef, "_git", fetch)
+    ef.fetch_merged_head(repo, config, merged)
+    assert _run("git", "rev-parse", "HEAD", cwd=repo) == head
+    _run("git", "merge", "--ff-only", merged, cwd=repo)
+    assert _run("git", "rev-parse", "HEAD", cwd=repo) == merged
+    assert _run("git", "remote", "get-url", "origin", cwd=repo) == "https://unrelated.invalid/wrong.git"
+    assert os.environ["TEST_FORGE_TOKEN"] == "synthetic-token"
+    assert helpers and not any(p.exists() for p in helpers)
+
+
+def test_merged_refresh_rejects_invalid_sha_before_auth(tmp_path, monkeypatch):
+    def forbidden(*args):
+        pytest.fail("invalid merge identity must not acquire credentials")
+    monkeypatch.setattr(ef, "_credential", forbidden)
+    with pytest.raises(ef.FixError):
+        ef.fetch_merged_head(tmp_path, _config(), "--upload-pack=unsafe")
+
+
+def test_merged_refresh_failure_cleans_credentials_and_redacts(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_FORGE_TOKEN", "synthetic-token")
+    helpers = []
+    def fail(args, cwd=None, env=None, timeout=120):
+        helpers.append(Path(env["GIT_ASKPASS"]))
+        raise ef.FixError("upstream echoed synthetic-token")
+    monkeypatch.setattr(ef, "_git", fail)
+    with pytest.raises(ef.FixError) as exc:
+        ef.fetch_merged_head(tmp_path, _config(github=False), "a" * 40)
+    assert "synthetic-token" not in str(exc.value)
+    assert os.environ["TEST_FORGE_TOKEN"] == "synthetic-token"
+    assert helpers and not any(p.exists() for p in helpers)
+
+
 @pytest.mark.parametrize("branch", ["main", "feature/exhaustive-loop-draft"])
 def test_forgejo_head_uses_branch_endpoint_and_commit_id(monkeypatch, branch):
     forge = ef._Forge(_config(github=False).forges["origin"], "synthetic-token")

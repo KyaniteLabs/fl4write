@@ -552,6 +552,20 @@ def _askpass(token: str) -> Iterator[dict[str, str]]:
         shutil.rmtree(directory, ignore_errors=True)
 
 
+def fetch_merged_head(repo: Path, config: RepoConfig, merged_head: str) -> None:
+    """Fetch a verified merge from the selected forge with scoped credentials."""
+    if not isinstance(merged_head, str) or not _SHA.fullmatch(merged_head):
+        raise FixError("verified merge identity is invalid")
+    _, binding = _primary(config)
+    try:
+        with _credential(config, binding) as token, _askpass(token) as env:
+            _git(["-c", "credential.helper=", "-c", "http.extraHeader=",
+                  "-c", "http.followRedirects=false", "fetch", "--no-tags", "--",
+                  _remote_url(binding, config.repo), merged_head], repo, env=env)
+    except (FixError, OSError, subprocess.SubprocessError):
+        raise FixError("authenticated merged-head fetch unavailable") from None
+
+
 def _receipt(path: Path, result: dict) -> None:
     path.mkdir(parents=True, exist_ok=True)
     tmp = path / ("." + _RECEIPT + ".tmp")

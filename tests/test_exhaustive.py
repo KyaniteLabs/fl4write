@@ -426,10 +426,10 @@ def test_red_post_merge_suite_is_contained_and_retains_merge_receipt(tmp_path, m
     args.enable_fixes = True
     receipt = {"status": "merged", "merged_head": merged, "pr_number": 7}
     monkeypatch.setattr(exhaustive, "_request_owned_fixes", lambda *a: receipt)
-    real_git = exhaustive._git
-    def git(path, *argv):
-        return "" if argv[0] == "fetch" else real_git(path, *argv)
-    monkeypatch.setattr(exhaustive, "_git", git)
+    from fl4write import exhaustive_fix
+    observed = []
+    monkeypatch.setattr(exhaustive_fix, "fetch_merged_head",
+                        lambda path, config, sha: observed.append((path, sha)))
     def red(command, tree, junit, timeout):
         junit.write_text('<testsuite tests="1" failures="1"><testcase name="red"><failure/></testcase></testsuite>')
         raise exhaustive.NonGreen("assertion failed", {
@@ -442,6 +442,7 @@ def test_red_post_merge_suite_is_contained_and_retains_merge_receipt(tmp_path, m
     assert state["ledger"][-1]["tested_head"] == merged
     assert not state["ledger"][-1]["green"]
     assert _git(repo, "rev-parse", "HEAD") == merged
+    assert observed == [(repo, merged)]
     assert list(state_dir.glob("*/escalation.json"))
 
 

@@ -809,7 +809,12 @@ def run(args: argparse.Namespace) -> int:
                                                    state_dir / "fixes" / head)
                         if _git(repo, "rev-parse", "HEAD") != head or _git(repo, "status", "--porcelain"):
                             raise Deferred("local checkout changed during atomic fix")
-                        _git(repo, "fetch", "origin", fix["merged_head"])
+                        from .exhaustive_fix import FixError, fetch_merged_head
+
+                        try:
+                            fetch_merged_head(repo, config, fix["merged_head"])
+                        except FixError as exc:
+                            raise Deferred(str(exc)) from exc
                         _git(repo, "merge", "--ff-only", fix["merged_head"])
                         if _git(repo, "rev-parse", "HEAD") != fix["merged_head"]:
                             raise Deferred("local refresh did not reach verified merged HEAD")
