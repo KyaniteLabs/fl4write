@@ -11,21 +11,69 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+import urllib.error
 import urllib.request
 
 MAX_REQUEST = 256 * 1024
 MAX_RESPONSE = 1024 * 1024
 MAX_FRAME = MAX_RESPONSE + 64
+MAX_CONNECTIONS = 8
+FRAME_TIMEOUT_S = 5
+_ERROR_MESSAGES = {
+    "proxy_error": "model proxy rejected request or provider unavailable",
+    "provider_http": "provider returned an HTTP error",
+    "provider_timeout": "provider deadline exceeded",
+    "transport_error": "provider connection failed",
+    "invalid_response": "provider returned an invalid response",
+    "response_too_large": "provider response exceeds limit",
+    "request_timeout": "model request frame deadline exceeded",
+}
 
 
 class ProxyError(RuntimeError):
-    pass
+    def __init__(self, message=None, *, code="proxy_error", http_status=None, retry_after=None):
+        self.code = code if isinstance(code, str) and code in _ERROR_MESSAGES else "proxy_error"
+        self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
+        self.retry_after = retry_after if type(retry_after) is int and 0 <= retry_after <= 86400 else None
+        description = message if message is not None else _ERROR_MESSAGES[self.code]
+        if self.http_status is not None:
+            description += f" (HTTP {self.http_status})"
+        super().__init__(description)
 
 
-def _read(stream, size):
+def _error_response(exc):
+    # Only allowlisted metadata crosses process/socket boundaries, never exception text.
+    error = exc if isinstance(exc, ProxyError) else ProxyError()
+    return {"ok": False, "error": {"code": error.code, "http_status": error.http_status,
+                                   "retry_after": error.retry_after}}
+
+
+def _unwrap(response):
+    if not isinstance(response, dict) or response.get("ok") is not True:
+        value = response.get("error", {}) if isinstance(response, dict) else {}
+        value = value if isinstance(value, dict) else {}
+        raise ProxyError(code=value.get("code"), http_status=value.get("http_status"),
+                         retry_after=value.get("retry_after"))
+    if not isinstance(response.get("data"), dict):
+        raise ProxyError(code="invalid_response")
+    return response["data"]
+
+
+def _read(stream, size, deadline=None):
     chunks = []
     while size:
-        data = stream.recv(size)
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ProxyError(code="request_timeout")
+            stream.settimeout(remaining)
+        try:
+            data = stream.recv(size)
+        except TimeoutError as exc:
+            if deadline is not None:
+                raise ProxyError(code="request_timeout") from exc
+            raise
         if not data:
             raise ProxyError("incomplete model transport frame")
         chunks.append(data)
@@ -33,11 +81,11 @@ def _read(stream, size):
     return b"".join(chunks)
 
 
-def _receive(stream, limit):
-    size = struct.unpack("!I", _read(stream, 4))[0]
+def _receive(stream, limit, deadline=None):
+    size = struct.unpack("!I", _read(stream, 4, deadline))[0]
     if size > limit:
         raise ProxyError("model transport frame exceeds limit")
-    return json.loads(_read(stream, size))
+    return json.loads(_read(stream, size, deadline))
 
 
 def _encode(value, limit):
@@ -58,11 +106,7 @@ def request(socket_path: str, endpoint: str, payload: dict) -> dict:
         stream.connect(socket_path)
         _send(stream, {"endpoint": endpoint, "payload": payload}, MAX_REQUEST)
         response = _receive(stream, MAX_FRAME)
-    if not isinstance(response, dict) or response.get("ok") is not True:
-        raise ProxyError("model proxy rejected request or provider unavailable")
-    if not isinstance(response.get("data"), dict):
-        raise ProxyError("model proxy returned invalid data")
-    return response["data"]
+    return _unwrap(response)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -80,16 +124,39 @@ def _provider(value):
     with urllib.request.build_opener(_NoRedirect()).open(req, timeout=180) as response:
         raw = response.read(MAX_RESPONSE + 1)
     if len(raw) > MAX_RESPONSE:
-        raise ProxyError("provider response exceeds limit")
-    data = json.loads(raw)
+        raise ProxyError(code="response_too_large")
+    try:
+        data = json.loads(raw)
+    except (ValueError, UnicodeError) as exc:
+        raise ProxyError(code="invalid_response") from exc
     if not isinstance(data, dict):
-        raise ProxyError("provider response is not an object")
+        raise ProxyError(code="invalid_response")
     return _encode(data, MAX_RESPONSE)
 
 
 class _Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
     block_on_close = False
+
+    def __init__(self, *args, **kwargs):
+        self.admissions = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        if not self.admissions.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.admissions.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.admissions.release()
 
 
 class ModelProxy:
@@ -131,10 +198,14 @@ class ModelProxy:
             except subprocess.TimeoutExpired as exc:
                 child.kill()
                 child.communicate()
-                raise ProxyError("provider deadline exceeded") from exc
-            if child.returncode or len(raw) > MAX_RESPONSE:
-                raise ProxyError("provider request failed")
-            return json.loads(raw)
+                raise ProxyError(code="provider_timeout") from exc
+            if child.returncode or len(raw) > MAX_FRAME:
+                raise ProxyError(code="transport_error")
+            try:
+                response = json.loads(raw)
+            except (ValueError, UnicodeError) as exc:
+                raise ProxyError(code="invalid_response") from exc
+            return _unwrap(response)
         finally:
             with self.lock:
                 self.children.discard(child)
@@ -191,14 +262,15 @@ class ModelProxy:
                         return
                     owner.streams.add(self.request)
                     owner.handlers.add(threading.current_thread())
-                self.request.settimeout(190)
                 try:
-                    value = _receive(self.request, MAX_REQUEST)
+                    value = _receive(self.request, MAX_REQUEST, time.monotonic() + FRAME_TIMEOUT_S)
                     response = {"ok": True, "data": owner._dispatch(value)}
+                    self.request.settimeout(FRAME_TIMEOUT_S)
                     _send(self.request, response, MAX_FRAME)
-                except Exception:
+                except Exception as exc:
                     try:
-                        _send(self.request, {"ok": False}, MAX_RESPONSE)
+                        self.request.settimeout(FRAME_TIMEOUT_S)
+                        _send(self.request, _error_response(exc), MAX_FRAME)
                     except OSError:
                         pass
                 finally:
@@ -242,6 +314,16 @@ class ModelProxy:
 
 if __name__ == "__main__" and sys.argv[1:] == ["--provider"]:
     try:
-        sys.stdout.buffer.write(_provider(json.load(sys.stdin)))
-    except Exception:
-        sys.exit(1)
+        result = {"ok": True, "data": json.loads(_provider(json.load(sys.stdin)))}
+    except urllib.error.HTTPError as exc:
+        retry = exc.headers.get("Retry-After", "") if exc.headers else ""
+        retry = int(retry) if retry.isascii() and retry.isdecimal() and len(retry) <= 5 else None
+        result = _error_response(ProxyError(code="provider_http", http_status=exc.code, retry_after=retry))
+    except TimeoutError:
+        result = _error_response(ProxyError(code="provider_timeout"))
+    except urllib.error.URLError as exc:
+        code = "provider_timeout" if isinstance(exc.reason, TimeoutError) else "transport_error"
+        result = _error_response(ProxyError(code=code))
+    except Exception as exc:
+        result = _error_response(exc)
+    sys.stdout.buffer.write(_encode(result, MAX_FRAME))
