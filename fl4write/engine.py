@@ -508,7 +508,12 @@ def _post_merge_sweep(
         st["pm_shadow_seen"] = pm_shadow
     elif not config.shadow and isinstance(st.get("pm_shadow_seen"), dict):
         st.pop("pm_shadow_seen", None)
-    if terminal:
+    # Shadow uses pm_shadow_seen as its private dedupe belt. Advancing the live
+    # cursor here can bury earlier shadow-only rows when later rows are already
+    # terminal in live state: `terminal` counts those later rows, while the
+    # prefix slice still contains the shadow rows. A shadow sweep therefore
+    # never owns the live watermark.
+    if terminal and not config.shadow:
         if _row_gap >= 0 and terminal > _row_gap:
             # MECE round-6 (luna-max F6-C013): never advance past a malformed
             # row — the sweep re-lists it next cycle and the alert persists
