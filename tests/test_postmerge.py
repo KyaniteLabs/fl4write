@@ -247,6 +247,30 @@ class TestPostMergeSweep:
         r2 = _run(tmp_path, forge, monkeypatch, diff=diff)
         assert r2.postmerge_reviewed == 2 and seen == [1, 1, 2]
 
+    def test_shadow_sweep_never_advances_live_watermark_past_shadow_prs(
+        self, tmp_path, monkeypatch
+    ):
+        """Later already-reviewed rows must not move the live cursor past a
+        shadow-only row that still needs a live post after cutover."""
+        forge = FakeForge()
+        forge.merged_prs = [
+            make_pr(number=n, head_sha=str(n) * 40, merged_at=_hours_ago(3, f"12:0{n}:00"))
+            for n in range(1, 5)
+        ]
+        state_path = tmp_path / "state.json"
+        st = state.load_state(state_path)
+        initial_watermark = _hours_ago(3, "12:00:00")
+        st["merged_since"] = initial_watermark
+        for pr in forge.merged_prs[2:]:
+            state.mark_reviewed(st, pr.number, pr.head_sha, "reviewed:0")
+        state.save_state(state_path, st)
+
+        _run(tmp_path, forge, monkeypatch, shadow=True)
+
+        after = state.load_state(state_path)
+        assert state.merged_watermark(after) == initial_watermark
+        assert state.needs_review(after, 1, forge.merged_prs[0].head_sha)
+
     def test_disabled_by_default_never_lists(self, tmp_path, monkeypatch):
         forge = FakeForge()
         forge.merged_prs = [make_pr(number=9, merged_at=_hours_ago(3))]

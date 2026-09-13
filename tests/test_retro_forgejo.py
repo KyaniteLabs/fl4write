@@ -16,6 +16,8 @@ Laws pinned:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from fl4write import config as cfg
@@ -25,13 +27,10 @@ from fl4write.forges import ForgeAdapter, ForgeError, ForgejoAdapter
 from fl4write.models import Finding, PullRequest
 
 
-def _old_date(day_offset: int, hhmm: str) -> str:
-    """A merged_at safely inside the default 90d lookback for the next ~60
-    days of test runs (fixed calendar dates would silently fall out of the
-    window and rot these tests)."""
-    from datetime import datetime, timedelta, timezone
-
-    return (datetime.now(timezone.utc) - timedelta(days=day_offset)).strftime("%Y-%m-%d") + f"T{hhmm}Z"
+def _old_date(day_offset: int, hhmm: str, *, now: datetime | None = None) -> str:
+    """Return a UTC fixture timestamp relative to one explicit clock."""
+    anchor = now or datetime.now(timezone.utc)
+    return (anchor - timedelta(days=day_offset)).strftime("%Y-%m-%d") + f"T{hhmm}Z"
 
 FRESH = Finding(rule_id="secrets", severity="Major", path="x.py", line=3, message="live finding")
 ZOMBIE = Finding(rule_id="secrets", severity="Major", path="gone/old.py", line=3, message="stale finding")
@@ -114,8 +113,24 @@ def _run(forge, monkeypatch, state_path, findings, **cfg_over):
     return run_cycle(c, state_path, get_diff=lambda pr: ({"x.py"}, "diff"))
 
 
-def _seed_watermark(state_path, iso="2026-08-31T23:18:24Z"):
+def _seed_watermark(state_path, iso=None, *, now: datetime | None = None):
+    # Keep the forward watermark newer than the ten-day-old retro fixtures but
+    # on the same relative clock. A fixed calendar watermark eventually moves
+    # behind them and makes the audit correctly select zero rows.
+    iso = iso or _old_date(5, "23:18:24", now=now)
     state.save_state(state_path, {"version": 1, "prs": {}, "merged_since": iso})
+
+
+def test_relative_retro_fixture_stays_below_watermark_across_year_rollover(tmp_path):
+    anchor = datetime(2027, 1, 3, 8, 0, tzinfo=timezone.utc)
+    state_path = tmp_path / "state.json"
+    _seed_watermark(state_path, now=anchor)
+
+    merged_at = _old_date(10, "12:00:00", now=anchor)
+    watermark = state.merged_watermark(state.load_state(state_path))
+    assert merged_at == "2026-12-24T12:00:00Z"
+    assert watermark == "2026-12-29T23:18:24Z"
+    assert merged_at < watermark
 
 
 class TestRetroSweep:
