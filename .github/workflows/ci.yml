@@ -5,10 +5,13 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    container:
+      image: python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
     steps:
+      - name: Install checkout runtime
+        run: apt-get update && apt-get install -y --no-install-recommends git nodejs
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
+        with: {persist-credentials: false}
       - run: pip install -e ".[dev]"
       - run: python3 -m ruff check .
       - run: python3 -m pytest tests/ -q
