@@ -801,3 +801,43 @@ Same-path heuristics cannot identify every rename destination. Use destination
 metadata before the first hunk or binary body, and share that identity across
 forge intake, source grounding and line spans. Test real Git renames against
 the final rendered review so a dropped finding cannot masquerade as clean.
+## 75. The retro fixture time-rot: five instances in, time to guard the corpus (2026-09-15)
+
+PILOT.md line 58 already names fixture time-rot — "hardcoded dates in
+tests expire, use time-relative fixtures, four rounds of this already."
+The retro test suite (`tests/test_retro_forgejo.py`) was the fifth: the
+helper `_seed_watermark` used a fixed `'2026-08-31'` `merged_since`
+that fell behind every PR date by 2026-09-05 (`now - 10d = Sep 5`), so
+`p.merged_at <= cursor` was FALSE for every PR and `retro_reviewed`
+was always 0. **Seven tests silently failed** until the helper was
+made time-relative (local fix 28659b7; landed equivalently as the explicit-clock
+anchor repair abf003e via PR #22), matching the
+`_old_date` / `_hours_ago` / `_r4_date` pattern used elsewhere.
+
+(Entry renumbered 63->75 at integration: the exhaustive-loop candidate had
+already extended the ledger to 74.)
+
+The same trap exists for any future contributor: copy-paste a real
+date into a fixture and the suite looks green today, then fails in
+two weeks without explanation. The cure is `tests/test_fixture_time_rot.py`,
+a meta-guard with three roles: (1) lock the retro helper as
+time-relative by inspecting its source and asserting its watermark
+strictly dominates `_old_date(...)`; (2) scan the whole test corpus
+for bare ISO literals used as `merged_since` / `merged_at` /
+`retro_cursor` without a recognized helper or a `# time-rot-safe:`
+note, and fail CI loudly with the exact file/line; (3) lock the
+calculation `now - _old_date(N)` to the configured `day_offset ± 1.5d`
+window so wall-clock-time-of-day variance never silently breaks it.
+A fifth pin proves the scanner itself by planting a fake fixture in
+`tmp_path` and asserting `_scan_corpus` finds it.
+
+Tests directly affected: 7 retro tests came back green
+(`tests/test_retro_forgejo.py`); 5 new guard tests
+(`tests/test_fixture_time_rot.py`); default suite bumped from 672 →
+674 passing + 3 skipped, live suite 672 → 677.
+
+**Law:** any module that writes a fixture timestamp must import a
+shared time-relative helper OR carry an explicit `# time-rot-safe:`
+justification on the same line. The corpus guard will fail CI either
+way; the question is whether a future contributor finds out before
+the next calendar roll instead of after.
