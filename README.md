@@ -103,6 +103,8 @@ The configured PAT identity and pending-state authority regressions target 1119
 passing + 3 skipped by default and 1122 passing + 0 skipped live; current-head validation is pending.
 The resumable recon, proxy boundary and authenticated refresh changes target 1162 passing + 3 skipped by default
 and 1165 passing + 0 skipped live; current-head validation is pending.
+The 2026-09-16 integration (main merged into the candidate + fixture time-rot
+corpus guard) measures **1169 passing + 3 skipped** on the default suite.
 
 For providers that support it, a model route can set `thinking: enabled` or
 `thinking: disabled`. Omitting it preserves the provider default. The proxy pins

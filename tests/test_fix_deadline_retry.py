@@ -93,7 +93,7 @@ def test_no_deadline_preserves_existing_fix_behavior(lane):
 def test_real_cycle_resumes_without_another_review(lane, monkeypatch, tmp_path, post_merge):
     pr, config, forge, st, clock, calls, findings = lane
     config.post_merge.enabled = post_merge
-    pr.merged_at = "2026-09-01T12:00:00Z"
+    pr.merged_at = "2026-09-01T12:00:00Z"  # time-rot-safe: compared only against the seeded watermark below, never against wall clock
     forge.prs = [] if post_merge else [pr]
     forge.list_merged_prs = lambda *a: [pr]
     monkeypatch.setattr(engine, "adapter_for", lambda *a: forge)
@@ -105,7 +105,7 @@ def test_real_cycle_resumes_without_another_review(lane, monkeypatch, tmp_path, 
         return ReviewDoc(pr=pr, findings=findings)
     monkeypatch.setattr("fl4write.analyzer.analyze", analyze)
     path = tmp_path / "state.json"
-    state.save_state(path, {"version": 1, "prs": {}, "merged_since": "2026-09-01T00:00:00Z"})
+    state.save_state(path, {"version": 1, "prs": {}, "merged_since": "2026-09-01T00:00:00Z"})  # time-rot-safe: compared only to pr.merged_at above, never to now()
     def cycle():
         return engine.run_cycle(config, path, get_diff=lambda p: ({"x.py"}, "diff"),
                                 run_fixes=True, deadline=100)
@@ -113,7 +113,7 @@ def test_real_cycle_resumes_without_another_review(lane, monkeypatch, tmp_path, 
     assert first.reviewed == 1
     assert calls == []
     if post_merge:
-        assert state.load_state(path)["merged_since"] == "2026-09-01T00:00:00Z"
+        assert state.load_state(path)["merged_since"] == "2026-09-01T00:00:00Z"  # time-rot-safe: pins the seeded value; no wall-clock compare
     clock[0] = 0
     second = cycle()
     assert second.reviewed == 0

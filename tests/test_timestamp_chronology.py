@@ -62,7 +62,7 @@ def adapter(kind, stamps):
 def test_actual_adapters_capped_postmerge_reviews_every_pr(tmp_path, monkeypatch, kind, stamps):
     forge = adapter(kind, stamps)
     config = make_config(post_merge={'enabled': True, 'max_per_cycle': 1})
-    st = {'prs': {}, 'merged_since': '2026-09-01T00:00:00Z'}
+    st = {'prs': {}, 'merged_since': '2026-09-01T00:00:00Z'}  # time-rot-safe: stamps are compared pairwise (fractional/tz spellings), never to now()
     reviewed = []
 
     def review(pr, *args, **kwargs):

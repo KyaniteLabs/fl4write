@@ -159,10 +159,22 @@ def test_retro_seed_watermark_is_time_relative(tmp_path):
         f"LEARNINGS #63 / PILOT.md line 58 — fixture time-rot. "
         f"Saw: {bad.group(0) if bad else '?'}"
     )
-    # Must reference datetime.now(timezone.utc) to stay wall-clock anchored
-    assert "datetime.now(timezone.utc)" in src, (
-        "_seed_watermark must anchor on datetime.now(timezone.utc) so the "
-        "watermark stays ahead of _old_date-based PR dates."
+    # Must stay wall-clock anchored: either the helper itself calls
+    # datetime.now(timezone.utc), or it delegates to a same-module helper
+    # that does (the explicit-clock anchor form landed as abf003e: the
+    # helper takes now= and forwards it to _old_date, which anchors on
+    # datetime.now(timezone.utc)). A refactor that severs BOTH paths
+    # trips this pin.
+    anchored = "datetime.now(timezone.utc)" in src
+    if not anchored:
+        from test_retro_forgejo import _old_date
+        delegates = "_old_date" in src
+        anchor_src = inspect.getsource(_old_date)
+        anchored = delegates and "datetime.now(timezone.utc)" in anchor_src
+    assert anchored, (
+        "_seed_watermark must anchor (directly or via _old_date) on "
+        "datetime.now(timezone.utc) so the watermark stays ahead of "
+        "_old_date-based PR dates."
     )
 
     # Behavioral check: writing through the helper lands a watermark in
