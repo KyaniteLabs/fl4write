@@ -1,4 +1,5 @@
 """Trusted container supervisor; repository tests run under a different uid."""
+import base64
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,33 @@ REPORT = "/evidence/report.xml"
 MAX_REPORT = 16 * 1024 * 1024
 
 
+def _read_report():
+    """Snapshot the JUnit report through the hardened open contract.
+
+    Returns base64 of at most MAX_REPORT bytes, or None when the report is
+    absent, oversized, or not a regular file. Called by the trusted
+    supervisor immediately after the test process group is killed, so the
+    bytes the host seals as evidence are frozen before any survivor can
+    act (2026-09-16, adversarial Arch-1)."""
+    try:
+        descriptor = os.open(REPORT, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_REPORT:
+            return None
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            payload = stream.read(MAX_REPORT + 1)
+        if len(payload) > MAX_REPORT:
+            return None
+        return base64.b64encode(payload).decode("ascii")
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+
+
 def main():
     mode = sys.argv[1]
     if mode == "wait":
@@ -24,15 +52,10 @@ def main():
         sys.stdout.write(STATUS.read_text())
         return 0
     if mode == "report":
-        descriptor = os.open(REPORT, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        try:
-            info = os.fstat(descriptor)
-            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_REPORT:
-                return 2
-            with os.fdopen(descriptor, "rb", closefd=False) as stream:
-                sys.stdout.buffer.write(stream.read(MAX_REPORT + 1))
-        finally:
-            os.close(descriptor)
+        embedded = _read_report()
+        if embedded is None:
+            return 2
+        sys.stdout.buffer.write(base64.b64decode(embedded))
         return 0
     if mode != "run":
         return 2
@@ -53,6 +76,7 @@ def main():
         env.update(FL4WRITE_EVAL="1", FL4WRITE_LIVE_EVAL_PROXY_SOCKET="/model-proxy/model.sock",
                    FL4WRITE_EVAL_MODEL=json.dumps(route))
     result = {"kind": "deferred", "reason": "test process unavailable"}
+    process = None
     try:
         process = subprocess.Popen(command, cwd="/work", env=env, user=uid, group=gid,
                                    extra_groups=[], start_new_session=True,
@@ -61,11 +85,25 @@ def main():
         try:
             result = {"kind": "completed", "returncode": process.wait(timeout=timeout)}
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
             result = {"kind": "deferred", "reason": "test process timed out"}
+        finally:
+            # 2026-09-16 (adversarial Arch-1): wait() reaps only the direct
+            # child — detached grandchildren sharing the process group used
+            # to survive into the report readback window and could replace
+            # /evidence/report.xml (mode 1777) with an all-green forgery.
+            # Kill the whole group on EVERY exit path, then snapshot the
+            # report bytes into the ROOT-OWNED /control status document so
+            # the host never trusts evidence the test uid can still write.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            process.wait()
     except OSError:
         pass
+    embedded = _read_report()
+    if embedded is not None:
+        result["report_b64"] = embedded
     temporary = STATUS.with_suffix(".tmp")
     temporary.write_text(json.dumps(result))
     temporary.replace(STATUS)

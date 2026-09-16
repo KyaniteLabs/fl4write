@@ -665,7 +665,10 @@ def run(args: argparse.Namespace) -> int:
                 state = _load_state(state_path, identity)
                 if state["certified_sha"]:
                     return 0
-                raise Deferred("publication recovered; next invocation starts a fresh round")
+                # NEW-2 (2026-09-16): the transaction COMPLETED — persisting
+                # state then raising Deferred produced a spurious
+                # "human_action_required" escalation for a success. Fall
+                # through and start the fresh round below instead.
             current = _git(repo, "rev-parse", "HEAD")
             if state["head"] != current:
                 if state["certified_sha"]:

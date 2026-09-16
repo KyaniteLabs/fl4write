@@ -387,14 +387,19 @@ def _fix_lane(
 
 
 def _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline, *, post_merge=False):
-    """Resume only unattempted fixes; a completed review stays completed."""
+    """Resume only unattempted fixes; a completed review stays completed.
+
+    Returns "gated-off" when the fix lane is structurally unable to run
+    (run_fixes=False, fix.enabled=false, shadow, or a non-GitHub primary —
+    the Forgejo cutover shape), "dropped" when a stale/malformed record was
+    cleared, and "attempted" when the lane actually executed for this PR."""
     if not (run_fixes and config.fix.enabled and not config.shadow and primary.name == "github"):
-        return
+        return "gated-off"
     rec = st["prs"].get(str(pr.number), {})
     if rec.get("pending_fix_sha") != pr.head_sha:
         rec.pop("pending_fixes", None)
         rec.pop("pending_fix_sha", None)
-        return
+        return "dropped"
     from pydantic import ValidationError
     try:
         rows = rec.get("pending_fixes", [])
@@ -405,12 +410,13 @@ def _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline, *, po
         rec.pop("pending_fixes", None)
         rec.pop("pending_fix_sha", None)
         report.alerts.append(f"#{pr.number}: malformed pending fixes dropped")
-        return
+        return "dropped"
     try:
         _fix_lane(pr, findings, config, primary, st, report,
                   post_merge=post_merge, deadline=deadline)
     except ForgeError as exc:
         report.alerts.append(f"#{pr.number}: deferred fix forge error contained: {exc}")
+    return "attempted"
 
 
 def _poll_fix_merges(config: RepoConfig, primary: ForgeAdapter, report: CycleReport) -> None:
@@ -526,11 +532,37 @@ def _post_merge_sweep(
             terminal += 1
             continue
         if not state.needs_review(st, pr.number, pr.head_sha):
-            _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline,
-                             post_merge=True)
+            resume = _resume_fix_lane(pr, config, primary, st, report, run_fixes,
+                                      deadline, post_merge=True)
             state.save_state(state_path, st)
             if st["prs"][str(pr.number)].get("pending_fixes"):
-                st.setdefault("merged_since", since)
+                if config.shadow:
+                    # shadow touches no live belts — skip without mutation
+                    continue
+                if resume == "gated-off":
+                    # PM 2026-09-16 (adversarial finding A1): a structurally
+                    # off fix lane (Forgejo cutover, fixes disabled, shadow)
+                    # used to wedge the merged sweep on this PR forever —
+                    # silent, un-healing, blocking every later merge. The
+                    # config opted out of fixes; the review itself is
+                    # complete, so drop the stale record WITH an alert and
+                    # let the sweep proceed.
+                    st["prs"][str(pr.number)].pop("pending_fixes", None)
+                    st["prs"][str(pr.number)].pop("pending_fix_sha", None)
+                    state.save_state(state_path, st)
+                    report.alerts.append(
+                        f"#{pr.number}: stale pending fixes dropped — fix lane is off "
+                        "(fixes disabled, shadow, or non-GitHub primary); review itself complete"
+                    )
+                    terminal += 1
+                    continue
+                # attempted-but-deferred (e.g. deadline): the record stays
+                # for the next cycle's resume — but never silently
+                report.alerts.append(
+                    f"#{pr.number}: merged sweep stalled — pending fixes await resume"
+                )
+                if not config.shadow:  # A2 (2026-09-16): shadow never owns the live watermark
+                    st.setdefault("merged_since", since)
                 break
             terminal += 1  # already reviewed at this SHA (e.g. while open)
             continue
@@ -556,7 +588,8 @@ def _post_merge_sweep(
             continue  # NOT terminal — the live cutover re-reviews and posts
         if outcome == "fix-deferred":
             report.postmerge_reviewed += 1
-            st.setdefault("merged_since", since)
+            if not config.shadow:  # A2 (2026-09-16): shadow never owns the live watermark
+                st.setdefault("merged_since", since)
             break
         if outcome in ("reviewed", "model-failed-cap"):
             if outcome == "reviewed":
@@ -1224,7 +1257,12 @@ def _retro_sweep(
     from datetime import datetime, timedelta, timezone
 
     if config.shadow:
-        # MECE round-6 (luna-max F6-C006): retro under shadow is a dry run
+        # MECE round-6 (luna-max F6-C006): retro under shadow is a dry run —
+        # ARCH-2 NOTE (2026-09-16): this early return SUBSUMES the
+        # retro_shadow_seen belt machinery below (belt load/write and the
+        # per-PR shadow branch are unreachable while this return stands);
+        # they are retained for history. Do not "restore" shadow retro by
+        # deleting this return without deleting the belt code too.
         # with no consumer and every outcome path leaked live state (seen
         # belts, cursors, clean/deferred/park records) — skip entirely.
         log.info("retro: shadow mode — sweep skipped (dry-run law)")
@@ -1286,7 +1324,7 @@ def _retro_sweep(
     # MECE round-5 (sol F5-001): shadow runs keep their own dedupe belt and
     # never touch live cursors/belts — the live cutover must re-audit what
     # shadow only looked at
-    shadow_belt: dict[str, str] = {}
+    shadow_belt: dict[str, str] = {}  # unreachable under the F6-C006 early return (ARCH-2)
     if config.shadow:
         sb = st.get("retro_shadow_seen")
         if isinstance(sb, dict):

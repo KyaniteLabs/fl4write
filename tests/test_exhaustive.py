@@ -464,3 +464,70 @@ def test_runner_outage_retries_sealed_recon_without_another_model_call(tmp_path,
     after = _state(state_dir)
     assert after["round"] == 1 and after["consecutive_green"] == 1
     assert after["pending_round"] is None
+
+
+# ---- 2026-09-16 security validator: publication containment (NEW-1/2/3) -------
+
+def test_appauth_runtime_error_defers_publication(tmp_path, monkeypatch):
+    """NEW-1: a RuntimeError from appauth (e.g. resolve_installation_id 404
+    on an uninstalled repo) must defer with the staged write retained —
+    pre-fix it escaped run()'s handler and crash-looped every invocation."""
+    import fl4write.exhaustive_transaction as tx
+    from fl4write.exhaustive import Deferred
+
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}")
+    pending = tmp_path / "publication-pending.json"
+    candidate = tmp_path / "publication-candidate.json"
+    candidate.write_text("{}")  # present: this is NOT the orphan path
+    request_body = "marker o/r\nledger"
+
+    class _Adapter:
+        bot_login = "fl4write"
+
+    class _Config:
+        repo = "o/r"
+        bot_login = "fl4write"
+
+        def model_dump(self, mode="json"):
+            return {}
+
+    def boom(*a, **k):
+        raise RuntimeError("installation not found (404)")
+
+    monkeypatch.setattr(tx, "inspect_owned", boom)
+    monkeypatch.setattr(tx, "publish_owned", boom)
+    from contextlib import nullcontext
+    monkeypatch.setattr(tx, "_publication_adapter",
+                        lambda adapter, config: nullcontext(adapter))
+    import fl4write.exhaustive as ex
+
+    fake_state = {"head": "a" * 40, "ledger": [], "round": 0,
+                  "consecutive_green": 0, "green_baseline": [], "green_sha": None}
+    monkeypatch.setattr(ex, "_identity", lambda repo: (repo, "o/r"))
+    monkeypatch.setattr(ex, "_load_state", lambda path, ident: dict(fake_state))
+    monkeypatch.setattr(ex, "_git", lambda *a, **k: "a" * 40)
+    monkeypatch.setattr(tx, "ledger_body", lambda *a, **k: request_body)
+    request = {"version": 1, "repo": "o/r", "issue": 7,
+               "config_sha256": tx._digest({}), "candidate_sha256": tx._digest(fake_state),
+               "certification": False, "body": request_body,
+               "body_sha256": __import__("hashlib").sha256(request_body.encode()).hexdigest()}
+    pending.write_text(__import__("json").dumps(request))
+    with pytest.raises(Deferred, match="publication unresolved"):
+        tx.replay_publication(tmp_path, state_path, _Adapter(), _Config(), 7)
+    assert pending.exists(), "staged write must be retained for the retry"
+
+
+def test_orphaned_pending_is_archived_not_deadlocked(tmp_path, monkeypatch):
+    """NEW-3: a pending transaction whose candidate file is gone must be
+    archived and cleared — pre-fix it failed candidate validation forever."""
+    import fl4write.exhaustive_transaction as tx
+
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}")
+    pending = tmp_path / "publication-pending.json"
+    pending.write_text('{"version": 1, "candidate_sha256": "abc"}')
+    assert tx.replay_publication(tmp_path, state_path, object(), object(), 7) is False
+    assert not pending.exists()
+    archived = list(tmp_path.glob("publication-orphaned-*.json"))
+    assert len(archived) == 1 and archived[0].read_text().count("abc")

@@ -143,6 +143,14 @@ def _live_config():
             raise ValueError("selected evaluation model requires the bounded proxy")
         config.model = cfg.ModelRoute.model_validate(json.loads(selected))
         config.fallback_model = None
+        # Arch-3 (2026-09-16): the assembled route must survive the same
+        # credential-namespace invariants as a loaded config — pre-fix a
+        # hand-built FL4WRITE_EVAL_MODEL could name a reserved/forge-colliding
+        # key_env that RepoConfig validation would have refused.
+        cfg.RepoConfig._no_env_namespace_collisions(
+            {"forges": {k: v.model_dump() for k, v in config.forges.items()},
+             "model": config.model.model_dump(),
+             "fallback_model": None})
     return config
 
 

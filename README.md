@@ -103,10 +103,20 @@ The configured PAT identity and pending-state authority regressions target 1119
 passing + 3 skipped by default and 1122 passing + 0 skipped live; current-head validation is pending.
 The resumable recon, proxy boundary and authenticated refresh changes target 1162 passing + 3 skipped by default
 and 1165 passing + 0 skipped live; current-head validation is pending.
-The 2026-09-16 integration (main merged into the candidate + fixture time-rot
-corpus guard) measures **1169 passing + 3 skipped** on the default suite and
-**1172 passing + 0 skipped** on the live suite (FL4WRITE_EVAL=1, route:
-self-hosted Champion Qwen3.8-27B, operator-approved 2026-09-06).
+The 2026-09-16 integration + adversarial-fix pass measures
+**1177 passing + 3 skipped** on the default suite. The live suite
+(**1172 passing + 0 skipped**) was measured at 474719a — the same
+analyzer/model request path (unchanged since; the later fix pass touched
+cycle, sandbox-collection and publication-containment code only). A live
+re-run at the final tree was blocked when the shared Champion floor service
+went inactive mid-session (documented, not restarted from this desk). Route facts kept separate
+(close-doc lesson 2): the CONFIGURED route remains
+`deepseek-ai/DeepSeek-V4-Flash-0731` via DeepInfra (`fl4write.fl4write.yaml`);
+the 2026-09-16 live run was executed with
+`FL4WRITE_EVAL=1 FL4WRITE_EVAL_CONFIG=<champion-eval.yaml>` pointing at the
+operator-approved self-hosted Champion Qwen3.8-27B (nucbox floor, 2026-09-06
+approval; Ornith selection was DOWN that day). A bare `FL4WRITE_EVAL=1` run
+without the override exercises the configured DeepSeek route, not Champion.
 
 For providers that support it, a model route can set `thinking: enabled` or
 `thinking: disabled`. Omitting it preserves the provider default. The proxy pins

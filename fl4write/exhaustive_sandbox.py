@@ -107,13 +107,29 @@ def run_isolated(command: list[str], tree: Path, evidence: Path, timeout: int, i
             raise SandboxUnavailable("isolated supervisor returned invalid evidence") from exc
         if not isinstance(result, dict) or result.get("kind") != "completed" or type(result.get("returncode")) is not int:
             raise SandboxUnavailable("isolated test process was unavailable or timed out")
-        report = _docker(["docker", "exec", name, "python3", "-I", WORKER, "report"], 20, binary=True)
-        if report.returncode or len(report.stdout) > MAX_REPORT:
-            raise SandboxUnavailable("isolated test report is missing or invalid")
+        # 2026-09-16 (adversarial Arch-1): the report arrives EMBEDDED in the
+        # root-owned supervisor status whenever the runtime supports it —
+        # bytes frozen after the test process group was killed. The separate
+        # `report` exec remains only as a compatibility read for older
+        # runtimes and re-reads the same hardened worker contract.
+        embedded = result.get("report_b64")
+        if isinstance(embedded, str) and embedded:
+            import base64 as _b64
+            try:
+                report_bytes = _b64.b64decode(embedded, validate=True)
+            except (ValueError, TypeError) as exc:
+                raise SandboxUnavailable("isolated supervisor report is not valid base64") from exc
+            if not report_bytes or len(report_bytes) > MAX_REPORT:
+                raise SandboxUnavailable("isolated test report is missing or invalid")
+        else:
+            report = _docker(["docker", "exec", name, "python3", "-I", WORKER, "report"], 20, binary=True)
+            if report.returncode or len(report.stdout) > MAX_REPORT:
+                raise SandboxUnavailable("isolated test report is missing or invalid")
+            report_bytes = report.stdout
         evidence.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(dir=evidence.parent, delete=False) as stream:
             temporary = Path(stream.name)
-            stream.write(report.stdout)
+            stream.write(report_bytes)
             stream.flush()
             os.fsync(stream.fileno())
         try:

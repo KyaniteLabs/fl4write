@@ -41,14 +41,14 @@ from test_retro_forgejo import _seed_watermark as _retro_seed_watermark
 
 _TESTS_DIR = Path(__file__).resolve().parent
 
-# Recognized time-relative helpers — files that LEGITIMATELY mint ISO
-# calendar strings for fixtures. New helpers should be added here and
-# pulled from the SAME `datetime.now(timezone.utc) - …` pattern.
-_TIME_RELATIVE_FILES: frozenset[str] = frozenset({
-    "test_gauntlet_fixes.py",   # _r4_date()
-    "test_postmerge.py",        # _hours_ago()
-    "test_retro_forgejo.py",    # _old_date() + _seed_watermark()
-})
+# Recognized time-relative helpers — a line that CALLS one of these mints
+# its ISO string relative to the wall clock and is safe by construction.
+# (2026-09-16, adversarial finding A3: whole-FILE exemptions — including the
+# incident file itself — left the riskiest fixtures unscanned; safety is now
+# per line: helper calls are safe, bare literals are flagged everywhere.)
+_TIME_RELATIVE_HELPERS: tuple[str, ...] = (
+    "_old_date(", "_hours_ago(", "_r4_date(", "_seed_watermark(",
+)
 
 # Files whose hardcoded ISO strings are intentionally INVALID stamps
 # (rejection / corruption tests). These never reach a running cycle.
@@ -77,9 +77,15 @@ _CYCLE_FIELDS = (
 )
 
 
-def _is_time_rot_safe(line: str) -> bool:
-    """Return True if the line carries an explicit time-rot justification."""
-    return "time-rot-safe" in line or "time-relative" in line
+def _is_time_rot_safe(line: str, prev_line: str = "") -> bool:
+    """True when the line carries an explicit justification (on this line or
+    the one directly above — A5, 2026-09-16: the documented above-line escape
+    hatch is now implemented) or CALLS a recognized time-relative helper."""
+    if "time-rot-safe" in line or "time-relative" in line:
+        return True
+    if "time-rot-safe" in prev_line or "time-relative" in prev_line:
+        return True
+    return any(helper in line for helper in _TIME_RELATIVE_HELPERS)
 
 
 def _scan_corpus() -> list[tuple[str, int, str]]:
@@ -96,9 +102,10 @@ def _scan_corpus() -> list[tuple[str, int, str]]:
         name = path.name
         if name == self_name:                     # the guard documents the trap
             continue
-        if name in _TIME_RELATIVE_FILES or name in _BAD_STAMP_TEST_FILES:
+        if name in _BAD_STAMP_TEST_FILES:
             continue
         in_docstring = False
+        prev_line = ""
         for idx, line in enumerate(path.read_text(encoding="utf-8").splitlines(),
                                    start=1):
             stripped = line.lstrip()
@@ -106,27 +113,38 @@ def _scan_corpus() -> list[tuple[str, int, str]]:
             triple_count = line.count('"""')
             if triple_count == 1:
                 in_docstring = not in_docstring
+                prev_line = line
                 continue  # the quote line itself is never an assignment
             if triple_count >= 2:
                 # single-line docstring; not assignment either
+                prev_line = line
                 continue
             if in_docstring:
+                prev_line = line
                 continue
-            if _is_time_rot_safe(line):
+            if _is_time_rot_safe(line, prev_line):
+                prev_line = line
                 continue
             if stripped.startswith("#"):
+                prev_line = line
                 continue
             if not _ISO_LITERAL.search(line):
+                prev_line = line
                 continue
             # Real-world risk shapes:
             #   a) `merged_since="2026-09-01T00:00:00Z"` (assignment)
             #   b) `..., merged_at=hardcoded, ...` (kwarg)
             #   c) line containing "merged_since"/"merged_at"/"retro_cursor"
             #      and an ISO literal nearby
+            # A single '=' assigns a fixture stamp; '==' / '!=' / '<=' / '>='
+            # compare against an expected value and never drive a cycle.
             lower = line.lower()
-            looks_like_assignment = bool(re.search(r"=\s*[\"']20\d{2}-", line))
+            looks_like_assignment = bool(
+                re.search(r"(?<![=<>!])=\s*[\"']20\d{2}-", line))
+            comparison_only = bool(
+                re.search(r"[=!<>]=\s*[\"']20\d{2}-", line)) and not looks_like_assignment
             near_cycle_field = any(field in lower for field in _CYCLE_FIELDS)
-            if looks_like_assignment or near_cycle_field:
+            if (looks_like_assignment or near_cycle_field) and not comparison_only:
                 findings.append((name, idx, line.strip()))
     return findings
 
@@ -151,30 +169,51 @@ def test_retro_seed_watermark_is_time_relative(tmp_path):
 
     from test_retro_forgejo import _seed_watermark
 
+    # A4 (2026-09-16 adversarial pass): inspect the AST, not the source
+    # text — a comment naming _old_date and an f-string
+    # (f"{2026}-09-04T...") both satisfied the old substring checks while
+    # the helper stayed effectively fixed-date.
+    import ast as _ast
+
     src = inspect.getsource(_seed_watermark)
-    # Hardcoded YYYY-MM-DD string literal → forbidden
-    bad = re.search(r"[\"']\d{4}-\d{2}-\d{2}[\"']", src)
-    assert bad is None, (
-        f"_seed_watermark must be time-relative (no hardcoded dates). "
-        f"LEARNINGS #63 / PILOT.md line 58 — fixture time-rot. "
-        f"Saw: {bad.group(0) if bad else '?'}"
-    )
-    # Must stay wall-clock anchored: either the helper itself calls
-    # datetime.now(timezone.utc), or it delegates to a same-module helper
-    # that does (the explicit-clock anchor form landed as abf003e: the
-    # helper takes now= and forwards it to _old_date, which anchors on
-    # datetime.now(timezone.utc)). A refactor that severs BOTH paths
-    # trips this pin.
-    anchored = "datetime.now(timezone.utc)" in src
-    if not anchored:
-        from test_retro_forgejo import _old_date
-        delegates = "_old_date" in src
-        anchor_src = inspect.getsource(_old_date)
-        anchored = delegates and "datetime.now(timezone.utc)" in anchor_src
+    tree = _ast.parse(src)
+    fn = tree.body[0]
+    assert isinstance(fn, _ast.FunctionDef), "expected a plain function def"
+
+    def _literal_strings(node):
+        for sub in _ast.walk(node):
+            if isinstance(sub, _ast.Constant) and isinstance(sub.value, str):
+                yield sub.value
+            elif isinstance(sub, _ast.JoinedStr):  # f-string literal parts
+                for part in sub.values:
+                    if isinstance(part, _ast.Constant) and isinstance(part.value, str):
+                        yield part.value
+
+    # (a) no month-day fragment in ANY string literal (catches quoted dates
+    #     AND f-string date fragments like "{2026}-09-04T...")
+    for text in _literal_strings(fn):
+        frag = re.search(r"-\d{2}-\d{2}", text)
+        assert frag is None, (
+            f"_seed_watermark contains a hardcoded date fragment {frag.group(0)!r} "
+            f"in {text!r} — fixture time-rot (LEARNINGS #75 / PILOT.md line 58)."
+        )
+
+    # (b) wall-clock anchoring via an actual CALL (never a comment) to
+    #     datetime.now(...) or a recognized same-module helper
+    def _calls(node):
+        for sub in _ast.walk(node):
+            if isinstance(sub, _ast.Call):
+                f = sub.func
+                name = getattr(f, "id", None) or getattr(getattr(f, "attr", None), "__str__", lambda: None)()
+                if name:
+                    yield name
+
+    called = set(_calls(fn))
+    anchored = bool(called & {"now", "_old_date", "_hours_ago", "_r4_date"})
     assert anchored, (
-        "_seed_watermark must anchor (directly or via _old_date) on "
-        "datetime.now(timezone.utc) so the watermark stays ahead of "
-        "_old_date-based PR dates."
+        f"_seed_watermark must CALL datetime.now(timezone.utc) or a recognized "
+        f"time-relative helper; calls found: {sorted(called) or 'none'}. "
+        "A comment naming a helper is not anchoring."
     )
 
     # Behavioral check: writing through the helper lands a watermark in
@@ -232,15 +271,18 @@ def test_corpus_guard_skips_helpers_and_invalid_stamp_suites():
             f"{name} no longer imports from state/tiers; "
             f"update _BAD_STAMP_TEST_FILES if intentional."
         )
-    # The recognized helpers must each call datetime.now(timezone.utc)
-    # at least once — otherwise remove them from _TIME_RELATIVE_FILES
-    # so they get scanned.
-    for name in _TIME_RELATIVE_FILES:
+    # Every recognized helper must live in a file that actually anchors on
+    # datetime.now(timezone.utc) — a helper file that stops using the wall
+    # clock makes its name-bearing calls unsafe, so it must be removed from
+    # _TIME_RELATIVE_HELPERS and its literals re-annotated.
+    _helper_home_files = ("test_gauntlet_fixes.py", "test_postmerge.py",
+                          "test_retro_forgejo.py")
+    for name in _helper_home_files:
         text = (_TESTS_DIR / name).read_text(encoding="utf-8")
         assert "datetime.now(timezone.utc)" in text, (
-            f"{name} is in _TIME_RELATIVE_FILES but no longer uses "
-            f"datetime.now(timezone.utc). Either add the helper here "
-            f"or remove the file from the skip set."
+            f"{name} hosts a recognized time-relative helper but no longer "
+            f"uses datetime.now(timezone.utc). Remove the helper from "
+            f"_TIME_RELATIVE_HELPERS and annotate its literals."
         )
 def test_scanner_detects_planted_bare_iso_fixture(monkeypatch, tmp_path):
     """Contract pin: a fake cycle-fixture file with a bare ISO date MUST

@@ -148,7 +148,7 @@ class TestPostMergeSweep:
         _run(tmp_path, forge, monkeypatch)
         # rewind the watermark to force a re-list
         st = state.load_state(tmp_path / "state.json")
-        st["merged_since"] = "2026-09-01T00:00:00Z"
+        st["merged_since"] = "2026-09-01T00:00:00Z"  # time-rot-safe: rewind-to-past watermark; only gets older as the calendar advances
         state.save_state(tmp_path / "state.json", st)
         r2 = _run(tmp_path, forge, monkeypatch)
         assert r2.postmerge_reviewed == 0 and len(forge.posts) == 1  # no second post, no model call
@@ -292,7 +292,7 @@ class TestPostMergeSweep:
         config, never the repo's full history."""
         forge = FakeForge()
         forge.merged_prs = [
-            make_pr(number=1, merged_at="2020-01-01T00:00:00Z"),  # ancient: outside window
+            make_pr(number=1, merged_at="2020-01-01T00:00:00Z"),  # ancient: outside window  # time-rot-safe: deliberately ancient stamp asserting initial-lookback exclusion; only gets more outside the window
             make_pr(number=2, merged_at=_hours_ago(4, "20:00:00")),  # recent: inside 24h
         ]
         r = _run(tmp_path, forge, monkeypatch)
@@ -407,3 +407,77 @@ class TestMergeScanRegression:
         )
         run_cycle(c, tmp_path / "s.json", get_diff=lambda pr: ({"x.py"}, "d"), run_fixes=True)
         assert calls == ["fl4write[bot]"]  # called WITH the identity, exactly once
+
+
+# ---- PM 2026-09-16: stale pending fixes must not wedge the merged sweep -----
+
+def test_gated_off_fix_lane_clears_stale_pending_and_advances(tmp_path, monkeypatch):
+    """Red pre-fix for the wedge found by the 2026-09-16 adversarial pass:
+    a PR carrying deadline-deferred pending_fixes blocks the merged-lane
+    watermark FOREVER once the fix lane is structurally off (run_fixes=False
+    or fix.enabled=false — e.g. the Forgejo cutover config), silently
+    un-reviewing every later merge. Expected post-fix behavior: the stale
+    pending record is dropped with an alert (the config opted out of fixes;
+    the review itself is complete) and the sweep proceeds past it."""
+    forge = FakeForge()
+    pr7 = make_pr(number=7, head_sha="a" * 40, merged_at=_hours_ago(10))
+    pr8 = make_pr(number=8, head_sha="b" * 40, merged_at=_hours_ago(2))
+    forge.merged_prs = [pr7, pr8]
+    sp = tmp_path / "state.json"
+    state.save_state(sp, {
+        "version": 1,
+        "prs": {
+            "7": {
+                "last_reviewed_sha": "a" * 40,
+                "last_outcome": "reviewed:1",
+                "pending_fix_sha": "a" * 40,
+                "pending_fixes": [
+                    {"rule_id": "tests", "severity": "Major", "path": "x.py",
+                     "line": 1, "message": "deferred at deadline"}
+                ],
+            }
+        },
+        "merged_since": _hours_ago(24),
+    })
+    report = _run(tmp_path, forge, monkeypatch)
+    # PR 8 must be reviewed — the sweep may not stall on PR 7's stale record
+    assert report.postmerge_reviewed == 1, (
+        "stale pending_fixes wedged the merged sweep: later merges unreviewed"
+    )
+    # the stale pending record is dropped, with an operator-visible alert
+    assert "pending_fixes" not in state.load_state(sp)["prs"]["7"]
+    assert any("pending fix" in a and "7" in a for a in report.alerts), report.alerts
+    # and the watermark advances to the newest fully-processed merge
+    assert state.load_state(sp)["merged_since"] == pr8.merged_at
+
+
+def test_shadow_never_writes_live_watermark_or_clears_pending(tmp_path, monkeypatch):
+    """A2 (2026-09-16 adversarial pass): a shadow sweep must not write the
+    live merged_since (setdefault included) nor clear live pending_fixes —
+    even when the fix lane is gated off and the row already carries a live
+    review plus stale pending fixes."""
+    forge = FakeForge()
+    pr7 = make_pr(number=7, head_sha="a" * 40, merged_at=_hours_ago(10))
+    forge.merged_prs = [pr7]
+    sp = tmp_path / "state.json"
+    state.save_state(sp, {
+        "version": 1,
+        "prs": {
+            "7": {
+                "last_reviewed_sha": "a" * 40,
+                "last_outcome": "reviewed:1",
+                "pending_fix_sha": "a" * 40,
+                "pending_fixes": [
+                    {"rule_id": "tests", "severity": "Major", "path": "x.py",
+                     "line": 1, "message": "deferred at deadline"}
+                ],
+            }
+        },
+        # NO merged_since at all — the setdefault must not fire under shadow
+    })
+    _run(tmp_path, forge, monkeypatch, shadow=True)
+    after = state.load_state(sp)
+    assert "merged_since" not in after, (
+        f"shadow run wrote the live watermark: {after.get('merged_since')!r}"
+    )
+    assert after["prs"]["7"].get("pending_fixes"), "shadow run cleared live pending fixes"

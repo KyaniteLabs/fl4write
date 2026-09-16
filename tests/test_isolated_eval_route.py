@@ -47,10 +47,14 @@ def test_selected_route_reaches_analyzer_through_supervisor_without_credential(t
         worker_globals["STATUS"] = tmp_path / "status.json"
 
         class Finished:
+            # pid present: the supervisor killpgs the group on EVERY exit
+            # path post-Arch-1 (success included)
+            pid = -1
+
             def __init__(self, command, **kwargs):
                 captured.update(kwargs["env"])
 
-            def wait(self, timeout):
+            def wait(self, timeout=None):
                 return 0
 
         class SupervisorIdle(Exception):
@@ -63,6 +67,7 @@ def test_selected_route_reaches_analyzer_through_supervisor_without_credential(t
             scoped.setattr(worker["sys"], "argv", argv[argv.index(sandbox.WORKER):])
             scoped.setattr(worker["subprocess"], "Popen", Finished)
             scoped.setattr(worker["time"], "sleep", idle)
+            scoped.setattr(worker["os"], "killpg", lambda pid, sig: None)
             with pytest.raises(SupervisorIdle):
                 worker["main"]()
         assert json.loads((tmp_path / "status.json").read_text())["returncode"] == 0
@@ -121,3 +126,21 @@ def test_supervisor_refuses_incomplete_or_credential_bearing_route(monkeypatch, 
     monkeypatch.setattr(worker["sys"], "argv", ["worker", "run", "123", "123", "30", '["pytest"]', *extra])
     monkeypatch.setattr(worker["subprocess"], "Popen", lambda *a, **kw: pytest.fail("test process must not start"))
     assert worker["main"]() == 2
+
+
+def test_selected_route_cannot_collide_with_forge_credentials(monkeypatch):
+    """Arch-3 (2026-09-16 architecture review): _live_config must re-run the
+    credential-namespace invariants on the assembled route — a selected model
+    naming a reserved env (GH_TOKEN) is refused here, not silently honored."""
+    import json as _json
+    import pytest as _pytest
+    from test_planted_diffs import _live_config
+
+    monkeypatch.setenv("FL4WRITE_EVAL_CONFIG", str(
+        Path(__file__).parents[1] / "fl4write.fl4write.yaml"))
+    monkeypatch.setenv("FL4WRITE_LIVE_EVAL_PROXY_SOCKET", "/tmp/none.sock")
+    monkeypatch.setenv("FL4WRITE_EVAL_MODEL", _json.dumps({
+        "endpoint": "http://provider/v1/chat/completions", "model": "m",
+        "key_env": "GH_TOKEN", "temperature": 0.0, "max_tokens": 4000}))
+    with _pytest.raises(Exception, match="key_env|namespace|reserved"):
+        _live_config()

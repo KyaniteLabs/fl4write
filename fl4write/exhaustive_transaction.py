@@ -78,6 +78,16 @@ def replay_publication(repo: Path, state_path: Path, adapter, config, issue: int
         candidate = state_path.parent / "publication-candidate.json"
         from .exhaustive import _identity
 
+        if not candidate.exists():
+            # NEW-3 (2026-09-16): a pending transaction whose candidate is
+            # gone used to fail the candidate_sha256 check on EVERY run —
+            # a permanent RC-2 deadlock. Archive it beside the obsolete
+            # transactions and proceed with a fresh round instead.
+            _atomic_json(state_path.parent / ("publication-orphaned-"
+                                              + str(request.get("candidate_sha256", "unknown"))[:12]
+                                              + ".json"), request)
+            pending.unlink()
+            return False
         state = _load_state(candidate, _identity(repo)[1])
         expected = {
             "version", "repo", "issue", "config_sha256", "candidate_sha256",
@@ -111,5 +121,15 @@ def replay_publication(repo: Path, state_path: Path, adapter, config, issue: int
             })
         pending.unlink()
         return True
-    except (PublicationError, OSError, ValueError, TypeError, KeyError) as exc:
+    except Deferred:
+        raise
+    except Exception as exc:  # NEW-1 (2026-09-16): appauth validation errors
+        # (RuntimeError on a 404 installation, scope/identity failures) and
+        # any other publication-path failure must defer with the staged
+        # write retained — an uncaught traceback here crash-looped every
+        # later invocation (fail-closed, but unrecoverable without manual
+        # file surgery). Same contract as the tuple below, one boundary.
+        if not isinstance(exc, (PublicationError, OSError, ValueError,
+                                TypeError, KeyError, RuntimeError)):
+            raise
         raise Deferred("publication unresolved; exact staged write retained") from exc
