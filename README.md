@@ -76,6 +76,23 @@ across GitHub + Forgejo in hourly cycles; the tier scheduler selects due repos
 tests green** (725 passing + 3 skipped — count stamped by the doc-truth
 verifier run on a clean tree; hand-editing this figure is a false receipt,
 REVIEW LAWS 2026-09-19). Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
+
+The 2026-09-17 reliability-harness pass (CEO reliability verdict: measure
+determinism, planted-defect recall, false positives, severity calibration)
+adds `fl4write/reliability.py` + `fl4write/reliability_corpus.py` and
+measures the review loop on the planted corpus. Re-measure any
+route with:
+
+    python3 -m fl4write.reliability --config fl4write.fl4write.yaml \
+      --endpoint http://<host>:8908/v1/chat/completions --model Qwen3.8-27B \
+      --key-env "" --runs 5
+
+The harness always takes fresh samples for the determinism lane (cache
+bypassed — cached repeats would fabricate stability) and caches the
+recall/clean lanes honestly (key = route params + exact prompt; parse and
+grounding gates re-run locally on every hit). Optional regression gates
+(`--min-determinism/--min-recall/--max-actionable-fp`) turn a recorded
+baseline into a CI-able reliability property.
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
 runtime model credentials. The default suite skips those three paid model
 cases. Round 14 remains open; no exhaustive certification is
