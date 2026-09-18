@@ -1,6 +1,6 @@
 """Cron adapter — the v1 trigger. One cycle for one configured repo.
 
-Usage: python3 -m fl4write.cli <config.yaml> [--live]
+Usage: python3 -m fl4write.cli <config.yaml> [--live] [--fixes] [--issues] [--omni]
 
 Diff fetching (the required get_diff): gh pr diff for GitHub-primary repos,
 git diff for Forgejo-primary when gh can't reach it. Keys are read at runtime
@@ -207,7 +207,7 @@ def main() -> int:
               file=sys.stderr)
         return 2
     if len(sys.argv) < 2:
-        print("usage: python3 -m fl4write.cli <config.yaml> [--live]", file=sys.stderr)
+        print("usage: python3 -m fl4write.cli <config.yaml> [--live] [--fixes] [--issues] [--omni]", file=sys.stderr)
         return 2
     live = "--live" in sys.argv
     run_fixes = "--fixes" in sys.argv
