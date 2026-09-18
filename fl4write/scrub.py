@@ -133,15 +133,30 @@ def redact_credentials(text: str) -> str:
     if not isinstance(text, str) or not text:
         return text
     out = text
+    import re as _re
     # D4: ANY 16+ char alphanumeric run is redacted unless it is a known
     # code identifier. The old entropy gate let low-entropy credentials
     # (e.g. 'aaaaaaaaaaaaaaaa') leak when not in an assignment context.
+    # D4: secrets split by '.' (JWT) or '/' (AWS secret key) defeat the 16+
+    # contiguous-run rule and leak partial credential material. A JWT is
+    # exactly 3 base64url segments joined by '.'; an AWS secret key is base64
+    # with '/' separators. Redact the WHOLE dotted/slash-delimited token as
+    # one unit when it is long enough to be a real secret (>=24 chars total,
+    # >=2 segments) — this catches the short middle fragments the 16+ rule
+    # leaves behind. Legitimate dotted identifiers (com.example.Foo) are
+    # short per-segment and stay under the 24-char floor.
+    _SPLIT_TOKEN_RE = _re.compile(r"[A-Za-z0-9_\-]+(?:[./][A-Za-z0-9_\-]+)+")
+    def _split_sub(m) -> str:
+        tok = m.group(0)
+        if len(tok) >= 24 and ("." in tok or "/" in tok):
+            return "[redacted]"
+        return tok
+    out = _SPLIT_TOKEN_RE.sub(_split_sub, out)
     for m in _REDACT_RUN_RE.finditer(text):
         tok = m.group(0)
         if tok not in _KNOWN_IDENTIFIERS:
             out = out.replace(tok, "[redacted]", 1)
     # prefix-marked tokens not caught by the 16+ run rule (shorter prefixes)
-    import re as _re
     for p in _SECRET_PREFIX:
         out = _re.sub(re.escape(p) + r"[A-Za-z0-9_\-]{8,}", "[redacted]", out)
     # F13-A1 (CRITICAL, reopened F1-013): credential ASSIGNMENT values are
@@ -151,8 +166,13 @@ def redact_credentials(text: str) -> str:
         r"(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|"
         r"client[_-]?secret|auth(?:orization)?|private[_-]?key)\b\s*[:=]\s*"
         r"['\"]?([A-Za-z0-9_\-./+]{4,})['\"]?")
-    out = _re.sub(_ASSIGN_KEY,
-                  lambda m: out[m.start():m.start(1)] + "[redacted]", out)
+    def _assign_sub(m: re.Match) -> str:
+        # Preserve a trailing quote char if the match consumed one, so
+        # 'password = "abcdef"' -> 'password = "[redacted]"' not '...[redacted]'
+        tail = m.group(0)[-1] if m.group(0) else ""
+        closing = tail if tail in ("'", '"') else ""
+        return out[m.start():m.start(1)] + "[redacted]" + closing
+    out = _re.sub(_ASSIGN_KEY, _assign_sub, out)
     return out
 
 
