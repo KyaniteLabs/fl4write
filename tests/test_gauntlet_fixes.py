@@ -955,6 +955,14 @@ class TestMECERedaction:
         s = "uses documentQuerySelector and getElementById on the page"
         assert redact_credentials(s) == s
 
+    def test_low_entropy_run_redacted(self):
+        # D4: a low-entropy 16+ char run is a real credential even when it
+        # is not in an assignment context (the old entropy gate let it leak)
+        from fl4write.scrub import redact_credentials
+        assert "aaaaaaaaaaaaaaaa" not in redact_credentials("the value is aaaaaaaaaaaaaaaa here")
+        assert "[redacted]" in redact_credentials("leak: bbbbbbbbbbbbbbbb")
+        assert "cccccccccccccccc" not in redact_credentials("x = cccccccccccccccc")
+
     def test_rendered_comment_redacts(self):
         from fl4write import renderer
         from fl4write.models import Finding

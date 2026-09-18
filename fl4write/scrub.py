@@ -128,15 +128,17 @@ def _entropy(s: str) -> float:
 
 def redact_credentials(text: str) -> str:
     """Replace credential-shaped strings with [redacted]. Prefix runs always;
-    16+ char runs only when high-entropy (a real secret, not an identifier).
+    16+ char runs always (a real secret, not an identifier).
     Apply at posting surfaces, never on analyzer grounding paths."""
     if not isinstance(text, str) or not text:
         return text
     out = text
+    # D4: ANY 16+ char alphanumeric run is redacted unless it is a known
+    # code identifier. The old entropy gate let low-entropy credentials
+    # (e.g. 'aaaaaaaaaaaaaaaa') leak when not in an assignment context.
     for m in _REDACT_RUN_RE.finditer(text):
         tok = m.group(0)
-        if tok not in _KNOWN_IDENTIFIERS and (any(
-                tok.startswith(p) for p in _SECRET_PREFIX) or _entropy(tok) >= 3.5):
+        if tok not in _KNOWN_IDENTIFIERS:
             out = out.replace(tok, "[redacted]", 1)
     # prefix-marked tokens not caught by the 16+ run rule (shorter prefixes)
     import re as _re
