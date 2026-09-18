@@ -265,7 +265,7 @@ def extract_json(content: str, envelope_key: str | None = None) -> dict:
     # attacker-chosen value and BYPASSED the distinct-envelope refusal.
     # Duplicate keys anywhere in a decoded object are ambiguous: refuse
     # (callers degrade) instead of consuming last-wins content.
-    def _reject_dup_keys(pairs):
+    def _reject_dup_keys(pairs) -> dict[str, object]:
         out: dict = {}
         for k, v in pairs:
             if k in out:

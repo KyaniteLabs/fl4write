@@ -147,10 +147,10 @@ def render_triage_comment(issue_num: int, triage: dict[str, Any], config: RepoCo
     # MECE round-3 (sol F3-005/006): triage text is model-controlled and lands
     # on a PUBLIC comment — single-line labels, markdown-escaped + credential-
     # redacted free text (scrub() alone never redacts)
-    def _safe(value, single_line=False):
+    def _safe(value, single_line: bool = False) -> str:
         s = scrub.redact_credentials(scrub.scrub(str(value)))
         return scrub.inline(s) if single_line else _md_escape_block(s)
-    def _label(lb):
+    def _label(lb) -> str:
         txt = _safe(lb, single_line=True).replace("`", "'")  # F8-010: backticks
         return "`" + txt + "`" if txt else ""
     labels = ", ".join(_label(lb) for lb in triage.get("labels", [])) or "none suggested"
