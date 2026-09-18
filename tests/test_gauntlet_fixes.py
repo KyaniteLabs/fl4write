@@ -963,6 +963,20 @@ class TestMECERedaction:
         assert "[redacted]" in redact_credentials("leak: bbbbbbbbbbbbbbbb")
         assert "cccccccccccccccc" not in redact_credentials("x = cccccccccccccccc")
 
+    def test_dotted_and_slashed_secret_fragments_redacted(self):
+        # D4: secrets split by '.' (JWT) or '/' (AWS secret key) defeat the
+        # 16+ contiguous-run rule, leaking partial credential material.
+        from fl4write.scrub import redact_credentials
+        jwt = ("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0."
+               "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U")
+        out = redact_credentials("Bearer " + jwt)
+        assert "eyJzdWIiOiIxIn0" not in out, "JWT middle segment leaked"
+        assert "dozjgNryP4J3jVmNHl0w5N" not in out, "JWT payload leaked"
+        aws = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        out2 = redact_credentials("aws_secret_access_key=" + aws)
+        assert "wJalrXUtnFEMI" not in out2, "AWS key fragment leaked"
+        assert "K7MDENG" not in out2, "AWS key fragment leaked"
+
     def test_rendered_comment_redacts(self):
         from fl4write import renderer
         from fl4write.models import Finding
@@ -3117,6 +3131,12 @@ class TestMECERound9Pins:
         import re as _re
         env = dict(os.environ)
         env["FL4WRITE_DOC_TRUTH_NESTED"] = "1"
+        # F15-E001: the nested verifier must run the DEFAULT suite (the one
+        # the README's "tests green" claim asserts). If the outer run is the
+        # opt-in live suite (FL4WRITE_EVAL=1), that flag would leak in and
+        # force the paid-model tests to run without creds, turning the
+        # nested run red for reasons unrelated to doc truth.
+        env.pop("FL4WRITE_EVAL", None)
         out = _sp.run([_sys.executable, "-m", "pytest", "tests/", "-q"],
                       capture_output=True, text=True, cwd=str(REPO_ROOT),
                       env=env, timeout=900)
