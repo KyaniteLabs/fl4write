@@ -977,6 +977,16 @@ class TestMECERedaction:
         assert "wJalrXUtnFEMI" not in out2, "AWS key fragment leaked"
         assert "K7MDENG" not in out2, "AWS key fragment leaked"
 
+    def test_dotted_assignment_key_value_redacted(self):
+        # D7-031: a dotted token ending in an assignment key must not swallow
+        # the key so the value leaks; the value is redacted regardless.
+        from fl4write.scrub import redact_credentials
+        out = redact_credentials('com.example.verylongidentifier.password = "abcdef"')
+        assert "abcdef" not in out, "credential value leaked past dotted key"
+        assert "[redacted]" in out
+        out2 = redact_credentials("app.db.password = secret123")
+        assert "secret123" not in out2
+
     def test_rendered_comment_redacts(self):
         from fl4write import renderer
         from fl4write.models import Finding

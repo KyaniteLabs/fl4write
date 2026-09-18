@@ -67,3 +67,28 @@ no triage. Curated outcomes live in LEARNINGS.md.
 - 2026-09-05 round 15 — optional fix-flag normalization ran only inside an unrelated error branch; boolean/nonpositive source lines survived restart; uncertain triage marker identity permitted duplicate publication. Three reproduced defects repaired with 15 cases and independent approval; claimed severity crash rejected with executable counterevidence. LEARNINGS #61; ROUND15-REPAIR-REVIEW.md. Clean rounds remain 0/3.
 - 2026-09-05 live verification — model eval used a dummy endpoint; fleet-config tests leaked dummy credentials; nested suite parser rejected zero skips. Real full-suite evaluation now passes. Readiness score existed only in logs; complete issue bodies and one-time legacy refresh are now pinned. LEARNINGS #62; 672 release tests passed with zero skips, 64 added behavioral cases since recovery baseline.
 - 2026-09-05 D4 security — redact_credentials entropy gate let low-entropy 16+ char credential runs leak outside assignment context (e.g. "the value is aaaaaaaaaaaaaaaa"); fixed: any 16+ char alphanumeric run now redacted unless a known code identifier; regression test_low_entropy_run_redacted added; 674 passed / 3 skipped.
+
+## D7-031: split-token redaction swallows assignment key, leaking value
+
+**File:** `fl4write/scrub.py`, `redact_credentials()`
+**Smell:** The `_SPLIT_TOKEN_RE` rule (dotted/slash tokens >=24 chars) runs
+BEFORE the `_ASSIGN_KEY` rule. When a dotted identifier ends with an
+assignment key (e.g. `com.example.verylongidentifier.password = "abcdef"`),
+the split-token rule redacts the ENTIRE dotted token including `password`,
+so the assignment rule never matches. The credential value `abcdef` is
+left unredacted in the output.
+
+**Impact:** A model-quoted config path ending in `password`/`token`/etc.
+followed by an assignment leaks the credential value on posting surfaces.
+
+**Fix:** Run the assignment-key redaction BEFORE the split-token rule, or
+make the split-token rule stop at word boundaries that precede an
+assignment operator.
+config path or a log line containing a fully-qualified credential key
+leaks the secret value to the posting surface.
+
+**Fix:** Run the `_ASSIGN_KEY` redaction BEFORE the `_SPLIT_TOKEN_RE` rule,
+so the assignment value is redacted regardless of whether the key is part
+of a longer dotted token.
+
+**Status:** FIXED (2026-09-17, cycle 39) — assignment-key redaction now runs before the split-token rule; regression test_dotted_assignment_key_value_redacted added; 678 passed / 3 skipped.
