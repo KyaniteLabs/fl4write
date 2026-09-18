@@ -406,6 +406,19 @@ class TestSolAudit2Pins:
         # <b>/inline code comparisons still survive as plain text
         assert scrub("a < b and c > d") == "a < b and c > d"
 
+    def test_refdef_non_http_schemes_scrubbed(self):
+        # D2: a reference-definition image can point at ANY scheme, not just
+        # http(s):// or protocol-relative. javascript:/ftp:/data: payloads in
+        # the definition line must be removed, not just the ![x][id] usage.
+        from fl4write.scrub import scrub
+        for url in ("javascript:alert(1)", "ftp://evil/x", "https://evil/x",
+                    "//host/pixel", "data:text/html;base64,PHNjcmlwdD4="):
+            out = scrub("![x][id]\n[id]: " + url)
+            assert url not in out, f"leaked refdef url {url!r} in {out!r}"
+            assert out == "[image removed]\n", repr(out)
+        # a plain inline reference (not an image) is legitimate prose: keep it
+        assert scrub("see [id]: https://evil/x") == "see [id]: https://evil/x"
+
 
 class TestADVP4TestGaming:
     """UltraQA round 3, P4 (junit-evidence semantics): a hostile diff/fix that
@@ -4208,7 +4221,11 @@ class TestMECERound12Ops:
 
     def test_readme_count_attributed_to_closing_round(self):
         readme = (REPO_ROOT / "README.md").read_text()
-        assert "round-13 desk pass" in readme
+        # The README's validation history was replaced with current evidence
+        # (commit 71c14ac); the stale "round-13 desk pass" provenance label is
+        # no longer present. Pin the current honest status line instead.
+        assert "Round 14 remains open" in readme
+        assert "no exhaustive certification is" in readme
 
 
 class TestMECERound12Pins:
