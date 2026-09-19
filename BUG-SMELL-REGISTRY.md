@@ -140,3 +140,26 @@ NOT in an assignment context.
 (space added to `_ASSIGN_KEY` value class) + regression test
 `tests/test_fl4write.py::test_redact_credentials_multi_word_value`.
 683 passed / 3 skipped.
+
+## D7-034: plural credential keys (passwords/tokens/secrets) leak values past _ASSIGN_KEY
+
+**File:** `fl4write/scrub.py`, `redact_credentials()`
+**Smell:** The `_ASSIGN_KEY` rule used a bare key name with `\b` at the end
+(`...private[_-]?key)\b\s*[:=]\s*`). The singular forms matched, but the
+plural forms (`passwords`, `tokens`, `secrets`) matched the singular stem
+plus a trailing `s`, so the `\s*[:=]` then anchored on the `s` and the value
+class captured only up to the next space — leaking the value on plural keys:
+`passwords = abc` leaked `abc`.
+
+**Impact:** Plural-form credential keys on known keys leaked their values to
+the posting surface.
+
+**Fix:** Made the key-name suffix optional (`private[_-]?key)s?\s*[:=]\s*`) so
+both singular and plural key forms consume the whole value. The singular-key
+context guard (`my_password`) still survives; non-assignment Bearer context is
+still NOT redacted.
+
+**Status:** FIXED (2026-09-19, cycle 49) — reproduced: `passwords = abc`,
+`tokens = abc def` leaked; fix landed (`s?` on the key-name suffix) + regression
+test `tests/test_fl4write.py::test_redact_credentials_plural_key_forms`.
+684 passed / 3 skipped.
