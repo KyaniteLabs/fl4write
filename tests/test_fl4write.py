@@ -783,3 +783,17 @@ class TestModuleGaps:
         # legacy-slug-authored PR is OURS — must not raise
         fixlane.merge_own_pr(author="kyanitelabs[bot]", bot_identity="fl4write[bot]",
                              ci_green=True, config=c)
+
+
+def test_redact_credentials_multi_word_value():
+    """D2: multi-word credential values must be fully redacted, not just the first word."""
+    from fl4write.scrub import redact_credentials
+    out = redact_credentials('password = "my secret value"')
+    assert "secret" not in out
+    assert "value" not in out
+    assert "[redacted]" in out
+
+    out2 = redact_credentials("token: abc def ghi")
+    assert "def" not in out2
+    assert "ghi" not in out2
+    assert "[redacted]" in out2

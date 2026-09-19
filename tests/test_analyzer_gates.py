@@ -284,3 +284,94 @@ class TestSolAuditPins:
         item2 = dict(item, message="")
         doc2 = _analyze(monkeypatch, item2)
         assert len(doc2.findings) == 1  # empty message is not self-contradicting
+
+
+class TestSeedPassthrough:
+    """D1-reliability: verify the model payload includes seed when configured,
+    and omits it when seed is None. This pins the reproducibility contract."""
+
+    def test_seed_included_when_set(self, monkeypatch):
+        import urllib.request
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["payload"] = json.loads(req.data.decode())
+            captured["timeout"] = timeout
+            import io
+            return io.BytesIO(json.dumps({
+                "choices": [{"message": {"content": '{"findings": []}'}, "finish_reason": "stop"}],
+                "usage": {},
+            }).encode())
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setenv("MK", "test-key")
+
+        from fl4write.analyzer import _call_model
+        route = cfg.ModelRoute(
+            endpoint="http://model/v1", model="test", key_env="MK",
+            temperature=0.0, max_tokens=100, seed=42,
+        )
+        _call_model(route, "hello", mode="pr")
+        assert captured["payload"]["seed"] == 42
+
+    def test_seed_omitted_when_none(self, monkeypatch):
+        import urllib.request
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["payload"] = json.loads(req.data.decode())
+            import io
+            return io.BytesIO(json.dumps({
+                "choices": [{"message": {"content": '{"findings": []}'}, "finish_reason": "stop"}],
+                "usage": {},
+            }).encode())
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setenv("MK", "test-key")
+
+        from fl4write.analyzer import _call_model
+        route = cfg.ModelRoute(
+            endpoint="http://model/v1", model="test", key_env="MK",
+            temperature=0.0, max_tokens=100, seed=None,
+        )
+        _call_model(route, "hello", mode="pr")
+        assert "seed" not in captured["payload"]
+
+
+class TestSeedPassthrough:
+    """D1-reliability: verify the model payload includes seed when configured,
+    and omits it when seed is None. This pins the reproducibility contract."""
+
+    def test_seed_included_when_set(self, monkeypatch):
+        import urllib.request
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["payload"] = json.loads(req.data.decode())
+            import io
+            return io.BytesIO(json.dumps({"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}).encode())
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setenv("MK", "test-key")
+        from fl4write.analyzer import _call_model
+        from fl4write.config import ModelRoute
+        route = ModelRoute(endpoint="http://x/v1", model="m", key_env="MK", temperature=0.0, max_tokens=100, seed=42)
+        _call_model(route, "hello")
+        assert captured["payload"]["seed"] == 42
+
+    def test_seed_omitted_when_none(self, monkeypatch):
+        import urllib.request
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["payload"] = json.loads(req.data.decode())
+            import io
+            return io.BytesIO(json.dumps({"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}).encode())
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setenv("MK", "test-key")
+        from fl4write.analyzer import _call_model
+        from fl4write.config import ModelRoute
+        route = ModelRoute(endpoint="http://x/v1", model="m", key_env="MK", temperature=0.0, max_tokens=100, seed=None)
+        _call_model(route, "hello")
+        assert "seed" not in captured["payload"]
