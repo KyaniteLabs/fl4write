@@ -92,3 +92,27 @@ so the assignment value is redacted regardless of whether the key is part
 of a longer dotted token.
 
 **Status:** FIXED (2026-09-17, cycle 39) — assignment-key redaction now runs before the split-token rule; regression test_dotted_assignment_key_value_redacted added; 678 passed / 3 skipped.
+
+## D7-032: short assignment values (<4 chars) leak past _ASSIGN_KEY
+
+**File:** `fl4write/scrub.py`, `redact_credentials()`
+**Smell:** `_ASSIGN_KEY` matches the credential value with
+`[A-Za-z0-9_\-./+]{4,}` — a minimum of 4 chars. A hardcoded credential
+assigned to a known key with a 1-3 char value (e.g. `password = ab`,
+`password=abc`, `token = x`) is NOT redacted and leaks on posting surfaces.
+The 4-char floor was tuned to avoid over-redacting identifiers, but it
+defeats the assignment rule's purpose: a value sitting on the right-hand
+side of `password=`/`token=`/`secret=` is a credential by context, not by
+length.
+
+**Impact:** Short hardcoded credentials on known keys leak to the posting
+surface.
+
+**Fix:** Lower the assignment-value floor to `{1,}` (any non-empty value on
+a known credential key is redacted). The 16+ contiguous-run rule and the
+known-identifier guard still protect legitimate short identifiers that are
+NOT in an assignment context.
+
+**Status:** FIXED (2026-09-17, cycle 23) — reproduced: `password = ab`,
+`password=abc` leak; fix landed (assignment floor `{1,}`) + regression test
+`tests/test_gauntlet_fixes.py::TestMECERedaction::test_short_assignment_value_redacted`.

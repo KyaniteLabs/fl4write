@@ -36,7 +36,8 @@ _ESC_ALT_IMG_RE = re.compile(
 # ("![x](//host/pixel)") — both are attacker-controlled loads in the posted
 # comment, none of which may survive scrub
 _REMOTE_IMG_REF_DEF_RE = re.compile(
-    r"^ {0,3}\[[^\]\n]+\]:\s*(?:https?:)?//\S+.*$", re.IGNORECASE | re.MULTILINE)
+    r"^ {0,3}\[[^\]\n]+\]:\s*(?:[a-zA-Z][a-zA-Z0-9+.\-]*:)?(?://)?\S+.*$",
+    re.IGNORECASE | re.MULTILINE)
 _PROTOCOL_RELATIVE_IMG_RE = re.compile(
     r"!\[[^\]]*\]\(\s*//[^)]*\)", re.IGNORECASE)
 _IMG_REF_USAGE_RE = re.compile(r"!\[[^\]]*\]\[[^\]]*\]", re.IGNORECASE)
@@ -113,7 +114,7 @@ def scrub(text: str) -> str:
 # (L1-B3 needs the literal before posting decisions).
 _SECRET_PREFIX = ("ghp_", "gho_", "github_pat_", "sk-", "sk_", "AKIA",
                   "xoxb-", "xoxp-", "glpat-", "AIza")
-_REDACT_RUN_RE = re.compile(r"[A-Za-z0-9_\-]{16,}")
+_REDACT_RUN_RE = re.compile(r"[A-Za-z0-9_\-+=]{16,}")
 # Long camelCase identifiers that look high-entropy but are code, not secrets
 _KNOWN_IDENTIFIERS = {"documentQuerySelector", "getElementById", "getElementByClassName"}
 
@@ -143,7 +144,7 @@ def redact_credentials(text: str) -> str:
     _ASSIGN_KEY = (
         r"(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|"
         r"client[_-]?secret|auth(?:orization)?|private[_-]?key)\b\s*[:=]\s*"
-        r"['\"]?([A-Za-z0-9_\-./+]{4,})['\"]?")
+        r"['\"]?([A-Za-z0-9_\-./+]{1,})['\"]?")
     def _assign_sub(m: re.Match) -> str:
         # Preserve a trailing quote char if the match consumed one, so
         # 'password = "abcdef"' -> 'password = "[redacted]"' not '...[redacted]'
@@ -173,7 +174,7 @@ def redact_credentials(text: str) -> str:
             out = out.replace(tok, "[redacted]", 1)
     # prefix-marked tokens not caught by the 16+ run rule (shorter prefixes)
     for p in _SECRET_PREFIX:
-        out = _re.sub(re.escape(p) + r"[A-Za-z0-9_\-]{8,}", "[redacted]", out)
+        out = _re.sub(re.escape(p) + r"[A-Za-z0-9_\-]{4,}", "[redacted]", out)
     return out
 
 

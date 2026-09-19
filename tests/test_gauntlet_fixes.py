@@ -1000,6 +1000,23 @@ class TestMECERedaction:
         out2 = redact_credentials("app.db.password = secret123")
         assert "secret123" not in out2
 
+    def test_short_assignment_value_redacted(self):
+        # D7-032: a hardcoded credential on a known key with a 1-3 char
+        # value must still be redacted (the old {4,} floor leaked it).
+        import re as _re
+        from fl4write.scrub import redact_credentials
+        for src, val in (
+            ("password = ab", "ab"),
+            ("password=abc", "abc"),
+            ("token = x", "x"),
+            ("password = a", "a"),
+        ):
+            out = redact_credentials(src)
+            assert "[redacted]" in out, f"no redaction marker: {src!r} -> {out!r}"
+            pat = r"(?<![A-Za-z0-9_])" + _re.escape(val) + r"(?![A-Za-z0-9_])"
+            assert not _re.search(pat, out), f"short value leaked: {src!r} -> {out!r}"
+
+
     def test_rendered_comment_redacts(self):
         from fl4write import renderer
         from fl4write.models import Finding
