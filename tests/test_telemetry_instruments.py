@@ -264,3 +264,52 @@ class TestRecordRouteEdgeCases:
         st = tel.route_stats()["m1"]
         assert st["ok"] == 1
         assert st["parse_fail"] == 1
+
+
+class TestCalibrationSnapshotEdgeCases:
+    """D5: calibration_snapshot edge cases not yet pinned — non-boolean ok
+    quarantining, missing model key, and the recent=0 boundary."""
+
+    def test_non_boolean_ok_quarantined(self, tmp_path, monkeypatch):
+        p = tmp_path / "t.jsonl"
+        p.write_text('{"kind": "model_call", "model": "m1", "ok": "false"}\n'
+                     '{"kind": "model_call", "model": "m1", "ok": 1}\n'
+                     '{"kind": "model_call", "model": "m1", "ok": true}\n')
+        monkeypatch.setattr(tel, "_path", lambda: p)
+        out = tel.calibration_snapshot()
+        # only the real boolean counts → 1/1
+        assert out["m1"].startswith("1/1"), out
+
+    def test_missing_model_key_defaults_question_mark(self, tmp_path, monkeypatch):
+        p = tmp_path / "t.jsonl"
+        p.write_text('{"kind": "model_call", "ok": true}\n')
+        monkeypatch.setattr(tel, "_path", lambda: p)
+        out = tel.calibration_snapshot()
+        assert "?" in out, out
+
+    def test_recent_zero_returns_empty(self, tmp_path, monkeypatch):
+        p = tmp_path / "t.jsonl"
+        p.write_text('{"kind": "model_call", "model": "m1", "ok": true}\n')
+        monkeypatch.setattr(tel, "_path", lambda: p)
+        out = tel.calibration_snapshot(recent=0)
+        assert out == {}, out
+
+    def test_json_scalar_lines_do_not_crash(self, tmp_path, monkeypatch):
+        p = tmp_path / "t.jsonl"
+        p.write_text('42\n'
+                     'null\n'
+                     '["a","b"]\n'
+                     '{"kind": "model_call", "model": "m1", "ok": true}\n')
+        monkeypatch.setattr(tel, "_path", lambda: p)
+        out = tel.calibration_snapshot()
+        assert out["m1"].startswith("1/1"), out
+
+    def test_mixed_models_tracked_independently(self, tmp_path, monkeypatch):
+        p = tmp_path / "t.jsonl"
+        p.write_text('{"kind": "model_call", "model": "a", "ok": true}\n'
+                     '{"kind": "model_call", "model": "b", "ok": false}\n'
+                     '{"kind": "model_call", "model": "a", "ok": false}\n')
+        monkeypatch.setattr(tel, "_path", lambda: p)
+        out = tel.calibration_snapshot()
+        assert out["a"].startswith("1/2"), out
+        assert out["b"].startswith("0/1"), out
