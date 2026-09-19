@@ -144,7 +144,7 @@ def redact_credentials(text: str) -> str:
     _ASSIGN_KEY = (
         r"(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|"
         r"client[_-]?secret|auth(?:orization)?|private[_-]?key)\b\s*[:=]\s*"
-        r"['\"]?([A-Za-z0-9_\-./+]{1,})['\"]?")
+        r"['\"]?([A-Za-z0-9_\-./+ ]{1,})['\"]?")
     def _assign_sub(m: re.Match) -> str:
         # Preserve a trailing quote char if the match consumed one, so
         # 'password = "abcdef"' -> 'password = "[redacted]"' not '...[redacted]'
