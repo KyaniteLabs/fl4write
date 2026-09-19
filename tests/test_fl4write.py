@@ -132,6 +132,22 @@ class TestState:
             token = lock.read_text()
             assert "999999999" not in token and token.strip()
 
+    def test_lock_token_is_unique_per_acquire(self, tmp_path):
+        # D1-reliability: the diagnostic token must be unique per acquire so
+        # two sequential holders can be told apart in the lock file.
+        lock = tmp_path / "c.lock"
+        with state.CycleLock(lock):
+            t1 = lock.read_text()
+        with state.CycleLock(lock):
+            t2 = lock.read_text()
+        assert t1 != t2, f"token not unique: {t1!r} == {t2!r}"
+        # token format: "<pid> <epoch> <hex>"
+        parts = t2.split()
+        assert len(parts) == 3, f"unexpected token format: {t2!r}"
+        assert parts[0].isdigit(), f"pid not int: {parts[0]!r}"
+        assert parts[1].isdigit(), f"epoch not int: {parts[1]!r}"
+        assert all(c in "0123456789abcdef" for c in parts[2]), f"hex bad: {parts[2]!r}"
+
 
 # ---------------------------------------------------------------- scrub (ULTRAQA injection)
 class TestScrub:
