@@ -797,3 +797,24 @@ def test_redact_credentials_multi_word_value():
     assert "def" not in out2
     assert "ghi" not in out2
     assert "[redacted]" in out2
+
+
+def test_redact_credentials_plural_key_forms():
+    """D7-034: plural credential keys (passwords/tokens/secrets) must redact
+    their values too — the singular-key rule used a bare key name with \b,
+    so 'passwords = abc' matched 'password' + 's' and leaked the value."""
+    from fl4write.scrub import redact_credentials
+    for key in ("password", "token", "secret"):
+        for form in (key, key + "s"):
+            out = redact_credentials(f"{form} = abc")
+            assert "abc" not in out, f"{form} leaked"
+            assert "[redacted]" in out
+    # plural key with a multi-word value: whole value redacted
+    out = redact_credentials("secrets = mysecret value")
+    assert "mysecret" not in out
+    assert "value" not in out
+    assert "[redacted]" in out
+    # singular-key context still survives (my_password)
+    assert redact_credentials("my_password = abc") == "my_password = [redacted]"
+    # non-assignment Bearer context is NOT redacted (still a real case)
+    assert redact_credentials("Authorization: Bearer abc") == "Authorization: Bearer abc"
