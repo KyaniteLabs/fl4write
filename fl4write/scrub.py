@@ -168,7 +168,7 @@ def redact_credentials(text: str) -> str:
             return "[redacted]"
         return tok
     out = _SPLIT_TOKEN_RE.sub(_split_sub, out)
-    for m in _REDACT_RUN_RE.finditer(text):
+    for m in _REDACT_RUN_RE.finditer(out):
         tok = m.group(0)
         if tok not in _KNOWN_IDENTIFIERS:
             out = out.replace(tok, "[redacted]", 1)

@@ -818,3 +818,17 @@ def test_redact_credentials_plural_key_forms():
     assert redact_credentials("my_password = abc") == "my_password = [redacted]"
     # non-assignment Bearer context is NOT redacted (still a real case)
     assert redact_credentials("Authorization: Bearer abc") == "Authorization: Bearer abc"
+
+
+def test_redact_credentials_multiple_runs():
+    """D2: multiple 16+ char runs in one string must ALL be redacted. The 16+
+    run loop used to iterate the ORIGINAL text and replace in the already-
+    mutated output, so a run following an assignment redaction leaked."""
+    from fl4write.scrub import redact_credentials
+    out = redact_credentials('token=aaaaaaaaaaaaaaaa=zzzzzzzzzzzzzzzz')
+    assert 'zzzzzzzzzzzzzzzz' not in out
+    assert 'aaaaaaaaaaaaaaaa' not in out
+    assert out.count('[redacted]') == 2
+    out2 = redact_credentials('x=aaaaaaaaaaaaaaaa b=zzzzzzzzzzzzzzzz')
+    assert 'zzzzzzzzzzzzzzzz' not in out2
+    assert 'aaaaaaaaaaaaaaaa' not in out2
