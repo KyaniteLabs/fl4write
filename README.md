@@ -67,7 +67,7 @@ All five review modes live (open-PR, post-merge, retro audit, ci_watch,
 omnisweep) plus gatekeeper, verify-tests and acceptance metrics. The issues
 triage lane is available per-repo via `issues_enabled` + `--issues` (opt-in;
 no fleet repo has enabled it yet — luna F3-004 doc truth).
-**Usage:** `python3 -m fl4write.cli <config> [--live] [--fixes] [--issues]`
+**Usage:** `python3 -m fl4write.cli <config> [--live] [--fixes] [--issues] [--omni]`
 (mode flag typos are refused — unknown flags exit 2).
 
 Current fleet state (2026-09-05; recovered [audit ledger](docs/pm-recovery/ROUND-LEDGER.md)): **129 central configs**
