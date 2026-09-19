@@ -163,3 +163,24 @@ still NOT redacted.
 `tokens = abc def` leaked; fix landed (`s?` on the key-name suffix) + regression
 test `tests/test_fl4write.py::test_redact_credentials_plural_key_forms`.
 684 passed / 3 skipped.
+
+## D7-035: short slash-separated AWS secret keys (16-22 chars) leak past the split-token floor
+
+**File:** `fl4write/scrub.py`, `redact_credentials()`
+**Smell:** The `_SPLIT_TOKEN_RE` rule redacts a dotted/slash-delimited token
+only when its TOTAL length is >= 24. A real AWS secret key is 30 base64 chars
+with `/` separators, but a truncated or short-form key of 16-22 chars with a
+single `/` (e.g. `wJalrXUtnFEMI/K7MDENG`) sits under the 24-char floor and is
+left verbatim — leaking partial credential material to the posting surface.
+The 16+ contiguous-run rule does not catch it because the `/` breaks the run.
+
+**Impact:** Short slash-separated AWS-style secret keys leaked their full
+value to the posting surface.
+
+**Fix:** Lower the split-token floor for slash-delimited tokens to 16 (the
+AWS-secret-key minimum) while keeping the 24-char floor for dotted tokens
+(JWTs), so legitimate dotted identifiers (com.example.Foo) are unaffected.
+
+**Status:** FIXED (2026-09-19, cycle 60) — reproduced: `key=wJalrXUtnFEMI/K7MDENG`
+(16 chars) leaked; fix landed (per-separator floor) + regression test
+`tests/test_fl4write.py::test_redact_credentials_short_slash_secret`.
