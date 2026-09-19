@@ -241,3 +241,26 @@ class TestCalibrationSnapshot:
         monkeypatch.setattr(tel, "_path", lambda: p)
         out = tel.calibration_snapshot()
         assert out["m1"].startswith("1/1"), out
+
+
+
+
+class TestRecordRouteEdgeCases:
+    """D5: record_route edge cases not yet pinned — negative latency,
+    non-numeric latency, and the ok/parse_ok interaction."""
+
+    def test_negative_latency_clamped_to_zero(self):
+        tel.record_route("m1", ok=True, latency_s=-5.0, parse_ok=True)
+        st = tel.route_stats()["m1"]
+        assert st["latency_s"] == 0.0, st
+
+    def test_non_numeric_latency_defaults_zero(self):
+        tel.record_route("m1", ok=True, latency_s=None, parse_ok=True)
+        st = tel.route_stats()["m1"]
+        assert st["latency_s"] == 0.0, st
+
+    def test_parse_fail_tracked_independently_of_ok(self):
+        tel.record_route("m1", ok=True, latency_s=1.0, parse_ok=False)
+        st = tel.route_stats()["m1"]
+        assert st["ok"] == 1
+        assert st["parse_fail"] == 1
