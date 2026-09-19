@@ -76,6 +76,7 @@ _SECRET_ENV_KEYS = ("GITHUB_TOKEN", "CODESITTER", "MINIMAX", "ANTHROPIC", "OPENA
 
 def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 120,
          env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run a fixed-argv subprocess (no shell) with optional timeout and env."""
     return subprocess.run(  # fixed argv, no shell
 
         cmd,
@@ -105,6 +106,7 @@ def _sandbox_home() -> str:
 
 
 def _sandbox_env_for(home: str) -> dict[str, str]:
+    """Build a sandboxed env: allowlisted vars + isolated HOME, no secrets."""
     out = {k: os.environ[k] for k in _TEST_ENV_ALLOW if k in os.environ}
     out["HOME"] = home
     # user-site packages (e.g. pytest) live under the REAL home's .local —
@@ -124,6 +126,7 @@ def _sandbox_env_for(home: str) -> dict[str, str]:
 
 
 def _sandbox_env() -> dict[str, str]:
+    """Sandbox env for the default sandbox home."""
     return _sandbox_env_for(_sandbox_home())
 
 
@@ -145,6 +148,7 @@ def _git_hardened_env(base: dict[str, str]) -> dict[str, str]:
 
 
 def _gh_api(method: str, path: str, data: dict | None = None) -> Any:
+    """One GitHub API call using the CODESITTER_GITHUB_TOKEN env var."""
     token = os.environ.get("CODESITTER_GITHUB_TOKEN", "")
     req = urllib.request.Request(
 
@@ -200,6 +204,7 @@ def _get_file_content(repo: str, path: str, ref: str) -> str | None:
 
 
 def _default_branch(repo: str) -> str:
+    """Fetch the default branch name for a repo via GitHub API."""
     return _gh_api("GET", f"/repos/{repo}").get("default_branch", "main")
 
 
