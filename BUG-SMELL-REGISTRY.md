@@ -116,3 +116,27 @@ NOT in an assignment context.
 **Status:** FIXED (2026-09-17, cycle 23) — reproduced: `password = ab`,
 `password=abc` leak; fix landed (assignment floor `{1,}`) + regression test
 `tests/test_gauntlet_fixes.py::TestMECERedaction::test_short_assignment_value_redacted`.
+
+## D7-033: multi-word credential values leak partial content past _ASSIGN_KEY
+
+**File:** `fl4write/scrub.py`, `redact_credentials()`
+**Smell:** The `_ASSIGN_KEY` rule matched the credential value with
+`[A-Za-z0-9_\-./+]{1,}` — a class WITHOUT whitespace. A multi-word credential
+assigned to a known key (e.g. `password = "my secret value"`,
+`token: abc def ghi`) was only redacted up to the first space, leaving the
+rest of the value on the posting surface:
+`password = "[redacted] secret value"`.
+
+**Impact:** Multi-word / spaced hardcoded credentials on known keys leak
+partial credential material to the posting surface.
+
+**Fix:** Add whitespace to the assignment-value class so the whole value is
+consumed: `[A-Za-z0-9_\-./+ ]{1,}`. The 16+ contiguous-run rule and the
+known-identifier guard still protect legitimate short identifiers that are
+NOT in an assignment context.
+
+**Status:** FIXED (2026-09-18, cycle 31) — reproduced:
+`password = "my secret value"` left `secret value` unredacted; fix landed
+(space added to `_ASSIGN_KEY` value class) + regression test
+`tests/test_fl4write.py::test_redact_credentials_multi_word_value`.
+683 passed / 3 skipped.
