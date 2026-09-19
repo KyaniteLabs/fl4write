@@ -179,3 +179,65 @@ class TestReadTail:
         out = tel._read_tail(p, max_bytes=100)
         # the bounded tail is a single PARTIAL line → fully discarded
         assert out == ""
+
+
+class TestCalibrationSnapshot:
+    """D5: calibration_snapshot is the feedback-loop consumer of the stream —
+    previously only exercised via gauntlet pins, never in the dedicated
+    instruments file. Add direct coverage for the core contract."""
+
+    def test_empty_stream_returns_empty_dict(self, tmp_path, monkeypatch):
+        p = tmp_path / "t.jsonl"
+        p.write_text("")
+        monkeypatch.setattr(tel, "_path", lambda: p)
+        assert tel.calibration_snapshot() == {}
+
+    def test_single_ok_call(self, tmp_path, monkeypatch):
+        p = tmp_path / "t.jsonl"
+        p.write_text('{"kind": "model_call", "model": "m1", "ok": true}\n')
+        monkeypatch.setattr(tel, "_path", lambda: p)
+        out = tel.calibration_snapshot()
+        assert out["m1"].startswith("1/1")
+
+    def test_single_fail_call(self, tmp_path, monkeypatch):
+        p = tmp_path / "t.jsonl"
+        p.write_text('{"kind": "model_call", "model": "m1", "ok": false}\n')
+        monkeypatch.setattr(tel, "_path", lambda: p)
+        out = tel.calibration_snapshot()
+        assert out["m1"].startswith("0/1")
+
+    def test_recent_limits_to_last_n_outcomes(self, tmp_path, monkeypatch):
+        p = tmp_path / "t.jsonl"
+        evs = [{"kind": "model_call", "model": "m1", "ok": i % 2 == 0}
+               for i in range(10)]
+        p.write_text("".join(__import__("json").dumps(e) + "\n" for e in evs))
+        monkeypatch.setattr(tel, "_path", lambda: p)
+        out = tel.calibration_snapshot(recent=4)
+        # last 4 outcomes: indices 6,7,8,9 → ok, fail, ok, fail → 2/4
+        assert out["m1"].startswith("2/4"), out
+
+    def test_noise_events_do_not_count(self, tmp_path, monkeypatch):
+        p = tmp_path / "t.jsonl"
+        evs = [{"kind": "review", "lane": "pr"}] * 100
+        evs.append({"kind": "model_call", "model": "m1", "ok": True})
+        p.write_text("".join(__import__("json").dumps(e) + "\n" for e in evs))
+        monkeypatch.setattr(tel, "_path", lambda: p)
+        out = tel.calibration_snapshot(recent=500)
+        assert out["m1"].startswith("1/1"), out
+
+    def test_tokens_accumulated(self, tmp_path, monkeypatch):
+        p = tmp_path / "t.jsonl"
+        p.write_text('{"kind": "model_call", "model": "m1", "ok": true, '
+                     '"prompt_tokens": 100, "completion_tokens": 50}\n')
+        monkeypatch.setattr(tel, "_path", lambda: p)
+        out = tel.calibration_snapshot()
+        assert "150 tok" in out["m1"], out
+
+    def test_corrupt_lines_skipped(self, tmp_path, monkeypatch):
+        p = tmp_path / "t.jsonl"
+        p.write_text("not json\n"
+                     '{"kind": "model_call", "model": "m1", "ok": true}\n'
+                     '{"broken": \n')
+        monkeypatch.setattr(tel, "_path", lambda: p)
+        out = tel.calibration_snapshot()
+        assert out["m1"].startswith("1/1"), out
