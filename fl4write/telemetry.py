@@ -135,6 +135,8 @@ def calibration_snapshot(recent: int = 500) -> dict[str, Any]:
         lines = chunk.splitlines()
     except OSError:
         return {}
+    if recent <= 0:
+        return {}
     models: dict[str, dict[str, int]] = {}
     # F8-011: the contract is the last N model-CALL events — slicing the
     # last 3N raw lines erased calibration when reviews outnumbered calls.
