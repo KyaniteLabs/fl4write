@@ -159,10 +159,15 @@ def test_retro_seed_watermark_is_time_relative(tmp_path):
         f"LEARNINGS #63 / PILOT.md line 58 — fixture time-rot. "
         f"Saw: {bad.group(0) if bad else '?'}"
     )
-    # Must reference datetime.now(timezone.utc) to stay wall-clock anchored
-    assert "datetime.now(timezone.utc)" in src, (
-        "_seed_watermark must anchor on datetime.now(timezone.utc) so the "
-        "watermark stays ahead of _old_date-based PR dates."
+    # Must stay wall-clock anchored: either directly via
+    # datetime.now(timezone.utc), or by delegating to _old_date (which itself
+    # defaults to datetime.now(timezone.utc) — the 8bcc014 relative-clock
+    # variant). Both keep the watermark ahead of _old_date-based PR dates.
+    assert ("datetime.now(timezone.utc)" in src
+            or "_old_date(" in src), (
+        "_seed_watermark must anchor on datetime.now(timezone.utc) "
+        "(directly or via _old_date) so the watermark stays ahead of "
+        "_old_date-based PR dates."
     )
 
     # Behavioral check: writing through the helper lands a watermark in
