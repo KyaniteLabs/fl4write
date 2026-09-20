@@ -164,7 +164,15 @@ def redact_credentials(text: str) -> str:
     _SPLIT_TOKEN_RE = _re.compile(r"[A-Za-z0-9_\-]+(?:[./][A-Za-z0-9_\-]+)+")
     def _split_sub(m) -> str:
         tok = m.group(0)
-        if len(tok) >= 24 and ("." in tok or "/" in tok):
+        # D7-035: PURE-slash tokens (AWS secret keys: base64, never a dot)
+        # are real secrets from 16 chars up. Any token containing a dot —
+        # file paths (UNQUERYABLE/new.py), dotted identifiers, JWTs — keeps
+        # the 24-char floor: redacting a path at 16+ breaks every downstream
+        # path query (ci_watch path_is_file) and leaks nothing (paths are
+        # public repo structure, not credential material).
+        if "/" in tok and "." not in tok and len(tok) >= 16:
+            return "[redacted]"
+        if "." in tok and len(tok) >= 24:
             return "[redacted]"
         return tok
     out = _SPLIT_TOKEN_RE.sub(_split_sub, out)

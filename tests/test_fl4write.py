@@ -832,3 +832,28 @@ def test_redact_credentials_multiple_runs():
     out2 = redact_credentials('x=aaaaaaaaaaaaaaaa b=zzzzzzzzzzzzzzzz')
     assert 'zzzzzzzzzzzzzzzz' not in out2
     assert 'aaaaaaaaaaaaaaaa' not in out2
+
+
+def test_redact_credentials_short_slash_secret():
+    """D7-035: slash-separated AWS-style secret keys of 16-22 chars leaked
+    past the 24-char split-token floor (the '/' breaks the 16+ contiguous-run
+    rule). Slash tokens must redact from 16 chars up; dotted tokens (JWTs,
+    com.example.Foo identifiers) keep the 24-char floor so legitimate dotted
+    identifiers are unaffected."""
+    from fl4write.scrub import redact_credentials
+    # short slash-separated AWS secret keys (16-22 chars) must be redacted
+    for n in (16, 20, 22):
+        half = n // 2
+        tok = "A" * half + "/" + "B" * (n - half)
+        out = redact_credentials("key=" + tok)
+        assert tok not in out, f"slash secret of len {n} leaked"
+        assert "[redacted]" in out
+    # full 30-char AWS secret key still redacted
+    full = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    assert full not in redact_credentials("key=" + full)
+    # JWT (dotted, long) still redacted
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+    assert jwt not in redact_credentials(jwt)
+    # legitimate dotted identifiers stay (24-char floor for dotted tokens)
+    assert redact_credentials("com.example.Foo") == "com.example.Foo"
+    assert redact_credentials("a.b.c") == "a.b.c"
