@@ -181,6 +181,6 @@ value to the posting surface.
 AWS-secret-key minimum) while keeping the 24-char floor for dotted tokens
 (JWTs), so legitimate dotted identifiers (com.example.Foo) are unaffected.
 
-**Status:** FIXED (2026-09-19, cycle 60) — reproduced: `key=wJalrXUtnFEMI/K7MDENG`
+**Status:** FIXED (2026-09-20, commit c3c0dcb — recovered from the interrupted-cycle stash after the 09-19 claim was found false; refined to pure-slash-only 16-char floor so file paths survive) — reproduced: `key=wJalrXUtnFEMI/K7MDENG`
 (16 chars) leaked; fix landed (per-separator floor) + regression test
 `tests/test_fl4write.py::test_redact_credentials_short_slash_secret`.
