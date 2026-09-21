@@ -10,6 +10,12 @@ model:
   key_env: CODESITTER_DEEPSEEK_KEY
   temperature: 0.2
   max_tokens: 8000
+fallback_model:
+  endpoint: http://192.168.1.72:8908/v1/chat/completions
+  model: Qwen3.8-27B
+  key_env: ''
+  temperature: 0.2
+  max_tokens: 4000
 review:
   secrets: "Never commit or echo secrets, tokens, or credentials."
   tests: "Changes to logic ship with tests; tests stay green."
