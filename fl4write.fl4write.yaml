@@ -15,9 +15,9 @@ model:
   temperature: 0.2
   max_tokens: 4000
 fallback_model:
-  endpoint: https://api.deepinfra.com/v1/openai/chat/completions
-  model: deepseek-ai/DeepSeek-V4-Flash-0731
-  key_env: CODESITTER_DEEPSEEK_KEY
+  endpoint: http://192.168.1.72:8908/v1/chat/completions
+  model: Qwen3.8-27B
+  key_env: ''
   temperature: 0.2
   max_tokens: 4000
 review:
