@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # make-gauntlet-pr — full-tree FL4WRITE review vehicle for a published repo.
-# Usage: make-gauntlet-pr.sh <owner>/<repo> [local-workdir]
+# Usage: make-gauntlet-pr.sh [--refresh] <owner>/<repo> [local-workdir]
 # Construction (09-01 hard-won): GitHub refuses orphan<->main PRs (no common
 # history) and single-commit repos yield "no commits between" — so: base =
 # empty tree COMMITTED WITH the repo root as parent (common history ✓);
@@ -9,10 +9,13 @@
 # After fixes on the default branch, refresh: re-run this script with --refresh
 # to rebuild the target marker (new SHA -> fl4write re-reviews).
 set -euo pipefail
-R="${1:?usage: make-gauntlet-pr.sh <owner>/<repo> [workdir]}"
-WD="${2:-$(mktemp -d)}"
 REFRESH=0
-[ "${1:-}" = "--refresh" ] && { REFRESH=1; shift; R="${1:?repo required}"; WD="${2:-$WD}"; }
+if [ "${1:-}" = "--refresh" ]; then
+  REFRESH=1
+  shift
+fi
+R="${1:?usage: make-gauntlet-pr.sh [--refresh] <owner>/<repo> [workdir]}"
+WD="${2:-$(mktemp -d)}"
 
 if [ ! -d "$WD/.git" ]; then
   git clone -q "https://github.com/$R.git" "$WD"
@@ -41,10 +44,12 @@ gh pr create -R "$R" --base gauntlet/full-review --head gauntlet/target \
   --title "FL4WRITE retroactive gauntlet: full-tree review of published HEAD" --body "$BODY"
 # Self-verify: the diff MUST be the full tree, not a delta from a shared root
 sleep 3
-PRN=$(gh pr list -R "$R" --state open --json number --jq '[.[] | select(.headRefName == "gauntlet/target")] | .[0].number // empty')
+PRN=$(gh pr list -R "$R" --state open --json number,headRefName --jq '[.[] | select(.headRefName == "gauntlet/target")] | .[0].number // empty')
 if [ -n "$PRN" ]; then
   CF=$(gh pr view "$PRN" -R "$R" --json changedFiles --jq .changedFiles)
   TOTAL=$(gh api "repos/$R/git/trees/$(git rev-parse origin/$DEFAULT)" --jq '.tree | length' 2>/dev/null || echo "?")
   echo "gauntlet PR #$PRN: changed_files=$CF (tree has ~$TOTAL files)"
-  [ "$CF" -lt 5 ] && echo "WARNING: changed_files < 5 — possible delta-only diff (epoch void class). Check head is gauntlet/target, not main."
+  if [ "$CF" -lt 5 ]; then
+    echo "WARNING: changed_files < 5 — possible delta-only diff (epoch void class). Check head is gauntlet/target, not main."
+  fi
 fi

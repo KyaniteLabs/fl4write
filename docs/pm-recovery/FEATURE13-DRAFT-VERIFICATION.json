@@ -1,0 +1,25 @@
+{
+  "observed_at": "2026-09-05T04:40:56.296404+00:00",
+  "status": "unmerged draft; not approved for shipment",
+  "base_commit": "4a0b09ac4beec31d6c3140a9dbe46c5e6a7a1017",
+  "passed": 698,
+  "skipped": 3,
+  "failures": 0,
+  "live_model_evaluation": false,
+  "junit_sha256": "9a3b95b110ed5aec8175c0304f3bc7706240e2db6876f5a1c13e1784b44d7280",
+  "source_sha256": {
+    "fl4write/exhaustive.py": "af746a37df176ba33fd0da84fc5101e6f4403bddfc0b24f8b96519e3bed3d716",
+    "tests/test_exhaustive.py": "81afdfc7edfde9e50b23fffaab9dd72724e1fd1e2282048822376a2f7858e78e"
+  },
+  "note": "After full-suite start, an unused import was removed; lint passed. A synthetic credential fixture was split into equivalent literals; its focused test passed. No functional source change.",
+  "scope": "Full suite before review-driven publication quarantine",
+  "quarantine_verification": {
+    "focused_passed": 2,
+    "lint": "passed",
+    "publications_attempted": 0,
+    "current_source_sha256": {
+      "fl4write/exhaustive.py": "80bc4eb0ac24d1bed1af299c06a7f111d6cf7b4873ace059b928909a21e5296a",
+      "tests/test_exhaustive.py": "b1dcc5ed3818813e6c962c4050d947bfe9ae2089f112f926772e1efdae07069e"
+    }
+  }
+}

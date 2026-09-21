@@ -657,7 +657,151 @@ completed issues once, without rescanning or fixing before publication
 succeeds. Four behavioral cases pin complete/partial bodies and successful/
 failed legacy refresh. The isolated release passes 672 tests with no skips,
 including real model calls. This does not certify an exhaustive audit round.
-## 63. The retro fixture time-rot: five instances in, time to guard the corpus (2026-09-15)
+
+## 63. Match repair and review boundaries to their actual work (2026-09-05)
+
+Fresh round 18 found five defects despite a passing 841-test live suite.
+Four repairs establish explicit boundaries: open-PR freshness checks use the
+reviewed SHA; whole-file analysis accepts the complete supported 200000-byte
+source instead of applying the 60000-character PR-diff cap; the public repair
+operation owns and removes its temporary clones on every outcome; and owned
+fix PRs are polled each enabled live cycle even when source reviews are cached.
+Unsupported whole-file inputs defer before a model call. Regression cases
+cover byte accounting, late-file findings, ordinary checkout failure, pending
+CI and quiet subsequent cycles. Existing freshness fixtures now accept the
+selected revision. The fifth finding, issue retries erased after incomplete
+listing, remains open pending its real automated repair trial. Fresh green
+rounds remain 0/3; these repairs do not establish certification.
+
+Independent repair review caught two boundary regressions before delivery:
+post-merge repairs still need default-branch freshness, and the normal merge
+executor remains GitHub-only. Thread the post-merge mode into the freshness
+choice and retain the primary-forge gate on the cycle drain. Two additional
+real-cycle regressions reproduce the incorrect repaired behavior and pass
+after these boundaries are restored.
+
+The fifth repair subsequently landed at5452139: issue intake now carries
+listing completeness, so absence only removes old retries after a complete
+listing. Four real-cycle tests cover outage, malformed fallback, pagination
+exhaustion and complete-empty cleanup; the first three preserve state through
+recovery. Independent review passed333 neighboring tests. Full isolated live
+validation passed858 tests with no skips and Ruff. The generated trial failed
+before PR creation because its test forge never entered the fallback paths;
+the separate manual repair does not count as automated lifecycle success.
+Require regression fixtures to prove the intended failure path was executed,
+not merely produce red assertions. Original failed artifacts remain intact.
+
+## 64. Completeness includes row identity and executable behavior (2026-09-05)
+
+Round19 found two defects after a green858-test live run. A valid list envelope
+does not prove complete intake when row identities are malformed: retain the
+direct caller's usable rows, but defer stateful processing until every identity
+is known. Mixed valid/invalid listings must not advance the watermark past
+unknown work. Twelve primary/fallback recovery cases pin this distinction.
+
+Read-only test snapshots must preserve tracked executable behavior. Removing
+write permission from a script should retain owner execute permission; ordinary
+source files remain non-executable. A real tracked shell-helper invocation
+reproduces the PermissionError that Python-only test entry points concealed.
+Neither repair creates a fresh clean round or clears failed generated trials.
+
+## 65. Preserve identities across presentation, publication and pagination (2026-09-05)
+
+Round20 found three defects. A scrubbed path is display text, not a lossless
+model-decision key: use collision-free aliases when formatting changes paths,
+and map both keep and demotion decisions consistently. A clean rescan must
+replace an existing findings report; publication is acknowledged only after
+the update succeeds, with legacy state repaired and failures retried. Finally,
+pagination must use the adapter's actual page-size parameter: Forgejo's limit
+and GitHub's per_page are different contracts. Test a server that honors those
+parameters and enough rows to force fallback, rather than counting invented
+short fixture pages. Thirteen regressions cover these repairs.
+
+## 66. Preserve source bytes through every repair stage (2026-09-05)
+
+Literal Unicode paths and custom rule IDs need reversible handling wherever
+they become presentation text or parsed identity. Round 21 also demonstrated
+that a prepared patch is structured data, not a fresh model response. Passing
+cached source through reasoning-text extraction changed literal source bytes
+and broke repair replay. The same extraction damaged first-generation full
+content and compact replacements. Decode complete JSON, remove only explicit
+outer wrappers, and validate cached objects without reparsing their strings.
+Test the same source through initial response and replay, including supported
+wrappers. Green tests alone did not reveal the changed patch identity.
+
+## 67. Bounded state must preserve discoverability and scope (2026-09-05)
+
+A retry cap may bound stored IDs, but it cannot forget pending work behind a
+watermark. Keep older pending identities and rewind before omitted ones so
+ordinary collection finds the rest; verify actual recovery on the next cycle.
+Shadow mode must not move that live boundary. The generated round22 repair
+passed its live tests yet violated shadow preservation, so independent review
+rejected it. Completed audits also need current scope evidence, not just an
+unchanged HEAD. Validate the effective fingerprint before reusing completion,
+and migrate unknown legacy scope through publication retry and a fresh audit.
+
+## 68. Compare instants and preserve encoded identities (2026-09-05)
+
+ISO timestamp strings do not sort chronologically across fractional precision
+and timezone offsets. Filtering, ordering and cursor advancement must share
+aware datetime comparisons, and persistence validation must accept the same
+spellings as parsing. Test capped cycles and actual save/load, not just isolated
+comparisons. Presentation identities also need one encoding boundary: a parsed
+finding path is already encoded, so resolving it must reuse that identity.
+
+## 69. Verify shell argument boundaries and persisted numeric overflow (2026-09-05)
+
+Consume optional flags before assigning positional defaults. Preserve literal
+filenames through both worker dispatch and result aggregation; a quoted write
+does not protect a later unquoted read. Exercise the real shell fragment with
+spaces, newlines and glob characters, including failed and missing results.
+JSON numeric syntax can overflow the runtime float representation: persisted
+counter normalization must reconcile integer-conversion overflow while keeping
+valid review memory and counters.
+
+## 70. Persist the work left at a deadline (2026-09-05)
+
+Finishing a review does not imply its fixes were attempted. Check the deadline
+at the review-to-fix boundary and before each new attempt; persist unattempted
+findings against the reviewed SHA so a later cycle can resume without another
+review or comment. Verify save/load and pruning between cycles. The same
+lifecycle test matters for retry parks: normalizing only a local copy can
+leave persisted values that pruning drops. Numeric identities need conversion
+validation, not isdigit alone; include Unicode forms and conversion-size
+limits in bounded-reconciliation tests.
+
+## 71. Keep internal file identities exact (2026-09-05)
+
+Grounded source paths are repair identities. Preserve them through recon,
+sealed evidence and cached replay; sanitize presentation at its own boundary.
+Git filename output needs NUL delimiters and byte-faithful decoding. Exercise
+real repositories with Unicode, whitespace and newline-bearing filenames so
+tests cover Git quoting and source hashing together.
+
+## 72. Classify CI evidence before applying action caps (2026-09-05)
+
+Use forge conclusion spellings at the decision boundary; cancellation must
+not consume a later real failure's SHA action marker. A failed check can
+contain informational annotations. Filter explicit notice/warning levels
+before the actionable annotation cap so those rows neither direct repairs
+nor hide a real failure. Verify persisted cycles and mixed rows at a cap of one.
+
+## 73. Count the renderer's actual code fences (2026-09-05)
+
+Acceptance metrics consume rendered review rows. Markdown code fences widen
+when file identities contain backticks; a single-backtick marker pattern
+silently drops resolved findings and changes the acceptance denominator.
+Test real renderer-to-metrics output while retaining line anchoring and
+near-match controls so quoted message text cannot inflate counts.
+
+## 74. Resolve renamed paths from complete diff blocks (2026-09-05)
+
+Unquoted Git headers can contain the separator text inside both filenames.
+Same-path heuristics cannot identify every rename destination. Use destination
+metadata before the first hunk or binary body, and share that identity across
+forge intake, source grounding and line spans. Test real Git renames against
+the final rendered review so a dropped finding cannot masquerade as clean.
+## 75. The retro fixture time-rot: five instances in, time to guard the corpus (2026-09-15)
 
 PILOT.md line 58 already names fixture time-rot — "hardcoded dates in
 tests expire, use time-relative fixtures, four rounds of this already."
@@ -666,8 +810,12 @@ helper `_seed_watermark` used a fixed `'2026-08-31'` `merged_since`
 that fell behind every PR date by 2026-09-05 (`now - 10d = Sep 5`), so
 `p.merged_at <= cursor` was FALSE for every PR and `retro_reviewed`
 was always 0. **Seven tests silently failed** until the helper was
-migrated to `datetime.now(timezone.utc)` (`28659b7`), matching the
+made time-relative (local fix 28659b7; landed equivalently as the explicit-clock
+anchor repair abf003e via PR #22), matching the
 `_old_date` / `_hours_ago` / `_r4_date` pattern used elsewhere.
+
+(Entry renumbered 63->75 at integration: the exhaustive-loop candidate had
+already extended the ledger to 74.)
 
 The same trap exists for any future contributor: copy-paste a real
 date into a fixture and the suite looks green today, then fails in

@@ -1,0 +1,158 @@
+import json
+import subprocess
+
+import pytest
+
+from fl4write import exhaustive_sandbox as sandbox
+
+
+IMAGE = "sha256:" + "a" * 64
+
+
+@pytest.mark.parametrize("image", [None, "python:latest", "sha256:short"])
+def test_runtime_requires_immutable_image_identity(tmp_path, image):
+    with pytest.raises(sandbox.SandboxUnavailable, match="immutable"):
+        sandbox.container_command(["pytest", "{junit}"], tmp_path, image, "fixture", 30)
+
+
+def test_container_has_only_readonly_source_mount_and_bounded_private_outputs(tmp_path):
+    argv = sandbox.container_command(["python3", "-m", "pytest", "--junitxml", "{junit}"],
+                                     tmp_path, IMAGE, "fixture", 30)
+    assert argv[argv.index("--network") + 1] == "none"
+    assert "--init" in argv  # Reap orphaned test descendants without raising the process cap.
+    assert argv[argv.index("--pids-limit") + 1] == "256"
+    assert "--read-only" in argv and argv[argv.index("--cap-drop") + 1] == "ALL"
+    assert argv.count("--mount") == 1
+    assert argv[argv.index("--mount") + 1] == f"type=bind,src={tmp_path.resolve()},dst=/work,readonly"
+    assert any(arg.startswith("/evidence:") and "size=16777216" in arg for arg in argv)
+    # Test runners may generate helper executables; Docker defaults tmpfs to noexec.
+    assert any(arg.startswith("/tmp:") and "exec" in arg.split(":", 1)[1].split(",") for arg in argv)
+    assert any(arg.startswith("/control:") and "mode=0700" in arg for arg in argv)
+    assert json.loads(argv[-1])[-1] == "/evidence/report.xml"
+
+
+def test_completed_report_is_copied_after_supervisor_and_owned_container_is_removed(tmp_path, monkeypatch):
+    calls = []
+    report = b'<testsuite><testcase name="test_ok"/></testsuite>'
+    def docker(argv, timeout, binary=False):
+        calls.append(argv)
+        if argv[1:3] == ["image", "inspect"]:
+            output = IMAGE + " 1\n"
+        elif "wait" in argv:
+            output = json.dumps({"kind": "completed", "returncode": 0})
+        elif "report" in argv:
+            output = report
+        else:
+            output = "container\n"
+        return subprocess.CompletedProcess(argv, 0, output, "")
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    result = sandbox.run_isolated(["pytest", "{junit}"], tmp_path, tmp_path / "result.xml", 30, IMAGE)
+    assert result.returncode == 0 and (tmp_path / "result.xml").read_bytes() == report
+    name = calls[1][calls[1].index("--name") + 1]
+    assert calls[-1] == ["docker", "rm", "--force", name]
+
+
+def test_runner_timeout_retains_no_false_test_report_and_removes_container(tmp_path, monkeypatch):
+    calls = []
+    def docker(argv, timeout, binary=False):
+        calls.append(argv)
+        output = IMAGE + " 1" if argv[1:3] == ["image", "inspect"] else "container"
+        if "wait" in argv:
+            output = json.dumps({"kind": "deferred", "reason": "test process timed out"})
+        return subprocess.CompletedProcess(argv, 0, output, "")
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    with pytest.raises(sandbox.SandboxUnavailable, match="timed out"):
+        sandbox.run_isolated(["pytest", "{junit}"], tmp_path, tmp_path / "result.xml", 30, IMAGE)
+    assert not (tmp_path / "result.xml").exists()
+    assert calls[-1][1:3] == ["rm", "--force"]
+
+
+@pytest.mark.parametrize("timed_out", [False, True])
+def test_failed_cleanup_defers_and_retains_owned_recovery_identity(tmp_path, monkeypatch, timed_out):
+    calls = []
+    def docker(argv, timeout, binary=False):
+        calls.append(argv)
+        if argv[1:3] == ["image", "inspect"]:
+            output = IMAGE + " 1"
+        elif "wait" in argv:
+            output = json.dumps({"kind": "deferred"} if timed_out else
+                                {"kind": "completed", "returncode": 0})
+        elif "report" in argv:
+            output = b'<testsuite><testcase name="ok"/></testsuite>'
+        else:
+            output = "container"
+        return subprocess.CompletedProcess(argv, int(argv[1:3] == ["rm", "--force"]), output, "")
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    with pytest.raises(sandbox.SandboxUnavailable, match="cleanup remains unresolved") as caught:
+        sandbox.run_isolated(["pytest", "{junit}"], tmp_path, tmp_path / "result.xml", 30, IMAGE)
+    saved = json.loads((tmp_path / "result.xml.container.json").read_text())
+    assert saved["container"] == calls[1][calls[1].index("--name") + 1]
+    assert saved["image"] == IMAGE
+    if timed_out:
+        assert "timed out" in str(caught.value)
+        assert not (tmp_path / "result.xml").exists()
+
+
+# ---- 2026-09-16 adversarial Arch-1: evidence frozen before host readback ------
+
+def test_embedded_supervisor_report_is_preferred_over_post_exit_readback(tmp_path, monkeypatch):
+    """The JUnit bytes must arrive EMBEDDED in the root-owned supervisor
+    status (snapshot taken after the test process group is killed), never
+    via a post-exit read of the 1777 evidence tmpfs a surviving child can
+    still write. The separate `report` exec is legacy-runtime only."""
+    import base64
+    calls = []
+    report = b'<testsuite><testcase name="frozen"/></testsuite>'
+    def docker(argv, timeout, binary=False):
+        calls.append(argv)
+        if argv[1:3] == ["image", "inspect"]:
+            output = IMAGE + " 1\n"
+        elif "wait" in argv:
+            output = json.dumps({"kind": "completed", "returncode": 0,
+                                 "report_b64": base64.b64encode(report).decode()})
+        else:
+            output = "container\n"
+        return subprocess.CompletedProcess(argv, 0, output, "")
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    result = sandbox.run_isolated(["pytest", "{junit}"], tmp_path, tmp_path / "r.xml", 30, IMAGE)
+    assert result.returncode == 0
+    assert (tmp_path / "r.xml").read_bytes() == report
+    assert not any("report" in a for a in calls), (
+        "host re-read /evidence after exit — the forgery window Arch-1 closed is open again"
+    )
+
+
+def test_corrupt_embedded_report_fails_closed(tmp_path, monkeypatch):
+    def docker(argv, timeout, binary=False):
+        if argv[1:3] == ["image", "inspect"]:
+            output = IMAGE + " 1\n"
+        elif "wait" in argv:
+            output = json.dumps({"kind": "completed", "returncode": 0,
+                                 "report_b64": "!!not-base64!!"})
+        else:
+            output = "container\n"
+        return subprocess.CompletedProcess(argv, 0, output, "")
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    with pytest.raises(sandbox.SandboxUnavailable, match="base64"):
+        sandbox.run_isolated(["pytest", "{junit}"], tmp_path, tmp_path / "r.xml", 30, IMAGE)
+    assert not (tmp_path / "r.xml").exists()
+
+
+def test_worker_kills_group_on_success_and_snapshots_report(tmp_path):
+    """Contract pin on the container supervisor source: the process-group
+    kill lives in the FINALLY of the wait (every exit path, success
+    included) and the report snapshot is embedded into the ROOT-OWNED
+    status document — the two halves of the Arch-1 closure."""
+    from pathlib import Path as _P
+    src = (_P(sandbox.__file__).resolve().parents[1]
+           / "tools" / "exhaustive-runtime" / "worker.py").read_text()
+    assert "os.killpg(process.pid, signal.SIGKILL)" in src
+    # the kill is inside a finally attached to the wait, not only the
+    # timeout branch (which is where it lived pre-fix)
+    start = src.index("process.wait(timeout=timeout)")
+    wait_block = src[start:src.index("except OSError:", start)]
+    assert "finally:" in wait_block and "killpg" in wait_block, (
+        "group kill must cover the SUCCESS path, not just timeouts"
+    )
+    assert 'result["report_b64"] = embedded' in src
+    assert "STATUS" in src and "mode=0700" not in src  # status path is /control

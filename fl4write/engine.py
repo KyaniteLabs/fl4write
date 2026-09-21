@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import fixlane, gatekeeper, renderer, state
+from .analyzer import MAX_FILE_BYTES
 from .config import RepoConfig
 from .forges import ForgeAdapter, ForgeError, adapter_for
 from .models import Finding, PullRequest
@@ -97,6 +98,7 @@ class CycleReport:
     fix_attempts: int = 0
     fix_failures: int = 0
     _fix_failure_notes: list = field(default_factory=list)
+    _merged_listing_incomplete: bool = False
     alerts: list[str] = field(default_factory=list)
 
 
@@ -135,10 +137,11 @@ def _review_pr(
     deadline: float | None = None,
 ) -> str:
     """Review one PR. Contained: any failure logs and returns — the cycle and
-    its state survive. Returns the outcome: terminal outcomes ("reviewed",
-    "shadow", "dependency-skip", "model-failed-cap") advance the post-merge
-    watermark; deferred ones ("diff-unavailable", "model-unavailable") do
-    not — the PR must be retried by a later sweep."""
+    its state survive. The post-merge sweep treats "reviewed" and
+    "model-failed-cap" as terminal. It records "shadow" separately for live
+    cutover and stops on deferred outcomes ("diff-unavailable",
+    "model-unavailable", "deferred", "fix-deferred") for later retry.
+    Dependency filtering occurs separately before this function is called."""
     from .analyzer import ModelUnavailable, analyze
 
     diff = get_diff(pr)
@@ -318,7 +321,10 @@ def _review_pr(
                                        fixlane.escalate(pr, escalatable, blocked))
                 report.fix_escalations += len(escalatable)
         else:
-            _fix_lane(pr, findings_for_fix, config, primary, st, report)
+            _fix_lane(pr, findings_for_fix, config, primary, st, report,
+                      post_merge=post_merge, deadline=deadline)
+            if st["prs"][str(pr.number)].get("pending_fixes"):
+                return "fix-deferred"
 
     return "shadow" if config.shadow else "reviewed"
 
@@ -330,24 +336,35 @@ def _fix_lane(
     primary: ForgeAdapter,
     st: dict[str, Any],
     report: CycleReport,
+    *, post_merge: bool = False, deadline: float | None = None,
 ) -> None:
     """Attempt fixes for Critical/Major findings; capped by fix_depth in state
     (which now PERSISTS across pushes — mark_reviewed merges, not replaces)."""
     from . import executor
 
-    for f in findings:
-        if f.severity not in ("Critical", "Major"):
-            continue
-        pr_state = st["prs"].setdefault(str(pr.number), {})
+    pr_state = st["prs"].setdefault(str(pr.number), {})
+    pending = [f for f in findings if f.severity in ("Critical", "Major")]
+    pr_state["pending_fix_sha"] = pr.head_sha
+    pr_state["pending_fixes"] = [f.model_dump() for f in pending]
+    for f in pending:
+        if deadline is not None and time.monotonic() >= deadline:
+            report.alerts.append(f"#{pr.number}: fix work deferred — cycle deadline reached")
+            return
         depth = int(pr_state.get("fix_depth", 0))
         blocked = fixlane.fix_allowed(pr, config, depth)
         if blocked is not None:
             body = fixlane.escalate(pr, [f], blocked)
             primary.create_comment(config.repo, pr.number, body)
             report.fix_escalations += 1
+            pr_state["pending_fixes"].pop(0)
             continue
-        if not _fix_freshness_gate(primary, config, f):
+        if not _fix_freshness_gate(primary, config, f, None if post_merge else pr.head_sha):
+            pr_state["pending_fixes"].pop(0)
             continue
+        if deadline is not None and time.monotonic() >= deadline:
+            report.alerts.append(f"#{pr.number}: fix work deferred — cycle deadline reached")
+            return
+        pr_state["pending_fixes"].pop(0)
         report.fix_attempts += 1
         result = executor.attempt_fix(pr, f, config)
         status = result.get("status")
@@ -365,14 +382,55 @@ def _fix_lane(
             # Sol audit: unknown statuses had no denominator — count + surface
             report.fix_failures += 1
             report._fix_failure_notes.append(f"#{pr.number} unknown-status {status!r}")
+    pr_state.pop("pending_fixes", None)
+    pr_state.pop("pending_fix_sha", None)
+
+
+def _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline, *, post_merge=False):
+    """Resume only unattempted fixes; a completed review stays completed.
+
+    Returns "gated-off" when the fix lane is structurally unable to run
+    (run_fixes=False, fix.enabled=false, shadow, or a non-GitHub primary —
+    the Forgejo cutover shape), "dropped" when a stale/malformed record was
+    cleared, and "attempted" when the lane actually executed for this PR."""
+    if not (run_fixes and config.fix.enabled and not config.shadow and primary.name == "github"):
+        return "gated-off"
+    rec = st["prs"].get(str(pr.number), {})
+    if rec.get("pending_fix_sha") != pr.head_sha:
+        rec.pop("pending_fixes", None)
+        rec.pop("pending_fix_sha", None)
+        return "dropped"
+    from pydantic import ValidationError
+    try:
+        rows = rec.get("pending_fixes", [])
+        if not isinstance(rows, list):
+            raise ValueError("pending fixes must be a list")
+        findings = [Finding.model_validate(row) for row in rows]
+    except (ValidationError, ValueError, TypeError):
+        rec.pop("pending_fixes", None)
+        rec.pop("pending_fix_sha", None)
+        report.alerts.append(f"#{pr.number}: malformed pending fixes dropped")
+        return "dropped"
+    try:
+        _fix_lane(pr, findings, config, primary, st, report,
+                  post_merge=post_merge, deadline=deadline)
+    except ForgeError as exc:
+        report.alerts.append(f"#{pr.number}: deferred fix forge error contained: {exc}")
+    return "attempted"
+
+
+def _poll_fix_merges(config: RepoConfig, primary: ForgeAdapter, report: CycleReport) -> None:
+    """Revisit owned fix PRs even when no source PR needs another review."""
+    from . import executor
+
     try:
         # bot_identity REQUIRED (post-merge build): the merge gate re-verifies
         # authorship against it — a missing identity fails every merge closed.
         merged = executor.check_and_merge_own_prs(config, primary.bot_login)
         report.fix_prs_merged += len(merged)  # Sol audit: was int += list
     except Exception as exc:  # merge scan must not kill the cycle
-
         log.warning("merge scan failed for %s: %s", config.repo, exc)
+        report.alerts.append("owned fix merge scan unavailable — will retry")
 
 
 def _post_merge_sweep(
@@ -409,20 +467,24 @@ def _post_merge_sweep(
     except ForgeError as exc:
         report.alerts.append(f"post-merge listing failed (skipped this cycle): {exc}")
         log.warning("merged-PR listing failed for %s: %s", config.repo, exc)
+        report._merged_listing_incomplete = True
         return set()
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         # UltraQA round 3: shape drift degrades the lane, never crashes
         report.alerts.append(f"post-merge listing degraded (skipped this cycle): {exc}")
+        report._merged_listing_incomplete = True
         return set()
     if not isinstance(merged_prs, list):
         # MECE round-6 (luna-max F6-C012): a truthy non-list envelope
         # (dict/None) crashed the row filter below — degrade loudly
         report.alerts.append(
             f"post-merge listing wrong shape ({type(merged_prs).__name__}; skipped this cycle)")
+        report._merged_listing_incomplete = True
         return set()
     _raw_rows = merged_prs
     merged_prs = [p for p in merged_prs if isinstance(p, PullRequest)]
     if len(merged_prs) != len(_raw_rows):
+        report._merged_listing_incomplete = True
         first_bad = next(i for i, r in enumerate(_raw_rows) if not isinstance(r, PullRequest))
         report.alerts.append(
             f"post-merge: {len(_raw_rows) - len(merged_prs)} malformed merged rows "
@@ -470,6 +532,38 @@ def _post_merge_sweep(
             terminal += 1
             continue
         if not state.needs_review(st, pr.number, pr.head_sha):
+            resume = _resume_fix_lane(pr, config, primary, st, report, run_fixes,
+                                      deadline, post_merge=True)
+            state.save_state(state_path, st)
+            if st["prs"][str(pr.number)].get("pending_fixes"):
+                if config.shadow:
+                    # shadow touches no live belts — skip without mutation
+                    continue
+                if resume == "gated-off":
+                    # PM 2026-09-16 (adversarial finding A1): a structurally
+                    # off fix lane (Forgejo cutover, fixes disabled, shadow)
+                    # used to wedge the merged sweep on this PR forever —
+                    # silent, un-healing, blocking every later merge. The
+                    # config opted out of fixes; the review itself is
+                    # complete, so drop the stale record WITH an alert and
+                    # let the sweep proceed.
+                    st["prs"][str(pr.number)].pop("pending_fixes", None)
+                    st["prs"][str(pr.number)].pop("pending_fix_sha", None)
+                    state.save_state(state_path, st)
+                    report.alerts.append(
+                        f"#{pr.number}: stale pending fixes dropped — fix lane is off "
+                        "(fixes disabled, shadow, or non-GitHub primary); review itself complete"
+                    )
+                    terminal += 1
+                    continue
+                # attempted-but-deferred (e.g. deadline): the record stays
+                # for the next cycle's resume — but never silently
+                report.alerts.append(
+                    f"#{pr.number}: merged sweep stalled — pending fixes await resume"
+                )
+                if not config.shadow:  # A2 (2026-09-16): shadow never owns the live watermark
+                    st.setdefault("merged_since", since)
+                break
             terminal += 1  # already reviewed at this SHA (e.g. while open)
             continue
         if reviewed_budget >= config.post_merge.max_per_cycle:
@@ -492,6 +586,11 @@ def _post_merge_sweep(
             pm_shadow[str(pr.number)] = pr.head_sha
             report.postmerge_reviewed += 1
             continue  # NOT terminal — the live cutover re-reviews and posts
+        if outcome == "fix-deferred":
+            report.postmerge_reviewed += 1
+            if not config.shadow:  # A2 (2026-09-16): shadow never owns the live watermark
+                st.setdefault("merged_since", since)
+            break
         if outcome in ("reviewed", "model-failed-cap"):
             if outcome == "reviewed":
                 report.postmerge_reviewed += 1
@@ -525,15 +624,17 @@ def _post_merge_sweep(
 
 
 # CI-watch conclusions that mean RED (everything not in the benign set).
-_CI_BENIGN = {"success", "skipped", "neutral", "canceled"}
+_CI_BENIGN = {"success", "skipped", "neutral", "canceled", "cancelled"}
 
 
-def _fix_freshness_gate(primary: ForgeAdapter, config: RepoConfig, finding) -> bool:
+def _fix_freshness_gate(primary: ForgeAdapter, config: RepoConfig, finding,
+                        ref: str | None = None) -> bool:
     """True = fresh enough to attempt a fix. The #503 class: a finding on a
     file deleted/moved after review made every attempt fail at fetch,
     invisibly. False = skip the fix (finding stays posted); None-probe =
     fail-open (proceed)."""
-    exists = primary.path_exists(config.repo, finding.path)
+    exists = (primary.path_exists(config.repo, finding.path, ref=ref)
+              if ref is not None else primary.path_exists(config.repo, finding.path))
     if exists is False:
         log.info("fix freshness gate: %s gone from HEAD — skipping fix", finding.path)
         return False
@@ -541,7 +642,7 @@ def _fix_freshness_gate(primary: ForgeAdapter, config: RepoConfig, finding) -> b
 
 # Omnisweep bounds (consensus-gated): files above this are skipped (the
 # contents API refuses >1MB; anything near it is generated/vendored).
-_OMNI_MAX_FILE_BYTES = 200_000
+_OMNI_MAX_FILE_BYTES = MAX_FILE_BYTES
 _OMNI_FIX_ATTEMPTS_PER_CYCLE = 3
 
 
@@ -595,6 +696,8 @@ def _omni_report_body(config: RepoConfig, findings: list[dict], scanned: int, to
     if len(ordered) > cap:
         lines.append(f"… and {len(ordered) - cap} more findings recorded in sweep state.\n")
     if complete:
+        if not findings:
+            lines.append("No findings were recorded in this completed sweep.\n")
         score, label = _omni_readiness(findings)
         lines.append(f"**Readiness: {score}/100 — {label}**\n")
         lines.append("_This finding-based score is subject to missing-evidence caps; "
@@ -676,6 +779,26 @@ def _omni_fix_phase(
             report._fix_failure_notes.append(f"omni {f['path']}:{f['line']} unknown-status {status!r}")
 
 
+def _omni_completed_actions(config, primary, st, report, *, allow_fixes=True):
+    """Retry a completed report before draining fixes; False means retry pending."""
+    if (not st.get("omni_published") or st.get("omni_report_version") != 2
+            or (st.get("omni_issue") and not st.get("omni_findings")
+                and not st.get("omni_clean_published"))):
+        findings = st.get("omni_findings", [])
+        total = int(st.get("omni_total", 0) or 0)
+        if findings or st.get("omni_issue"):
+            _omni_upsert_issue(config, primary, st, findings, total, total,
+                               complete=True, report=report)
+            if not st.get("omni_published") or st.get("omni_report_version") != 2:
+                return False
+        else:
+            st["omni_published"] = True
+            st["omni_report_version"] = 2
+    if allow_fixes and config.omnisweep.fix and st.get("omni_findings"):
+        _omni_fix_phase(config, primary, st, report)
+    return True
+
+
 def _omnisweep_step(
     config: RepoConfig,
     primary: ForgeAdapter,
@@ -715,27 +838,18 @@ def _omnisweep_step(
                 st["omni_head"] = _cur
                 report.alerts.append(
                     "omnisweep: HEAD changed after completion — re-auditing from scratch")
-        if not st.get("omni_complete"):
-            pass  # fell through to a fresh sweep below
-        else:
-            if not st.get("omni_published") or st.get("omni_report_version") != 2:
-                # MECE round-5 (sol F5-002): a completed sweep whose final
-                # publication FAILED must retry it — the old fast path
-                # returned before the upsert and 'retrying next cycle' lied
-                findings = st.get("omni_findings", [])
-                total = int(st.get("omni_total", 0) or 0)
-                if findings:
-                    _omni_upsert_issue(config, primary, st, findings, total, total,
-                                       complete=True, report=report)
-                    if not st.get("omni_published") or st.get("omni_report_version") != 2:
-                        return  # publication still failing — retry next cycle
-                else:
-                    st["omni_published"] = True  # clean sweep: nothing to publish
-            if config.omnisweep.fix and st.get("omni_findings"):
-                _omni_fix_phase(config, primary, st, report)
-            return
+        if st.get("omni_complete") and not st.get("omni_fp"):
+            # Legacy reports may need their format/publication retry, but an
+            # unknown old scope cannot be blessed with today's fingerprint.
+            if not _omni_completed_actions(config, primary, st, report, allow_fixes=False):
+                return
+            st["omni_complete"] = False
+            st["omni_scope_pending"] = True
+            report.alerts.append("omnisweep: completed scope unknown — fresh audit scheduled")
+            return  # preserve the publication receipt and prior report this cycle
 
-    tree = primary.list_tree_files(config.repo)
+    tree_getter = getattr(primary, "list_tree_files", None)
+    tree = tree_getter(config.repo) if callable(tree_getter) else None
     if tree is None:
         report.alerts.append("omnisweep: tree listing unqueryable (skipped this cycle)")
         return
@@ -795,8 +909,17 @@ def _omnisweep_step(
         and not any(fnmatch.fnmatch(p, pat) for pat in excludes)
     )
     total = len(scan)
+    if st.get("omni_scope_pending"):
+        if truncated or rows_bad:
+            return
+        _omni_reset_sweep(st)
+        report.alerts.append("omnisweep: legacy scope unknown — re-auditing from scratch")
     scanned_total = int(st.get("omni_scanned_total", 0))
+    if st.get("omni_complete") and (truncated or rows_bad):
+        return  # no publication or fixes before verifying the completed scope
     if total > config.omnisweep.max_total_files:
+        if st.get("omni_complete"):
+            _omni_reset_sweep(st)
         # MECE round-2 (terra F2-001): the cap bounds the TREE (one-shot);
         # the old scanned_total+total check double-counted the tree every
         # cycle and aborted large-but-legal sweeps mid-flight
@@ -842,12 +965,17 @@ def _omnisweep_step(
         if _anchor:
             fp_meta += "\x00head:" + _anchor
         fp = _hl.sha256(fp_meta.encode()).hexdigest()[:16]
-        if st.get("omni_fp") and fp != st["omni_fp"] and st.get("omni_cursor", ""):
+        if (st.get("omni_fp") and fp != st["omni_fp"]
+                and (st.get("omni_cursor", "") or st.get("omni_complete"))):
             # F11-C007: atomic reset — stale failure/quarantine counts and
             # totals must not ride the restart onto the new tree
             _omni_reset_sweep(st)
+            scanned_total = 0
             report.alerts.append("omnisweep: tree CHANGED mid-sweep — restarting from scratch")
         st["omni_fp"] = fp
+    if st.get("omni_complete"):
+        _omni_completed_actions(config, primary, st, report)
+        return
     cursor = st.get("omni_cursor", "")
     pending = [p for p in scan if p > cursor][: config.omnisweep.max_files_per_cycle]
     if not pending:
@@ -861,7 +989,7 @@ def _omnisweep_step(
         findings = st.get("omni_findings", [])
         report.omni_scanned = len(scan)
         report.omni_findings = len(findings)
-        if findings:
+        if findings or st.get("omni_issue"):
             _omni_upsert_issue(config, primary, st, findings, len(scan), len(scan),
                                complete=True, report=report)
             if not st.get("omni_published"):
@@ -871,6 +999,7 @@ def _omnisweep_step(
             # MECE round-6 (luna-max F6-C018): a CLEAN sweep publishes
             # nothing — that is success, never a publication failure
             st["omni_published"] = True
+            st["omni_report_version"] = 2
         report.alerts.append(f"omnisweep complete: {len(findings)} findings across {total} files")
         if config.omnisweep.fix and findings:
             _omni_fix_phase(config, primary, st, report)
@@ -934,7 +1063,7 @@ def _omnisweep_step(
             log.warning("omnisweep model unavailable at %s (attempt %d): %s", path, fails, exc)
             break  # one retry next cycle, cursor holds
         findings = doc.findings
-        if findings:
+        if findings and config.gatekeeper:
             findings, dropped, failed_open = gatekeeper.filter_findings(findings, config)
             report.gatekeeper_dropped += dropped
             if failed_open:
@@ -971,7 +1100,7 @@ def _omnisweep_step(
             + (f" ({unscannable} unscannable — model failed twice, skipped + recorded)" if unscannable else "")
             + (f" ({quarantined} unfetchable — recorded, not audited)" if quarantined else "")
         )
-        if st.get("omni_findings"):
+        if st.get("omni_findings") or st.get("omni_issue"):
             _omni_upsert_issue(
                 config, primary, st, st.get("omni_findings", []),
                 total, total, complete=True, report=report,
@@ -986,6 +1115,7 @@ def _omnisweep_step(
             # MECE round-6 (luna-max F6-C018): clean sweeps publish nothing —
             # that IS success, never a publication failure
             st["omni_published"] = True
+            st["omni_report_version"] = 2
         if config.omnisweep.fix and st.get("omni_findings"):
             _omni_fix_phase(config, primary, st, report)
     else:
@@ -1009,10 +1139,10 @@ def _omni_reset_sweep(st: dict) -> None:
     field goes — the old partial resets left stale failure/quarantine counts
     that prematurely quarantined new content, and stale totals contaminated
     the completion report. omni_issue survives: the next audit reuses it."""
-    for key in ("omni_complete", "omni_published", "omni_cursor", "omni_head",
+    for key in ("omni_complete", "omni_published", "omni_clean_published", "omni_cursor", "omni_head",
                 "omni_fp", "omni_findings", "omni_next_id", "omni_total",
                 "omni_scanned_total", "omni_file_fails", "omni_unscannable",
-                "omni_unfetchable", "omni_truncated_seen"):
+                "omni_unfetchable", "omni_truncated_seen", "omni_scope_pending"):
         st.pop(key, None)
 
 
@@ -1054,7 +1184,7 @@ def _omni_upsert_issue(
     degrades to next-cycle retry, never data loss. On a COMPLETE publish the
     state records omni_published — the retry contract the complete fast path
     honors (MECE round-5, sol F5-002)."""
-    if config.shadow or not findings:
+    if config.shadow or (not findings and (not complete or not st.get("omni_issue"))):
         return
     if complete:
         _score, _label = _omni_readiness(findings)
@@ -1063,12 +1193,20 @@ def _omni_upsert_issue(
     number = st.get("omni_issue")
     if number:
         if not primary.update_issue(config.repo, number, body):
+            st["omni_published"] = False
             # F12-C006: a DEAD issue id (deleted/forbidden) used to fail
             # forever — every completed fast path retried the same id and no
             # replacement was ever created. After bounded consecutive
             # failures the id is reconciled away (recreate next cycle); a
             # transient error keeps retrying.
             fails = int(st.get("omni_pub_fail", 0)) + 1
+            if not findings:
+                # Recreating an empty issue would leave the previous findings
+                # visible forever. Keep its identity until the clean update lands.
+                st["omni_pub_fail"] = fails
+                report.alerts.append(
+                    f"omnisweep: clean update of issue #{number} failed ({fails} attempts) — retrying next cycle")
+                return
             if fails >= 3:
                 report.alerts.append(
                     f"omnisweep: issue #{number} update failed {fails}x — id "
@@ -1085,6 +1223,7 @@ def _omni_upsert_issue(
         if complete:
             st["omni_published"] = True
             st["omni_report_version"] = 2
+            st["omni_clean_published"] = not findings
         return
     created = primary.open_issue(
         config.repo, f"omnisweep: full-tree audit of {config.repo}", body,
@@ -1118,7 +1257,12 @@ def _retro_sweep(
     from datetime import datetime, timedelta, timezone
 
     if config.shadow:
-        # MECE round-6 (luna-max F6-C006): retro under shadow is a dry run
+        # MECE round-6 (luna-max F6-C006): retro under shadow is a dry run —
+        # ARCH-2 NOTE (2026-09-16): this early return SUBSUMES the
+        # retro_shadow_seen belt machinery below (belt load/write and the
+        # per-PR shadow branch are unreachable while this return stands);
+        # they are retained for history. Do not "restore" shadow retro by
+        # deleting this return without deleting the belt code too.
         # with no consumer and every outcome path leaked live state (seen
         # belts, cursors, clean/deferred/park records) — skip entirely.
         log.info("retro: shadow mode — sweep skipped (dry-run law)")
@@ -1128,17 +1272,26 @@ def _retro_sweep(
     boundary = (
         datetime.now(timezone.utc) - timedelta(days=config.retro_audit.lookback_days)
     ).isoformat()
-    upper = state.merged_watermark(st) or datetime.now(timezone.utc).isoformat()
-    cursor = st.get("retro_cursor") or upper
+    from .timestamps import parse_iso
+
+    upper = state.merged_watermark(st)
+    if parse_iso(upper) is None:
+        upper = datetime.now(timezone.utc).isoformat()
+    cursor = st.get("retro_cursor")
+    if parse_iso(cursor) is None:
+        cursor = upper
+    cursor_instant = parse_iso(cursor)
 
     try:
         listed = primary.list_merged_prs(config.repo, boundary)
     except ForgeError as exc:
         report.alerts.append(f"retro listing failed (skipped this cycle): {exc}")
+        report._merged_listing_incomplete = True
         return set()
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         # UltraQA round 2: API shape drift degrades the lane, never crashes
         report.alerts.append(f"retro listing degraded (skipped this cycle): {exc}")
+        report._merged_listing_incomplete = True
         return set()
 
     # F9-C001: envelope guard — a truthy dict iterated its keys as 'rows',
@@ -1146,17 +1299,20 @@ def _retro_sweep(
     if not isinstance(listed, list):
         report.alerts.append(
             f"retro listing wrong envelope ({type(listed).__name__}; skipped this cycle)")
+        report._merged_listing_incomplete = True
         return set()
 
     # row-shape guard (UltraQA round 2): one malformed merged row must not
     # abort the sweep. F10-C001: a malformed listing must never become a
     # terminal 'clean audit' — completion is blocked while rows are bad
-    _dropped_rows = sum(1 for p in listed if not isinstance(p, PullRequest))
+    _dropped_rows = sum(1 for p in listed
+                        if not isinstance(p, PullRequest) or parse_iso(p.merged_at) is None)
     if _dropped_rows:
+        report._merged_listing_incomplete = True
         report.alerts.append(
             f"retro listing: {_dropped_rows} malformed merged rows \u2014 "
             "completion BLOCKED (retry next cycle)")
-    listed = [p for p in listed if isinstance(p, PullRequest)]
+    listed = [p for p in listed if isinstance(p, PullRequest) and parse_iso(p.merged_at) is not None]
 
     # MECE round-2 (terra F2-002): JSON persistence turns int keys into
     # strings — the seen-set belt was comparing int numbers against str keys
@@ -1164,11 +1320,11 @@ def _retro_sweep(
     _rs = st.get("retro_seen")
     if not isinstance(_rs, dict):
         _rs = {}  # MECE round-4 (luna F4-003): null/wrong-shape state degrades
-    seen: set[int] = {int(k) for k in _rs if str(k).isdigit()}
+    seen: set[int] = {number for k in _rs if (number := state.parse_number_key(k)) is not None}
     # MECE round-5 (sol F5-001): shadow runs keep their own dedupe belt and
     # never touch live cursors/belts — the live cutover must re-audit what
     # shadow only looked at
-    shadow_belt: dict[str, str] = {}
+    shadow_belt: dict[str, str] = {}  # unreachable under the F6-C006 early return (ARCH-2)
     if config.shadow:
         sb = st.get("retro_shadow_seen")
         if isinstance(sb, dict):
@@ -1176,22 +1332,28 @@ def _retro_sweep(
     parked = st.get("retro_parked", {})
     if not isinstance(parked, dict):
         parked = {}
+    parked = {str(number): expiry for k, v in parked.items()
+              if (number := state.parse_number_key(k)) is not None
+              and (expiry := state.parse_number_key(v)) is not None}
     now_i = int(time.time())
     # MECE round-5 (sol F5-009): parked PRs re-arm AUTOMATICALLY after their
     # window — no false "re-arms on the next repo commit" promise, no manual
     # reset needed
-    active_park = {int(k) for k, v in parked.items()
-                   if str(k).isdigit() and str(v).isdigit() and int(v) > now_i}
+    active_park = {int(k) for k, v in parked.items() if v > now_i}
+    expired_park = {int(k) for k, v in parked.items() if v <= now_i}
     pending = sorted(
         (p for p in listed
-         if p.merged_at <= cursor and p.number not in seen
+         if (parse_iso(p.merged_at) <= cursor_instant or p.number in expired_park) and p.number not in seen
          and p.number not in active_park
          and (not config.shadow or shadow_belt.get(str(p.number)) != p.head_sha)),
-        key=lambda p: p.merged_at,
+        key=lambda p: parse_iso(p.merged_at),
         reverse=True,  # newest unprocessed first: recent mistakes matter most
     )[: config.retro_audit.max_per_cycle]
 
-    considered: set[int] = set()
+    # A listed parked PR remains unresolved even when the work cap or deadline
+    # postpones its retry. Preserve its identity through end-of-cycle pruning.
+    parked_ids = active_park | expired_park
+    considered: set[int] = {p.number for p in listed if p.number in parked_ids}
     oldest_processed: str | None = None
     for pr in pending:
         considered.add(pr.number)
@@ -1204,6 +1366,9 @@ def _retro_sweep(
             st["retro_seen"] = {int(n): True for n in seen}
         if not state.needs_review(st, pr.number, pr.head_sha):
             if not config.shadow:
+                parked.pop(str(pr.number), None)
+                parked.pop(pr.number, None)
+                st["retro_parked"] = parked
                 oldest_processed = pr.merged_at
             continue  # already reviewed at this SHA while it was open — nothing to catch
         try:
@@ -1254,6 +1419,9 @@ def _retro_sweep(
         # success clears it (one- or two-attempt counters used to survive
         # successful reviews forever)
         st.pop(f"retro_defer:{pr.number}:{pr.head_sha[:10]}", None)
+        parked.pop(str(pr.number), None)
+        parked.pop(pr.number, None)
+        st["retro_parked"] = parked
         oldest_processed = pr.merged_at
 
     if config.shadow and shadow_belt:
@@ -1263,7 +1431,7 @@ def _retro_sweep(
     elif not config.shadow and isinstance(st.get("retro_shadow_seen"), dict):
         st.pop("retro_shadow_seen", None)  # live runs stop honoring the belt
     if oldest_processed:
-        st["retro_cursor"] = oldest_processed
+        st["retro_cursor"] = min(cursor, oldest_processed, key=parse_iso)
     if oldest_processed is None and not pending and not active_park and not config.shadow:
         # window exhausted between boundary and cursor — nothing left to audit
         # (also fires for repos with no merges in the window: stop re-listing).
@@ -1453,16 +1621,18 @@ def _ci_watch_step(
         # MECE round-6 (luna-max F6-C012): adapter envelopes are forge-
         # external — a truthy non-list (dict/None) used to crash the slice
         anns = _anns_raw if isinstance(_anns_raw, list) else []
-        for a in anns[: config.ci_watch.max_annotations]:
-            if not isinstance(a, dict):  # MECE round-4 (luna F4-005): null rows
-                continue
+        # Informational rows cannot direct repairs or consume the failure cap.
+        # Missing levels retain compatibility with legacy forge annotations.
+        actionable = [a for a in anns if isinstance(a, dict)
+                      and a.get("level") not in ("notice", "warning")]
+        for a in actionable[: config.ci_watch.max_annotations]:
             if not a.get("path") or not a.get("message"):
                 continue
             try:
                 # annotation line is forge-external: non-numeric values must not
                 # crash the watch (UltraQA round 2)
                 ann_line = int(a.get("start_line") or a.get("line") or 0) or 1
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 ann_line = 1
             # MECE round-5 (sol F5-008): every annotation field is forge-
             # external — a numeric/object message crashed the slice below
@@ -1654,6 +1824,8 @@ def run_cycle(
                     state.mark_reviewed(st, pr.number, pr.head_sha, "dependency-skip")
                     continue
                 if not state.needs_review(st, pr.number, pr.head_sha):
+                    _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline)
+                    state.save_state(state_path, st)
                     continue
                 try:
                     _review_pr(pr, config, primary, get_diff, shadow_sink, st, report, run_fixes,
@@ -1680,6 +1852,7 @@ def run_cycle(
                 # cycle's merged records before prune could drop them.
                 if deadline is not None and (deadline - time.monotonic()) < REVIEW_BUDGET_S:
                     report.alerts.append("cycle deadline reached — post-merge deferred")
+                    report._merged_listing_incomplete = True
                 else:
                     try:
                         merged_keep = _post_merge_sweep(
@@ -1701,6 +1874,7 @@ def run_cycle(
             if config.retro_audit.enabled:
                 if deadline is not None and (deadline - time.monotonic()) < REVIEW_BUDGET_S:
                     report.alerts.append("cycle deadline reached — retro deferred")
+                    report._merged_listing_incomplete = True
                 else:
                     try:
                         merged_keep |= _retro_sweep(
@@ -1726,7 +1900,8 @@ def run_cycle(
             # MECE round-6 (luna-max F6-C003): never prune under shadow either
             # — a dry-run must not delete live records
             if (not listing_failed and not truncated_by_deadline
-                    and not config.shadow and not merged_lane_failed):
+                    and not config.shadow and not merged_lane_failed
+                    and not report._merged_listing_incomplete):
                 st["open_ids"] = sorted(open_numbers)  # F8-C002: for tiers
                 state.prune_closed(st, open_numbers | merged_keep)
 
@@ -1761,6 +1936,14 @@ def run_cycle(
                     report.alerts.append("cycle deadline reached — acceptance metrics skipped")
                 else:
                     report.acceptance = metrics.acceptance_snapshot(primary, config)
+
+            if (run_fixes and primary.name == "github"
+                    and config.fix.enabled and config.fix.merge_own_prs
+                    and not config.shadow):
+                if deadline is not None and (deadline - time.monotonic()) < REVIEW_BUDGET_S:
+                    report.alerts.append("cycle deadline reached — owned fix merges deferred")
+                else:
+                    _poll_fix_merges(config, primary, report)
 
             if report.fix_failures:
                 # ONE summarizing alert per cycle (V2) — alert fatigue is a

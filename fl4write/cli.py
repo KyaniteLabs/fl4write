@@ -86,12 +86,10 @@ def make_get_diff(repo: str) -> Callable[[PullRequest], tuple[set[str], str] | N
                 log.warning("diff unavailable for %s#%s: %s", repo, pr.number,
                             _msg[:160])
             return None
-        # F14-D012: files come from the shared diff --git header parser —
-        # the '+++ b/...' scan missed quoted/control-bearing paths
-        from .analyzer import _git_diff_path
-        files = {p for line in text.splitlines()
-                 if line.startswith("diff --git ")
-                 for p in [_git_diff_path(line)] if p}
+        # Shared complete-block destination parsing handles rename ambiguity
+        # and Git's quoted paths consistently with analyzer grounding.
+        from .analyzer import _diff_path_texts
+        files = set(_diff_path_texts(text))
         if not files:
             files = set(re.findall(r"^\+\+\+ b/(.+)$", text, re.MULTILINE))
         return files, text
@@ -304,7 +302,8 @@ def main() -> int:
             config = config.model_copy(update={"bot_login": "fl4write[bot]"})
         except Exception as exc:
             print(f"WARNING: GitHub App auth failed ({exc}); falling back to PAT", file=sys.stderr)
-            config = config.model_copy(update={"bot_login": "simongonzalezdc"})
+            # The configured identity belongs to the selected PAT account.
+            # Keep it so existing comments remain recognizable on fallback.
     _org_model_keys()
     state_path = Path.home() / ".fl4write" / f"{config.repo.replace('/', '__')}.state.json"
     budget_s = _cycle_budget_s()

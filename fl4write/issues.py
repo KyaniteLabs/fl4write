@@ -40,6 +40,14 @@ _URGENCY_MARKER = {"high": "⚠️", "medium": "", "low": ""}
 # "critical" urgency the model was never asked for cannot exist
 
 
+class _IssueList(list):
+    """List-compatible intake with explicit evidence of listing completeness."""
+
+    def __init__(self, items=(), *, complete=True):
+        super().__init__(items)
+        self.complete = complete
+
+
 def collect_new_issues(forge: ForgeAdapter, repo: str, last_number: int,
                        retry: set[int] | None = None) -> list[dict[str, Any]]:
     """Fetch open issues with number > last_number, PAGINATED and ascending.
@@ -58,31 +66,35 @@ def collect_new_issues(forge: ForgeAdapter, repo: str, last_number: int,
         # manual pagination loop; ANY failure returns [] so the watermark
         # holds and the issues stay collectable next cycle.
         all_issues = []
+        size_param = getattr(forge, "page_size_param", "per_page")
         try:
             for page in range(1, 11):
                 batch = forge._call(
-                    "GET", f"/repos/{repo}/issues?state=open&per_page=100&page={page}")
+                    "GET", f"/repos/{repo}/issues?state=open&{size_param}=100&page={page}")
                 if not isinstance(batch, list):
-                    return []  # F14-B001: shape drift = no intake (watermark holds)
+                    return _IssueList(complete=False)  # malformed envelope
                 all_issues += batch
                 if len(batch) < 100:
                     break
             else:
-                return []  # F14-B001: ten FULL pages = incomplete intake
+                return _IssueList(complete=False)  # ten full pages: incomplete
         except ForgeError:
-            return []
+            return _IssueList(complete=False)
     # UltraQA round 3: row-shape guard — garbage rows from a half-parsed forge
     # response must not crash the issues lane. F10-B004 (luna-max2 DOM-B):
     # booleans are NOT numbers — isinstance(True, int) lets a forged boolean
     # row target issue #1
     retry = retry or set()
-    fresh = [i for i in all_issues
-             if isinstance(i, dict)
-             and isinstance(i.get("number"), int)
-             and not isinstance(i.get("number"), bool)
-             and (i["number"] > last_number or i["number"] in retry)
+    valid_rows = [i for i in all_issues
+                  if isinstance(i, dict)
+                  and isinstance(i.get("number"), int)
+                  and not isinstance(i.get("number"), bool)
+                  and i["number"] > 0]
+    fresh = [i for i in valid_rows
+             if (i["number"] > last_number or i["number"] in retry)
              and "pull_request" not in i]
-    return sorted(fresh, key=lambda i: i.get("number", 0))
+    return _IssueList(sorted(fresh, key=lambda i: i.get("number", 0)),
+                      complete=len(valid_rows) == len(all_issues))
 
 
 def triage_issue(issue: dict[str, Any], config: RepoConfig) -> dict[str, Any] | None:
@@ -272,10 +284,17 @@ def run_issues_cycle(config: RepoConfig, st: dict[str, Any], forge: ForgeAdapter
         log.warning("issues collect failed for %s: %s", config.repo, exc)
         return summary
 
+    # F19-001: unknown row identities can hide work below either the existing
+    # or next watermark. Defer the whole cycle until intake is complete.
+    if not getattr(new_issues, "complete", True):
+        log.warning("issues listing incomplete for %s; preserving intake state", config.repo)
+        summary["errors"] += 1
+        return summary
+
     # MECE round-1 (luna F1-07): a failed triage must RETRY — a later
     # success used to advance the watermark past it forever
     for issue in new_issues:
-        if deadline is not None and deadline - time.time() < 5:
+        if deadline is not None and deadline - time.monotonic() < 5:
             # F12-C004: the lane honors the cycle deadline — remaining issues
             # stay un-triaged (watermark holds) rather than overrunning
             log.warning("issues cycle deadline reached — %d issue(s) deferred", len(new_issues))
@@ -375,11 +394,21 @@ def run_issues_cycle(config: RepoConfig, st: dict[str, Any], forge: ForgeAdapter
         last_num = max(last_num, num)
         st["last_triaged_number"] = last_num  # F7-B002: int-normalized write
 
-    # F12-B009 (reopened F10-B003): the retry set must stay BOUNDED like the
-    # quarantine list — closed/permanently-marked issues used to accumulate
-    # forever. Entries at or below the watermark that were NOT collected this
-    # cycle are gone/closed: garbage-collect them; cap the remainder.
-    _collected = {int(i.get("number", 0)) for i in new_issues}
-    retry = {r for r in retry if r > last_num or r in _collected}
-    st["issues_retry"] = sorted(retry)[-200:]
+    if config.shadow:
+        return summary  # Preserve the live watermark and retry belt verbatim.
+
+    # Intake is complete here, and explicitly includes every open retry even
+    # below the watermark. An absent retry is closed and can be collected.
+    collected = {int(i.get("number", 0)) for i in new_issues}
+    pending = sorted(retry & collected)
+    if len(pending) > 200:
+        # Never drop an identity behind the watermark. Keep the oldest 200
+        # and rewind before the first omitted pending issue; everything above
+        # the saved watermark will be rediscovered by the next open listing.
+        # This also covers old retries deferred by the cycle deadline.
+        lowered = min(last_num, pending[200] - 1)
+        if lowered < last_num:
+            st["last_triaged_number"] = lowered
+        pending = [number for number in pending[:200] if number <= lowered]
+    st["issues_retry"] = pending
     return summary

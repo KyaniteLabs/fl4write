@@ -38,7 +38,9 @@ _URGENCY_POST_MERGE = {"Critical": "🚨 **Landed on main** — fix-forward stro
 
 # The finding-line contract: rendered heading and parsed-back identity are the
 # SAME format, defined once. Groups: sev, path, line, rule.
-FINDING_LINE_FMT = "### {emoji} {sev} — {span} — `{rule}`"
+# The visible "rule" label selects reversible encoding; legacy unlabeled IDs
+# stay literal, including strings that happen to resemble JSON escapes.
+FINDING_LINE_FMT = "### {emoji} {sev} — {span} — rule `{rule}`"
 FINDING_LINE_RE = re.compile(
     # MECE round-7 (luna F7-001): path and rule must stay SINGLE-LINE — a
     # rule spanning newlines let a crafted previous comment inject markdown
@@ -46,7 +48,7 @@ FINDING_LINE_RE = re.compile(
     # F11-A5: the path/line span may be fenced with a backtick RUN (paths
     # containing a literal backtick use a wider fence) — the group must not
     # stop at a single backtick inside a wider fence
-    r"^(?:🆕 )?### \S+ (?P<sev>Critical|Major|Minor|Nit) — (?P<f>`+)(?P<path>.*?):(?P<line>\d+)(?P=f) — `(?P<rule>[^`\n]+)`",
+    r"^(?:🆕 )?### \S+ (?P<sev>Critical|Major|Minor|Nit) — (?P<f>`+)(?P<path>.*?):(?P<line>\d+)(?P=f) — (?P<rule_v2>rule )?`(?P<rule>[^`\n]+)`",
     re.MULTILINE,
 )
 
@@ -87,10 +89,30 @@ def _md_escape_block(text: str) -> str:
 def parse_finding_lines(body: str) -> list[tuple[str, str, int, str]]:
     """Parse (severity, path, line, rule_id) tuples out of a rendered comment.
     The inverse of render_finding's heading — kept here so the pair cannot drift."""
-    return [
-        (m.group("sev"), m.group("path"), int(m.group("line")), m.group("rule"))
-        for m in FINDING_LINE_RE.finditer(body)
-    ]
+    import json
+
+    findings = []
+    for match in FINDING_LINE_RE.finditer(body):
+        rule = match.group("rule")
+        if match.group("rule_v2"):
+            try:
+                rule = json.loads('"' + rule + '"')
+            except ValueError:
+                continue
+            if not rule or any(ord(ch) < 0x20 or ch.isspace() for ch in rule):
+                continue
+        findings.append((match.group("sev"), match.group("path"), int(match.group("line")), rule))
+    return findings
+
+
+def _rule_display(rule: str) -> str:
+    """Versioned JSON string contents preserve IDs without Markdown/control bytes."""
+    import json
+
+    encoded = json.dumps(str(rule), ensure_ascii=True)[1:-1]
+    for character in "`<>:[]!":
+        encoded = encoded.replace(character, f"\\u{ord(character):04x}")
+    return encoded
 
 
 _CONTROL_ESCAPES = {}
@@ -173,9 +195,8 @@ def render_finding(f: Finding, tone: str, post_merge: bool = False) -> str:
     """One finding as a section with emoji badge + collapsible fix proposal."""
     emoji = _SEVERITY_EMOJI.get(f.severity, "⚪")
     urgency = (_URGENCY_POST_MERGE if post_merge else _URGENCY).get(f.severity, "")
-    # MECE rounds 1-2: paths are repo-controlled untrusted text — display form
-    # strips structure chars and redacts credential-shaped runs
-    safe_rule = str(f.rule_id).replace("`", "")
+    # Preserve configured IDs while keeping Markdown/control bytes out of headings.
+    safe_rule = _rule_display(f.rule_id)
     # F11-A5: the path:line span uses a backtick-RUN fence when the path
     # itself carries a backtick, so identity survives byte-exact.
     # F14-A04/A05: the span stores the injective path_key form.
@@ -263,8 +284,8 @@ def render_review(
             )
         if resolved:
             lines = "\n".join(
-                f"- ✅ {_code_span('~' + path_key(f.path) + ':' + str(f.line))} "
-                f"({f.rule_id})" for f in resolved)
+                f"- ✅ {_code_span('~' + f.path + ':' + str(f.line))} "
+                f"({_code_span(_rule_display(f.rule_id))})" for f in resolved)
             sections.append(f"### ✅ Resolved since last review\n\n{lines}")
         body = "\n\n---\n\n".join(sections)
     elif post_merge and not diff_truncated:

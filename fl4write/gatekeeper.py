@@ -129,11 +129,30 @@ def filter_findings(findings: list[Finding], config: RepoConfig) -> tuple[list[F
     # the process (prompt, logs) is single-line scrubbed so a control-bearing
     # path cannot forge prompt structure or log lines
     from . import scrub as _scrub
+    # F20-001: presentation scrubbing is lossy. Use collision-free prompt
+    # identities when it changes a path; retain the original Finding objects.
+    reserved_paths = {f.path for f in findings}
+    prompt_paths = {}
+    for f in findings:
+        if f.path in prompt_paths:
+            continue
+        key = f.path
+        if _scrub.inline(key, 200) != key:
+            key = f"__fl4write_path_{len(prompt_paths)}__"
+            while key in reserved_paths:
+                key = "_" + key
+        prompt_paths[f.path] = key
+        reserved_paths.add(key)
     finding_list = "\n".join(
-        f"- [{f.severity}] {_scrub.inline(f.path, 200)}:{f.line} ({_scrub.inline(f.rule_id, 60)}): "
+        f"- [{f.severity}] {prompt_paths[f.path]}:{f.line} ({_scrub.inline(f.rule_id, 60)}): "
         f"{_scrub.inline(f.message, 120)}" for f in findings
     )
-    prompt = f"REPO SEVERITY VOCAB: {config.severity_vocab}\nFINDINGS TO FILTER:\n{finding_list}\nJSON keep list:"
+    path_display = "\n".join(
+        f"{key} => {_scrub.inline(path, 200)}" for path, key in prompt_paths.items()
+        if path != key)
+    prompt = (f"REPO SEVERITY VOCAB: {config.severity_vocab}\n"
+              f"PATH DISPLAY ONLY (copy finding identities, not these display names):\n{path_display}\n"
+              f"FINDINGS TO FILTER:\n{finding_list}\nJSON keep list:")
 
     from .law import SYSTEM_PROMPT_ADDENDUM
 
@@ -159,10 +178,10 @@ def filter_findings(findings: list[Finding], config: RepoConfig) -> tuple[list[F
         # that line is kept (mirror of the demote-side ambiguity fallback)
         at_line: dict[tuple[str, int], list[Finding]] = {}
         for f in findings:
-            at_line.setdefault((f.path, f.line), []).append(f)
+            at_line.setdefault((prompt_paths[f.path], f.line), []).append(f)
 
         def _kept(f: Finding) -> bool:
-            pl = (f.path, f.line)
+            pl = (prompt_paths[f.path], f.line)
             if pl in line_only:
                 return True
             rules = by_rule.get(pl)
@@ -188,15 +207,16 @@ def filter_findings(findings: list[Finding], config: RepoConfig) -> tuple[list[F
         # rules must each get their own requested demotion
         applied: set = set()
         for f in kept:
-            key3 = (f.path, f.line, f.rule_id)
+            prompt_path = prompt_paths[f.path]
+            key3 = (prompt_path, f.line, f.rule_id)
             target = demote.get(key3)
             if target is None:
                 # (path,line) match WITHOUT rule match is ambiguous (Sol#3):
                 # only apply when exactly one finding holds that line
                 same_line = [g for g in kept if (g.path, g.line) == (f.path, f.line)]
-                if len(same_line) == 1 and (f.path, f.line) not in {(p, ln0) for p, ln0, _ in applied}:
+                if len(same_line) == 1 and (prompt_path, f.line) not in {(p, ln0) for p, ln0, _ in applied}:
                     target = next((v for (p, ln, r), v in demote.items()
-                                   if (p, ln) == (f.path, f.line)), None)
+                                   if (p, ln) == (prompt_path, f.line)), None)
             if key3 in applied:
                 continue
             if target and config.severity_vocab.index(target) > config.severity_vocab.index(f.severity):

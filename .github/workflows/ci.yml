@@ -1,7 +1,7 @@
 name: ci
 on:
   push: {branches: [main]}
-  pull_request: {branches: [main]}
+  pull_request: {branches: [main, feature/exhaustive-loop-draft]}
 jobs:
   test:
     runs-on: ubuntu-latest

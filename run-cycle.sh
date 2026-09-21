@@ -177,7 +177,7 @@ fi
 OK=0; ERR=0
 for f in "${DUE_FILES[@]}"; do
     slug=$(echo "$f" | tr '/' '_')
-    if [ -f "logs/$slug.result" ] && [ "$(cat logs/$slug.result)" = "0" ]; then
+    if [ -f "logs/$slug.result" ] && [ "$(cat "logs/$slug.result")" = "0" ]; then
         OK=$((OK+1))
     else
         ERR=$((ERR+1))

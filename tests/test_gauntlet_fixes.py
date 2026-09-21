@@ -1259,7 +1259,7 @@ class _R4Forge(ForgeAdapter):
     def list_merged_prs(self, repo, since_iso):
         return list(self.merged)
 
-    def path_exists(self, repo, path):
+    def path_exists(self, repo, path, ref=None):
         return True
 
     def get_persistent_comment(self, repo, number):
@@ -1916,7 +1916,7 @@ class TestMECERound5SolPins:
         assert "model_failures" not in st
         assert st.get("retro_seen") is None  # None degrades at the engine belt (F4-003)
         # well-typed values ride through untouched
-        p.write_text('{"version": 1, "prs": {}, "merged_since": "2026-09-01T00:00:00Z", '
+        p.write_text('{"version": 1, "prs": {}, "merged_since": "2026-09-01T00:00:00Z", '  # time-rot-safe: state parse/keep test; stamp only parsed, never compared to now()
                      '"retro_seen": {"1": true}}', encoding="utf-8")
         st = load_state(p)
         assert st["merged_since"] == "2026-09-01T00:00:00Z"
@@ -1959,13 +1959,13 @@ class TestMECERound5SolPins:
         tiers_mod = self._tier_state(tmp_path, monkeypatch)
         p = tiers_mod._state_path("o/r")
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text('{"version": 1, "prs": {}, "merged_since": "2000-01-01T00:00:00Z"}',
+        p.write_text('{"version": 1, "prs": {}, "merged_since": "2000-01-01T00:00:00Z"}',  # time-rot-safe: malformed-state rewind-rejected test; parse-only
                      encoding="utf-8")
         tier, _reason = tiers_mod.classify("o/r", True, 1_000_000_000 - 8 * 86400, 1_000_000_000)
         assert tier == "cold"  # pushed 8d ago + ancient watermark: no activity
         tier2, _r2 = tiers_mod.classify("o/r", True, 1_000_000_000 - 8 * 86400,
                                         1_000_000_000 + 1)
-        p.write_text('{"version": 1, "prs": {}, "merged_since": "2026-09-01T00:00:00Z"}',
+        p.write_text('{"version": 1, "prs": {}, "merged_since": "2026-09-01T00:00:00Z"}',  # time-rot-safe: malformed-state rewind-rejected test; parse-only
                      encoding="utf-8")
         # recent watermark within 7d of `now` upgrades to warm
         import time as _t
@@ -2329,7 +2329,7 @@ class TestMECERound6LunaMaxPins:
         st = load_state(p)
         assert "merged_since" not in st and "retro_cursor" not in st
         p.write_text('{"version": 1, "prs": {}, '
-                     '"merged_since": "2026-09-01T00:00:00Z"}', encoding="utf-8")
+                     '"merged_since": "2026-09-01T00:00:00Z"}', encoding="utf-8")  # time-rot-safe: state reconcile corpus; parse-only against sibling literals
         assert load_state(p)["merged_since"] == "2026-09-01T00:00:00Z"
 
     def test_annotation_container_guard(self, tmp_path, monkeypatch):
@@ -2951,10 +2951,10 @@ class TestMECERound8Pins:
             role="primary", api_base="https://git.example.com/api/v1", token_env="GHT"))
         fj._paginated = lambda path, page_size=50, max_pages=10: [
             None,
-            {"number": 7, "merged": True, "merged_at": "2026-09-01T00:00:00Z",
+            {"number": 7, "merged": True, "merged_at": "2026-09-01T00:00:00Z",  # time-rot-safe: adapter row-guard: junk row raises before any consumer; since is an explicit arg, not now()
              "title": "t", "head": {"sha": "a" * 40, "repo": {"full_name": "o/r"}},
              "user": {"login": "dev"}},
-            {"number": "junk", "merged": True, "merged_at": "2026-09-02T00:00:00Z"},
+            {"number": "junk", "merged": True, "merged_at": "2026-09-02T00:00:00Z"},  # time-rot-safe: adapter row-guard corpus (intentionally junk row)
         ]
         # F14-D007: dropped rows make the enumeration INCOMPLETE — the
         # adapter raises so the engine can hold watermarks and the prune
@@ -3755,7 +3755,7 @@ class TestMECERound11Forge:
             {"number": 1, "title": "t", "merged_at": "not-a-time",
              "head": {"sha": "a" * 40, "repo": {"full_name": "o/r"}},
              "user": {"login": "d"}},
-            {"number": 2, "title": "t", "merged_at": "2026-09-01T00:00:00Z",
+            {"number": 2, "title": "t", "merged_at": "2026-09-01T00:00:00Z",  # time-rot-safe: adapter list filter vs explicit since arg, never now()
              "head": {"sha": "b" * 40, "repo": {"full_name": "o/r"}},
              "user": {"login": "d"}},
         ]
@@ -3767,11 +3767,11 @@ class TestMECERound11Forge:
             token_env="FJT"))
         fj._paginated = lambda path, page_size=50, max_pages=10: [
             {"number": 3, "title": "t", "merged": "false",
-             "merged_at": "2026-09-01T00:00:00Z",
+             "merged_at": "2026-09-01T00:00:00Z",  # time-rot-safe: adapter bool-row guard; explicit-since adapter call
              "head": {"sha": "c" * 40, "repo": {"full_name": "o/r"}},
              "user": {"login": "d"}},
             {"number": 4, "title": "t", "merged": True,
-             "merged_at": "2026-09-01T00:00:00Z",
+             "merged_at": "2026-09-01T00:00:00Z",  # time-rot-safe: adapter bool-row guard; explicit-since adapter call
              "head": {"sha": "d" * 40, "repo": {"full_name": "o/r"}},
              "user": {"login": "d"}},
             {"number": 5, "title": "t", "merged": True,
@@ -4172,7 +4172,7 @@ class TestMECERound11Engine2:
         from fl4write import fixlane
 
         sp = tmp_path / "s.json"
-        _r4_seed(sp, merged_since="2026-08-25T12:00:00Z")
+        _r4_seed(sp, merged_since="2026-08-25T12:00:00Z")  # time-rot-safe: seeded watermark consumed against stubbed forge rows; no wall-clock path
         pr = PullRequest(forge="github", number=9, repo="o/r", head_sha="c" * 40,
                          title="chore(deps): bump x", is_bot_author=True)
 
@@ -4456,7 +4456,8 @@ class TestMECERound13OpsReal:
         (repo / "x.py").write_text("x = 1\n")
         subprocess.run(["git", "-C", str(repo), "add", "x.py"], check=True)
         subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t",
-                        "-c", "user.name=t", "commit", "-q", "-m", "c"], check=True)
+                        "-c", "user.name=t", "-c", "commit.gpgsign=false",
+                        "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "c"], check=True)
         r = subprocess.run(["bash", str(REPO_ROOT / "check-dirty.sh")],
                            capture_output=True, text=True,
                            env={"PATH": "/usr/bin:/bin",

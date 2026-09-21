@@ -1,8 +1,33 @@
 # FL4WRITE PM recovery — 2026-09-04
 
-## Current successor disposition — September 5
+## Current recovery status
 
-This section supersedes operational status in the historical recovery record below.
+This section supersedes operational claims in the historical sections below.
+The exhaustive-resolution candidate is tracked in Forgejo PR #15. The latest
+[successor ledger entry](ROUND-LEDGER.md) identifies the code under review,
+its verification checkpoint and outstanding gates. Use that entry and live
+PR state for candidate status; older test totals and commits below describe
+historical checkpoints.
+
+All eight original first-week checklist observations are reconciled. The
+formerly blocked hourly observation completed at 11:00:05–11:00:33 UTC on
+September 5: 30 repositories due, 30 successful, zero errors or alerts, and
+zero failure counters. Read-only inspection reconfirmed the production log.
+This is one completed observation, not sustained fleet certification; see
+[the hourly-health evidence](ROUND19-REPAIR-CHECKPOINT.md).
+
+Candidate acceptance requires three fresh clean whole-project reviews,
+successful automatic fix/merge/refresh proof, completed security review and
+the CEO's quality adjudication, followed by main merge, mirror synchronization
+and sole-runner delivery verification. Later successful tests do not erase
+failed trial evidence or close an unrelated gate. The ledger records which
+requirements have current evidence; the original checklist observations do
+not substitute for this expanded acceptance contract.
+
+## Historical successor disposition — September 5
+
+This earlier checkpoint is retained for provenance; the current section above
+and successor ledger supersede its operational status.
 
 The original first-week checklist is reconciled: charter/history read, seat
 posted, duplicate configs verified absent, self-review cycle verified live,

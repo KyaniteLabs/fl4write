@@ -129,7 +129,7 @@ class TestFixTelemetryAndFreshness:
             def update_comment(self, repo, number, cid, body):
                 pass
 
-            def path_exists(self, repo, path):
+            def path_exists(self, repo, path, ref=None):
                 return path in self.paths_on_head
 
         return F()

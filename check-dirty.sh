@@ -8,7 +8,9 @@ CHECKOUT="${FL4WRITE_CHECKOUT:-$HOME/workspaces/fl4write}"
 cd "$CHECKOUT" || { echo "ALERT: cannot cd to $CHECKOUT — checkout missing"; exit 1; }
 # MECE rounds 1-3: ANY porcelain line is a hazard (MM/AM/UU included);
 # report honest untracked vs modified counts (luna F3-005)
-STATUS=$(git status --porcelain 2>&1)
+# Only porcelain stdout describes files; preserve diagnostics on stderr.
+# The exit code below still rejects every failed status command.
+STATUS=$(git status --porcelain)
 RC=$?
 if [ $RC -ne 0 ]; then
   # F8-E002: a FAILED git command must never certify 'clean' — checkout

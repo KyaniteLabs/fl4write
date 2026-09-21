@@ -137,6 +137,7 @@ class ModelRoute(_StrictModel):
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4000, ge=1, le=1_048_576)
     seed: int | None = None  # reproducibility for regression triage
+    thinking: typing.Literal["enabled", "disabled"] | None = None
 
 
 class FixLaneConfig(_StrictModel):
@@ -266,10 +267,14 @@ class RepoConfig(_StrictModel):
         _reject_bool_ints(raw)
         if not isinstance(raw, dict):
             return raw
-        _model = raw.get("model") or {}
-        _fallback = raw.get("fallback_model") or {}
-        _key_envs = {(_model.get("key_env") or ""), (_fallback.get("key_env") or "")}
-        _key_envs.discard("")
+        _key_envs: set[str] = set()
+        for _route in (raw.get("model"), raw.get("fallback_model")):
+            if isinstance(_route, ModelRoute):
+                _route = _route.model_dump()
+            if isinstance(_route, dict):
+                _key_env = _route.get("key_env")
+                if isinstance(_key_env, str) and _key_env:
+                    _key_envs.add(_key_env)
         # F14-D001 (CRITICAL, reopened F12-D005/F13-D001): the GitHub App
         # auth implicitly exports the forge credential as GH_TOKEN and
         # CODESITTER_GITHUB_TOKEN — a model key_env using either name would
@@ -282,8 +287,12 @@ class RepoConfig(_StrictModel):
         if isinstance(_forges, dict):
             _seen_envs: dict[str, str] = {}
             for _name, _b in _forges.items():
+                if isinstance(_b, ForgeBinding):
+                    _b = _b.model_dump()
                 if isinstance(_b, dict):
                     _te = _b.get("token_env")
+                    if not isinstance(_te, str):
+                        continue  # normal field validation reports malformed values
                     if isinstance(_te, str) and _te in _key_envs:
                         raise ValueError(
                             f"forge {_name!r} token_env {_te!r} collides with a model "

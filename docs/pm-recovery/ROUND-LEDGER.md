@@ -1,5 +1,198 @@
 # Recovered historical audit ledger
 
+## Successor round30 — September 5
+
+Fresh independent offline review of `a946bd9` found one Minor renamed-path
+defect: an unquoted destination containing ` b/` loses its directory identity,
+dropping a valid finding and producing a false clean review. The baseline
+passed 1050 default tests with three paid-model skips, Ruff, 131 configuration
+loads and shell syntax checks. The final repair covers complete-block metadata
+and quoted header fallback, with twelve new regression cases. Independent
+scoped review approved all sixteen real-Git controls and 64 targeted tests.
+Full combined default validation passed 1062 tests with three paid-model skips
+in 194.33 seconds; Ruff passed. Clean functional reviews remain 0/3. Exact live
+validation remains blocked by configured provider HTTP 402. See
+ROUND30-REPAIR-CHECKPOINT.md.
+
+## Successor round29 — September 5
+
+Fresh independent review of `81a97d5` found one Minor resolved-metrics defect:
+paths containing backticks cause real rendered resolved findings to vanish
+from acceptance totals. The valid finding resets clean functional reviews
+to 0/3. Fourteen new cases and a minimal marker repair pass 36 focused tests
+and Ruff. Independent recheck approved the exact repair with 36 tests and
+mixed renderer/acceptance controls. Full combined default validation passed
+1050 tests with three expected paid-model skips in 233.56 seconds; Ruff passed.
+Exact repair commit `a946bd9` passed canonical CI.
+Exact new live validation remains blocked by configured provider HTTP 402.
+See ROUND29-REPAIR-CHECKPOINT.md.
+
+## Successor round28 — September 5
+
+Fresh independent review of exact81a97d5 found no new functional defect.
+1036 default tests passed with three paid-model skips; Ruff, shell syntax,
+131 configuration loads and offline state/archive/scheduler probes passed.
+Functional clean candidate count is1/3; this is not exhaustive certification.
+Real full-recon preflight requires280 model calls. The actual invocation
+deferred on its first call; an exact-payload diagnostic returned HTTP402.
+Two calls/8000 reserved tokens are preserved in the durable budget. Provider
+access restoration, remaining review and release gates are open. See
+ROUND28-REVIEW-CHECKPOINT.md.
+
+## Successor round27 — September 5
+
+Fresh review of 795d832 found two P2 CI-watch defects: cancelled checks
+created false red-head escalations, and notice/warning annotations directed
+automatic repairs. Both are repaired locally with eight new regression cases;
+31 focused tests and Ruff pass. Independent recheck approved both repairs
+with 33 tests and seven adapter/persistence controls. Full combined default
+validation passed 1036 tests with three paid-model skips in 173.12 seconds.
+Exact committed 81a97d5 passed all 1039 live tests with zero skips, Ruff and
+canonical CI. Fresh clean remains 0/3. See
+ROUND27-REPAIR-CHECKPOINT.md.
+
+## Successor round26 — September 5
+
+Fresh review of 965d787 found two Major defects: grounded source paths were
+transformed during recon, and Git path enumeration misread quoted filenames.
+Both repairs received independent scoped approval. Combined default validation
+passed 1028 tests with three paid-model skips and Ruff, including thirteen new
+regressions. The real generated repair trial automatically merged PR21 at
+cdf2b78 and passed all 1022 post-merge live tests, consuming 25 calls and
+108000 reserved output tokens. This closes one automatic lifecycle proof.
+Exact committed 795d832 passed all 1031 live tests with zero skips, Ruff and
+canonical CI. Fresh clean remains 0/3.
+See ROUND26-REPAIR-CHECKPOINT.md for exact evidence and remaining gates.
+
+## Successor round25 — September 5
+
+Fresh review of f63addb found three P2 defects: persisted numeric identities
+that crash integer conversion, repair execution after deadline expiry, and
+CI annotation numeric overflow. Numeric/CI repairs have independent approval,
+including a corrected park-persistence gap and real two-cycle proof. Deadline
+repair queues unattempted work by SHA and resumes without duplicate review;
+its independent review approved persisted open/post-merge retry controls.
+Full combined default validation passed 1015 tests with three paid-model skips
+and Ruff, including 28 new regressions. Fresh clean remains 0/3; see
+ROUND25-REPAIR-CHECKPOINT.md.
+Exact 965d787 live validation passed all 1018 tests with zero skips, Ruff
+and canonical CI.
+
+## Successor round24 — September 5
+
+Fresh review of 3238d8b found three P2 defects: gauntlet refresh selected the
+wrong implicit workdir, non-finite retro counters crashed state recovery, and
+runner result-path splitting miscounted successful workers. Fifteen new
+regressions and scoped independent checks pass after repairs. Full combined
+default verification passed 987 tests with three paid-model skips and Ruff.
+Exact f63addb live validation passed all 990 tests with zero skips, Ruff and
+canonical CI.
+Fresh clean remains 0/3; see
+ROUND24-REPAIR-CHECKPOINT.md. Superseded generated trial PR20 is closed
+unmerged; its failed live-model resume is preserved.
+
+## Successor round 23 — September 5
+
+Fresh review of 8fc1de5 found R23-001 (Major), timestamp ordering that could
+permanently skip capped merged-PR intake, and R23-002 (Minor), double encoding
+of resolved finding paths. Both repairs have independent scoped approval.
+Twenty-nine chronology regressions and two path lifecycle regressions join
+the suite: combined default verification passed 972 tests with three paid-model
+skips and Ruff. The generated path trial passed 944 baseline and 946 fixed
+live tests, with expected regression failures and exact PR20 CI green;
+automatic resume then failed the planted unsorted-median live-model test and
+stopped without merging (37 calls, 156000 reserved output tokens). The approved
+path repair is integrated manually. Exact committed 3238d8b live validation
+passed 975 tests with zero skips, Ruff and canonical CI; both independent
+committed integration checks approved. Fresh clean remains 0/3. See
+ROUND23-REPAIR-CHECKPOINT.md for evidence and remaining delivery gates.
+
+## Successor round 22 — September 5
+
+Fresh review of 56af12b found two P2 defects: F22-001 permanently lost
+unresolved issue retries beyond the 200-ID cap; F22-002 reused completed
+full-tree coverage after exclusions changed at unchanged HEAD. Manual repairs
+have separate independent approval, eight retry and nine scope regressions,
+plus actual multicycle recovery checks. Full combined default validation
+passed 941 tests with three paid-model skips and Ruff; exact 8fc1de5 live
+passed 944 tests with zero skips, Ruff and canonical CI. Fresh round23 is
+active and has reported a merged-PR timestamp-ordering defect.
+The generated retry trial passed 927 baseline and 929 fixed live tests, but
+independent review found a new shadow-state regression. Its PR19 was closed
+unmerged, with original 19-call/84000-reserved evidence preserved. Fresh clean
+remains 0/3; automated lifecycle is unproven. See ROUND22-REPAIR-CHECKPOINT.md.
+
+## Successor round 21 — September 5
+
+Fresh review of bb3625a found F21-001 and F21-002 (both Minor): Unicode
+diff-path corruption and custom rule-ID identity loss. Both repairs passed
+independent scoped review and were pushed as 0090d53. Full default validation
+passed 904 tests with three paid-model skips; exact live validation passed
+907 tests with zero skips and Ruff. Canonical CI passed. Fresh clean remains
+0/3. The generated Unicode trial failed automated resume after two green
+886-test proofs; PR18 was manually integrated, preserving the failed trial.
+
+Follow-up F21-CACHE-001 (Major) reproduced source text corruption in cached
+patch replay and initial model responses. The repair preserves parsed cache
+objects and decodes complete JSON after removing only explicit outer wrappers.
+Twenty regressions and neighboring checks pass; final independent review
+approved the repair with 85 tests and 28 additional controls. Full default
+validation passed 924 tests with three paid-model skips and Ruff; exact
+56af12b live validation passed 927 tests with zero skips and Ruff, plus green
+canonical CI. Fresh round 22 is active. See ROUND21-REPAIR-CHECKPOINT.md. Main delivery,
+security review, automated lifecycle proof and CEO verdicts remain open.
+
+## Successor round20 — September5
+
+Fresh functional review of46c27ef found three defects: F20-001(Minor) path
+identity loss in gatekeeper decisions; F20-002(Major) stale findings left on
+an existing audit issue after a clean rescan; F20-003(Major) Forgejo issue
+fallback used the wrong pagination parameter. All three manual repairs have
+independent scoped clearance and thirteen regression cases. Full default
+suite881pass3paidlive-skips plus Ruff; exact live verification is next.
+The separate generated pagination trial failed fixed-green and created no PR;
+its original19call/84000reserved budget evidence remains intact. See
+ROUND20-REPAIR-CHECKPOINT.md. Fresh clean counter remains0/3; remaining
+security review and delivery gates stay open.
+
+## Successor rounds 17–19 — September 5
+
+Round17 found eight defects, subsequently repaired and independently rechecked;
+see ROUND17-REPAIR-CHECKPOINT.md and ROUND17-CLOCK-REVIEW.md. Clock repair PR16
+was manually merged into the candidate after CI; the automated resume failed
+and remains a failed receipt. This did not establish automated lifecycle success.
+
+Round18 found five Major defects, subsequently repaired and independently
+rechecked; see ROUND18-REPAIR-CHECKPOINT.md and ROUND18-ISSUE-RETRY.md. Exact
+code5452139 passed858 isolated live tests with zero skips plus Ruff and CI.
+Its generated issue-retry trial failed; the successful manual repair is separate.
+
+Round19 at8a2638a found two Major defects: malformed issue identities discarded
+retries (F19-001), and packed snapshots lost tracked executable permission
+(F19-002). Both manual repairs have independent scoped clearance and regression
+proof; the combined default suite passes868 tests with three live skips plus
+Ruff. The generated issue-row trial failed fixed-green and created no PR.
+See ROUND19-REPAIR-CHECKPOINT.md for retained evidence and remaining gates.
+Every round found new valid defects, so the fresh clean counter remains **0/3**.
+Security review and final delivery remain incomplete; no certification follows.
+
+## Candidate integration checkpoints — September 5
+
+The records below retain historical verdicts. Current repairs and follow-up
+evidence supersede their descriptions of unimplemented capabilities.
+
+At `6af8898`, model transport repairs passed independent bounded review and a real
+795-test live suite with zero skips. At `42e59b9`, shared durable round budgets
+passed independent bounded review (95 tests). The live run found a README format
+regression and another median model miss. The README format was repaired; at
+`545771e`, zero-temperature product review configuration passed 801 live tests,
+zero skips, and canonical CI. These were scoped repair checkpoints, not fresh
+whole-project green rounds. Consecutive clean counter remains **0/3**.
+
+Explicit repair base selection now permits a delivery trial against an existing
+candidate branch while preserving selected-head, repository, author and CI gates.
+The fresh whole-project review and actual owned repair delivery remain open.
+
 ## Feature draft review — September 5
 
 FEATURE13-DRAFT-REVIEW.md reproduces five new safety findings in the isolated

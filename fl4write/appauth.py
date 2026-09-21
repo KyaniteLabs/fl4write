@@ -135,3 +135,45 @@ def install_token_to_env(repo: str | None = None) -> None:
     os.environ["CODESITTER_GITHUB_TOKEN"] = token
     # Also set GH_TOKEN so gh CLI uses it for any subsidiary calls
     os.environ["GH_TOKEN"] = token
+
+
+def verified_app_login() -> str:
+    """Resolve the signing App's live bot identity without a user-token endpoint."""
+    data = _api("https://api.github.com/app")
+    if (not isinstance(data, dict) or data.get("id") != APP_ID
+            or not isinstance(data.get("slug"), str) or not data["slug"]
+            or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in data["slug"])):
+        raise RuntimeError("GitHub App identity could not be verified")
+    return data["slug"] + "[bot]"
+
+
+def get_repository_token(repo: str, bot_login: str) -> str:
+    """Mint a fresh single-repository token with only exhaustive-workflow rights."""
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        raise RuntimeError("invalid repository for scoped GitHub App token")
+    if verified_app_login() != bot_login:
+        raise RuntimeError("configured bot does not match the signing GitHub App")
+    installation_id = resolve_installation_id(repo)
+    permissions = {"contents": "write", "pull_requests": "write", "issues": "write",
+                   "actions": "read", "statuses": "read"}
+    req = urllib.request.Request(
+        f"https://api.github.com/app/installations/{installation_id}/access_tokens",
+        data=json.dumps({"repositories": [repo.split("/", 1)[1]],
+                         "permissions": permissions}).encode(),
+        method="POST", headers={"Authorization": f"Bearer {_make_jwt()}",
+                                 "Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as response:
+        data = json.loads(response.read())
+    token = data.get("token") if isinstance(data, dict) else None
+    repositories = data.get("repositories") if isinstance(data, dict) else None
+    if (not isinstance(token, str) or not token or token != token.strip()
+            or any(ord(c) < 0x20 for c in token)
+            or not isinstance(repositories, list) or len(repositories) != 1
+            or not isinstance(repositories[0], dict) or repositories[0].get("full_name") != repo
+            or not isinstance(data.get("permissions"), dict)
+            or any(data["permissions"].get(k) != v for k, v in permissions.items())):
+        raise RuntimeError("GitHub App token scope could not be verified")
+    return token

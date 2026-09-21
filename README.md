@@ -72,38 +72,71 @@ no fleet repo has enabled it yet — luna F3-004 doc truth).
 
 Current fleet state (2026-09-05; recovered [audit ledger](docs/pm-recovery/ROUND-LEDGER.md)): **129 central configs**
 across GitHub + Forgejo in hourly cycles; the tier scheduler selects due repos
-(`run-cycle.sh`, hourly crontab, single-host law — LEARNINGS #17). **500+
-tests green** (752 passing + 4 skipped — count stamped by the doc-truth
-verifier run on a clean tree; hand-editing this figure is a false receipt,
-REVIEW LAWS 2026-09-19). Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
+(`run-cycle.sh`, hourly crontab, single-host law — LEARNINGS #17).
 
-The 2026-09-17 reliability-harness pass (CEO reliability verdict: measure
-determinism, planted-defect recall, false positives, severity calibration)
-adds `fl4write/reliability.py` + `fl4write/reliability_corpus.py` and
-measures the review loop on the planted corpus. Re-measure any
-route with:
+The merged suite (exhaustive-loop candidate + main) is **1253 passing + 4 skipped** — count stamped by the doc-truth verifier run on a clean tree; hand-editing this figure is a false receipt (REVIEW LAWS 2026-09-19).
 
-    python3 -m fl4write.reliability --config fl4write.fl4write.yaml \
-      --endpoint http://<host>:8908/v1/chat/completions --model Qwen3.8-27B \
-      --key-env "" --runs 5
+The unmerged repair candidate at `81a97d5` passed **1039 live tests with zero
+skips**, Ruff and canonical Forgejo CI. Its default suite passed 1036 tests
+with three paid-model skips. One real automatic repair→PR→CI→merge→refresh
+trial passed on the integration branch. Three fresh clean whole-project
+rounds, full recon/quorum dogfood, security review, CEO quality adjudication
+and final main/mirror/runner delivery remain open. These candidate results
+do not describe a production rollout. See the [current audit ledger](docs/pm-recovery/ROUND-LEDGER.md)
+and [round27 evidence](docs/pm-recovery/ROUND27-REPAIR-CHECKPOINT.md).
+The round-13 desk pass reported 605 passing tests; that historical count is
+superseded by the linked recovery checkpoints. The round27 repair candidate
+achieved 1036 passing + 3 skipped by default, or 1039 passing + 0 skipped live;
+its exact validation status is recorded in the audit ledger.
+The round29 metrics repair targets 1050 passing + 3 skipped by default,
+or 1053 passing + 0 skipped live. Live validation is pending provider access.
+The round30 renamed-path repair achieved 1062 passing + 3 skipped by default
+and targets 1065 passing + 0 skipped live. Its validation is recorded in the ledger;
+the live gate remains blocked by the configured provider's HTTP 402 response.
+The round31 credential regressions achieved 1066 passing + 3 skipped by default
+and target 1069 passing + 0 skipped live; live validation remains pending.
+The isolated evaluation-route regression repair targets 1074 passing + 3 skipped
+by default and 1077 passing + 0 skipped live; current-head validation is pending.
+The recon line-location, request-size, and parsing regressions target 1085 passing + 3 skipped
+by default and 1088 passing + 0 skipped live; current-head validation is pending.
+The optional source-bound desk-disposition path targets 1113 passing + 3 skipped
+by default and 1116 passing + 0 skipped live; current-head validation is pending.
+The configured PAT identity and pending-state authority regressions target 1119
+passing + 3 skipped by default and 1122 passing + 0 skipped live; current-head validation is pending.
+The resumable recon, proxy boundary and authenticated refresh changes target 1162 passing + 3 skipped by default
+and 1165 passing + 0 skipped live; current-head validation is pending.
+The 2026-09-16 integration + adversarial-fix pass measures
+**1177 passing + 3 skipped** on the default suite. The live suite
+(**1172 passing + 0 skipped**) was measured at 474719a — the same
+analyzer/model request path (unchanged since; the later fix pass touched
+cycle, sandbox-collection and publication-containment code only). A live
+re-run at the final tree was blocked when the shared Champion floor service
+went inactive mid-session (documented, not restarted from this desk). Route facts kept separate
+(close-doc lesson 2): the CONFIGURED route remains
+`deepseek-ai/DeepSeek-V4-Flash-0731` via DeepInfra (`fl4write.fl4write.yaml`);
+the 2026-09-16 live run was executed with
+`FL4WRITE_EVAL=1 FL4WRITE_EVAL_CONFIG=<champion-eval.yaml>` pointing at the
+operator-approved self-hosted Champion Qwen3.8-27B (nucbox floor, 2026-09-06
+approval; Ornith selection was DOWN that day). A bare `FL4WRITE_EVAL=1` run
+without the override exercises the configured DeepSeek route, not Champion.
 
-The harness always takes fresh samples for the determinism lane (cache
-bypassed — cached repeats would fabricate stability) and caches the
-recall/clean lanes honestly (key = route params + exact prompt; parse and
-grounding gates re-run locally on every hit). Optional regression gates
-(`--min-determinism/--min-recall/--max-actionable-fp`) turn a recorded
-baseline into a CI-able reliability property.
+For providers that support it, a model route can set `thinking: enabled` or
+`thinking: disabled`. Omitting it preserves the provider default. The proxy pins
+this setting to the selected route, so isolated callers cannot override it.
+Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 it uses `fl4write.fl4write.yaml` (override with `FL4WRITE_EVAL_CONFIG`) and
 runtime model credentials. The default suite skips those three paid model
 cases. Round 14 remains open; no exhaustive certification is
 claimed. CI on every push. Quality loop on
 issue #5; desk charter + incident history on issue #3 and map #63.
 
-Requested behavior (CEO 2026-09-04, not yet implemented): the **exhaustive bug-resolution
+Requested behavior (CEO 2026-09-04, implemented in this draft but not certified or deployed): the **exhaustive bug-resolution
 loop** — repeated fresh-eyes recon→fix→refresh→note rounds (new context every round) until
 THREE CONSECUTIVE 100%-green loops with zero regressions, then the repo is certified
 exhaustively flushed. Spec: [EXHAUSTIVE-BUG-RESOLUTION.md](EXHAUSTIVE-BUG-RESOLUTION.md) ·
 tracker: issue #13. Feature tranche; delegate-audited before fleet enablement.
+The draft's isolated test runtime and its validation limits are documented in
+[the runtime guide](tools/exhaustive-runtime/README.md).
 
 Honest status line (post 2026-09-03 adjudication): the bot is NOT yet
 declared fit-for-use at scale — the desk's own adjudicated sample found the
