@@ -79,3 +79,53 @@ On the law-clean corpus the champion's true actionable-FP is < 40% and severity
 precision >= 84.6% (rubric thresholds); if any clean case STILL draws a finding,
 that is genuine model noise and the next cycle tunes the analyzer prompt (not the
 law, not the corpus).
+
+---
+
+## ENTRY 002 — 2026-09-21T07:00-07:30Z — fix-lane fallback gap — status: closed (look authored 002; pin-verified, live re-observation queued)
+
+- harness receipts: 07:00Z production cycle (20 ok / 0 errors) — the cycle line
+  itself is the instrument here; trend row 3 (merged-main verification) covers
+  the review lane.
+
+### HYPOTHESIS
+After #23/#26 every config has a distinct fallback, so a primary-provider
+outage should cost zero reviews. If any model_down appears anyway, it marks a
+call site that bypasses the route loop — not a config gap.
+
+### WHAT RAN
+07:00Z cycle on merged main: deepinfra primary returned HTTP 402 Payment
+Required org-wide (out of credit). Reviews: 8 reviewed, 0 errors — carried by
+the local Qwen3.8-27B fallback. Fix lane: 3 failures, all "model unavailable:
+HTTP 402" (Achiote #248/#250).
+
+### LOOK (raw)
+`ALERT: fix failures: 3 — #250 error: model unavailable: HTTP Error 402;
+#250 ...; #248 ...` while the same cycle's reviews succeeded through
+fallback. executor.py:424 called `_call_model(config.model, ...)` — primary
+route only; the route loop lives in analyzer.analyze.
+
+### LOOK FINDINGS
+Resilience was built per-config but not per-call-site: the review path loops
+routes, the fix path did not. A config-level fix cannot heal a call site that
+never consults the fallback. The outage was also a free live drill: the
+fallback lanes carried real production traffic through a genuine primary
+failure with zero lost reviews.
+
+### DELTAS
+Fix path now loops distinct routes exactly like the review path (executor.py,
+PR #32). Two pin tests: primary-402 -> fallback answers; all-routes-down ->
+honest error label. Suite 1257 passing + 4 skipped.
+
+### SURPRISE
+The strongest DIM6 evidence was unplanned: a real 402 payment-wall is a better
+outage drill than any synthetic probe.
+
+### DEAD-ENDS
+None this cycle; the gap was found, fixed, and pinned in one pass.
+
+### NEXT-HYPOTHESIS
+The 08:00Z cycle (with #32 live) shows fix_attempts>0 with no 402-class
+"model unavailable" reasons while deepinfra stays down — proving the fix lane
+rides the fallback too. If deepinfra credits refresh first, the hypothesis is
+untestable this window and waits for the next outage (the drill will come).
