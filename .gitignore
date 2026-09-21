@@ -7,3 +7,6 @@ runner.log
 logs/
 .todos/
 .pm-private/
+.gjc/
+.omx/
+.omx-state-locks.identity.json
