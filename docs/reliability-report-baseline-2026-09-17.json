@@ -1,0 +1,893 @@
+{
+  "measured_at": "2026-09-17T13:17:13.799039+00:00",
+  "route": {
+    "endpoint": "http://nucbox:8908/v1/chat/completions",
+    "model": "Qwen3.8-27B",
+    "temperature": 0.0,
+    "seed": null,
+    "max_tokens": 4000
+  },
+  "determinism": {
+    "per_case": {
+      "median-unsorted": {
+        "runs": 5,
+        "distinct_signatures": 2,
+        "agreement_rate": 0.8,
+        "flag_flips": 0,
+        "severity_flips": 0,
+        "modal_signature": [
+          [
+            "tests",
+            "Major",
+            "fl4write-proof/test_proof_target.py",
+            5
+          ]
+        ],
+        "signatures_seen": [
+          "[[\"tests\", \"Major\", \"fl4write-proof/proof_target.py\", 6]]",
+          "[[\"tests\", \"Major\", \"fl4write-proof/test_proof_target.py\", 5]]"
+        ]
+      },
+      "sql-string-concat": {
+        "runs": 5,
+        "distinct_signatures": 1,
+        "agreement_rate": 1.0,
+        "flag_flips": 0,
+        "severity_flips": 0,
+        "modal_signature": [
+          [
+            "security",
+            "Critical",
+            "users_query.py",
+            7
+          ]
+        ],
+        "signatures_seen": [
+          "[[\"security\", \"Critical\", \"users_query.py\", 7]]"
+        ]
+      },
+      "clean-pagination": {
+        "runs": 5,
+        "distinct_signatures": 1,
+        "agreement_rate": 1.0,
+        "flag_flips": 0,
+        "severity_flips": 0,
+        "modal_signature": [],
+        "signatures_seen": [
+          "[]"
+        ]
+      }
+    },
+    "mean_agreement": 0.9333333333333332,
+    "min_agreement": 0.8,
+    "total_runs": 15,
+    "errors": 0
+  },
+  "recall": {
+    "per_class": {
+      "boundary-indexing": {
+        "cases": 1,
+        "caught_any": true,
+        "caught_actionable": true
+      },
+      "comparison-polarity": {
+        "cases": 1,
+        "caught_any": true,
+        "caught_actionable": true
+      },
+      "exception-swallow": {
+        "cases": 1,
+        "caught_any": true,
+        "caught_actionable": true
+      },
+      "hardcoded-credential": {
+        "cases": 1,
+        "caught_any": true,
+        "caught_actionable": true
+      },
+      "missing-none-guard": {
+        "cases": 1,
+        "caught_any": true,
+        "caught_actionable": true
+      },
+      "mutation-during-iteration": {
+        "cases": 1,
+        "caught_any": true,
+        "caught_actionable": true
+      },
+      "operator-precedence": {
+        "cases": 1,
+        "caught_any": true,
+        "caught_actionable": true
+      },
+      "resource-leak": {
+        "cases": 1,
+        "caught_any": true,
+        "caught_actionable": true
+      },
+      "sql-injection": {
+        "cases": 1,
+        "caught_any": true,
+        "caught_actionable": true
+      },
+      "unsorted-input-assumption": {
+        "cases": 1,
+        "caught_any": true,
+        "caught_actionable": true
+      }
+    },
+    "recall_any": 1.0,
+    "recall_actionable": 1.0
+  },
+  "false_positives": {
+    "clean_cases": 5,
+    "noise_fp_rate": 0.4,
+    "actionable_fp_rate": 0.4,
+    "flagged_case_ids": [
+      "clean-file-close",
+      "clean-sql-params"
+    ]
+  },
+  "calibration": {
+    "confidence_field_emitted": false,
+    "proxy": "severity",
+    "labeling": "path-level: defect-case finding = TP, clean-case finding = FP",
+    "table": {
+      "Critical": {
+        "n": 1,
+        "tp": 1,
+        "fp": 0,
+        "precision": 1.0
+      },
+      "Major": {
+        "n": 13,
+        "tp": 11,
+        "fp": 2,
+        "precision": 0.8461538461538461
+      }
+    }
+  },
+  "call_budget": {
+    "real_calls": 30,
+    "cache_hits": 0,
+    "cache_misses": 15
+  },
+  "records": {
+    "determinism": [
+      {
+        "case_id": "median-unsorted",
+        "defect_class": "unsorted-input-assumption",
+        "kind": "defect",
+        "signature": [
+          [
+            "tests",
+            "Major",
+            "fl4write-proof/proof_target.py",
+            6
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "tests",
+            "severity": "Major",
+            "path": "fl4write-proof/proof_target.py",
+            "line": 6,
+            "message": "The test `test_median_odd_unsorted` fails against the implementation. The function `median` assumes the input list is sorted. For the input `[5.0, 1.0, 3.0]`, `"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "median-unsorted",
+        "defect_class": "unsorted-input-assumption",
+        "kind": "defect",
+        "signature": [
+          [
+            "tests",
+            "Major",
+            "fl4write-proof/test_proof_target.py",
+            5
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "tests",
+            "severity": "Major",
+            "path": "fl4write-proof/test_proof_target.py",
+            "line": 5,
+            "message": "The test `test_median_odd_unsorted` fails against the implementation. The function `median` assumes the input list is sorted. For the input `[5.0, 1.0, 3.0]`, `"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "median-unsorted",
+        "defect_class": "unsorted-input-assumption",
+        "kind": "defect",
+        "signature": [
+          [
+            "tests",
+            "Major",
+            "fl4write-proof/test_proof_target.py",
+            5
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "tests",
+            "severity": "Major",
+            "path": "fl4write-proof/test_proof_target.py",
+            "line": 5,
+            "message": "The test `test_median_odd_unsorted` fails against the implementation. The function `median` assumes the input list is sorted. For the input `[5.0, 1.0, 3.0]`, `"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "median-unsorted",
+        "defect_class": "unsorted-input-assumption",
+        "kind": "defect",
+        "signature": [
+          [
+            "tests",
+            "Major",
+            "fl4write-proof/test_proof_target.py",
+            5
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "tests",
+            "severity": "Major",
+            "path": "fl4write-proof/test_proof_target.py",
+            "line": 5,
+            "message": "The test `test_median_odd_unsorted` fails against the implementation. The function `median` assumes the input list is sorted. For the input `[5.0, 1.0, 3.0]`, `"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "median-unsorted",
+        "defect_class": "unsorted-input-assumption",
+        "kind": "defect",
+        "signature": [
+          [
+            "tests",
+            "Major",
+            "fl4write-proof/test_proof_target.py",
+            5
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "tests",
+            "severity": "Major",
+            "path": "fl4write-proof/test_proof_target.py",
+            "line": 5,
+            "message": "The test `test_median_odd_unsorted` fails against the implementation. The function `median` assumes the input list is sorted. For the input `[5.0, 1.0, 3.0]`, `"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "sql-string-concat",
+        "defect_class": "sql-injection",
+        "kind": "defect",
+        "signature": [
+          [
+            "security",
+            "Critical",
+            "users_query.py",
+            7
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Critical": 1
+        },
+        "findings": [
+          {
+            "rule_id": "security",
+            "severity": "Critical",
+            "path": "users_query.py",
+            "line": 7,
+            "message": "SQL injection vulnerability: the `email` parameter is concatenated directly into the SQL query string, allowing an attacker to execute arbitrary SQL commands."
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "sql-string-concat",
+        "defect_class": "sql-injection",
+        "kind": "defect",
+        "signature": [
+          [
+            "security",
+            "Critical",
+            "users_query.py",
+            7
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Critical": 1
+        },
+        "findings": [
+          {
+            "rule_id": "security",
+            "severity": "Critical",
+            "path": "users_query.py",
+            "line": 7,
+            "message": "SQL injection vulnerability: the `email` parameter is concatenated directly into the SQL query string, allowing an attacker to execute arbitrary SQL commands."
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "sql-string-concat",
+        "defect_class": "sql-injection",
+        "kind": "defect",
+        "signature": [
+          [
+            "security",
+            "Critical",
+            "users_query.py",
+            7
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Critical": 1
+        },
+        "findings": [
+          {
+            "rule_id": "security",
+            "severity": "Critical",
+            "path": "users_query.py",
+            "line": 7,
+            "message": "SQL injection vulnerability: the `email` parameter is concatenated directly into the SQL query string, allowing an attacker to execute arbitrary SQL commands."
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "sql-string-concat",
+        "defect_class": "sql-injection",
+        "kind": "defect",
+        "signature": [
+          [
+            "security",
+            "Critical",
+            "users_query.py",
+            7
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Critical": 1
+        },
+        "findings": [
+          {
+            "rule_id": "security",
+            "severity": "Critical",
+            "path": "users_query.py",
+            "line": 7,
+            "message": "SQL injection vulnerability: the `email` parameter is concatenated directly into the SQL query string, allowing an attacker to execute arbitrary SQL commands."
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "sql-string-concat",
+        "defect_class": "sql-injection",
+        "kind": "defect",
+        "signature": [
+          [
+            "security",
+            "Critical",
+            "users_query.py",
+            7
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Critical": 1
+        },
+        "findings": [
+          {
+            "rule_id": "security",
+            "severity": "Critical",
+            "path": "users_query.py",
+            "line": 7,
+            "message": "SQL injection vulnerability: the `email` parameter is concatenated directly into the SQL query string, allowing an attacker to execute arbitrary SQL commands."
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "clean-pagination",
+        "defect_class": "",
+        "kind": "clean",
+        "signature": [],
+        "flag": "clean",
+        "actionable": false,
+        "severity_counts": {},
+        "findings": [],
+        "error": ""
+      },
+      {
+        "case_id": "clean-pagination",
+        "defect_class": "",
+        "kind": "clean",
+        "signature": [],
+        "flag": "clean",
+        "actionable": false,
+        "severity_counts": {},
+        "findings": [],
+        "error": ""
+      },
+      {
+        "case_id": "clean-pagination",
+        "defect_class": "",
+        "kind": "clean",
+        "signature": [],
+        "flag": "clean",
+        "actionable": false,
+        "severity_counts": {},
+        "findings": [],
+        "error": ""
+      },
+      {
+        "case_id": "clean-pagination",
+        "defect_class": "",
+        "kind": "clean",
+        "signature": [],
+        "flag": "clean",
+        "actionable": false,
+        "severity_counts": {},
+        "findings": [],
+        "error": ""
+      },
+      {
+        "case_id": "clean-pagination",
+        "defect_class": "",
+        "kind": "clean",
+        "signature": [],
+        "flag": "clean",
+        "actionable": false,
+        "severity_counts": {},
+        "findings": [],
+        "error": ""
+      }
+    ],
+    "recall": [
+      {
+        "case_id": "median-unsorted",
+        "defect_class": "unsorted-input-assumption",
+        "kind": "defect",
+        "signature": [
+          [
+            "tests",
+            "Major",
+            "fl4write-proof/test_proof_target.py",
+            5
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "tests",
+            "severity": "Major",
+            "path": "fl4write-proof/test_proof_target.py",
+            "line": 5,
+            "message": "The test `test_median_odd_unsorted` fails against the implementation. The function `median` assumes the input list is sorted. For the input `[5.0, 1.0, 3.0]`, `"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "off-by-one-boundary",
+        "defect_class": "boundary-indexing",
+        "kind": "defect",
+        "signature": [
+          [
+            "tests",
+            "Major",
+            "paginate.py",
+            3
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "tests",
+            "severity": "Major",
+            "path": "paginate.py",
+            "line": 3,
+            "message": "The test `test_first_page` fails against the implementation. The function `page` is documented to return a slice for a 1-based `page_no`, but the calculation `s"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "inverted-comparison",
+        "defect_class": "comparison-polarity",
+        "kind": "defect",
+        "signature": [
+          [
+            "tests",
+            "Major",
+            "threshold.py",
+            3
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "tests",
+            "severity": "Major",
+            "path": "threshold.py",
+            "line": 3,
+            "message": "The implementation `return sev_score < 90` contradicts the docstring 'Critical when score >= 90' and the test `assert is_critical(95) is True`. For input 95, `9"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "sql-string-concat",
+        "defect_class": "sql-injection",
+        "kind": "defect",
+        "signature": [
+          [
+            "security",
+            "Critical",
+            "users_query.py",
+            7
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Critical": 1
+        },
+        "findings": [
+          {
+            "rule_id": "security",
+            "severity": "Critical",
+            "path": "users_query.py",
+            "line": 7,
+            "message": "SQL injection vulnerability: user-supplied `email` is concatenated directly into the SQL query string, allowing an attacker to execute arbitrary SQL commands (e"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "hardcoded-token",
+        "defect_class": "hardcoded-credential",
+        "kind": "defect",
+        "signature": [
+          [
+            "secrets",
+            "Major",
+            "deploy_notify.py",
+            3
+          ],
+          [
+            "security",
+            "Major",
+            "deploy_notify.py",
+            10
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 2
+        },
+        "findings": [
+          {
+            "rule_id": "secrets",
+            "severity": "Major",
+            "path": "deploy_notify.py",
+            "line": 3,
+            "message": "Hardcoded API key '[redacted]' is committed in source code."
+          },
+          {
+            "rule_id": "security",
+            "severity": "Major",
+            "path": "deploy_notify.py",
+            "line": 10,
+            "message": "JSON payload is constructed via string concatenation, allowing injection of arbitrary JSON fields or breaking the payload if 'target' contains quotes or backsla"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "file-never-closed",
+        "defect_class": "resource-leak",
+        "kind": "defect",
+        "signature": [
+          [
+            "security",
+            "Major",
+            "count_config.py",
+            3
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "security",
+            "severity": "Major",
+            "path": "count_config.py",
+            "line": 3,
+            "message": "The file handle opened on line 3 is never explicitly closed. In CPython, the file will be closed when the function returns and the object is garbage collected, "
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "mutate-while-iterating",
+        "defect_class": "mutation-during-iteration",
+        "kind": "defect",
+        "signature": [
+          [
+            "tests",
+            "Major",
+            "filter_users.py",
+            3
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "tests",
+            "severity": "Major",
+            "path": "filter_users.py",
+            "line": 3,
+            "message": "The function `drop_minors` mutates the list `users` while iterating over it using `for u in users`. In Python, removing items from a list during iteration cause"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "swallowed-error",
+        "defect_class": "exception-swallow",
+        "kind": "defect",
+        "signature": [
+          [
+            "observability",
+            "Major",
+            "flush_metrics.py",
+            9
+          ],
+          [
+            "tests",
+            "Major",
+            "flush_metrics.py",
+            1
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 2
+        },
+        "findings": [
+          {
+            "rule_id": "observability",
+            "severity": "Major",
+            "path": "flush_metrics.py",
+            "line": 9,
+            "message": "The `except Exception: pass` block silently swallows all errors during the file write operation. If the disk is full, permissions are incorrect, or the path is "
+          },
+          {
+            "rule_id": "tests",
+            "severity": "Major",
+            "path": "flush_metrics.py",
+            "line": 1,
+            "message": "The diff introduces a new module containing core logic for persisting metrics but does not include any tests. The `tests` law requires that changes to logic shi"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "precedence-bug",
+        "defect_class": "operator-precedence",
+        "kind": "defect",
+        "signature": [
+          [
+            "tests",
+            "Major",
+            "ready_check.py",
+            7
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "tests",
+            "severity": "Major",
+            "path": "ready_check.py",
+            "line": 7,
+            "message": "The implementation `flags & MASK_LOADED == 2` is logically incorrect due to operator precedence. In Python, the equality operator `==` has higher precedence tha"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "none-attr-crash",
+        "defect_class": "missing-none-guard",
+        "kind": "defect",
+        "signature": [
+          [
+            "testing-quality",
+            "Major",
+            "greet.py",
+            4
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "testing-quality",
+            "severity": "Major",
+            "path": "greet.py",
+            "line": 4,
+            "message": "The implementation crashes with an AttributeError when 'name' is absent from opts, contradicting the docstring's stated contract that 'name may be absent'. A te"
+          }
+        ],
+        "error": ""
+      }
+    ],
+    "clean": [
+      {
+        "case_id": "clean-median",
+        "defect_class": "",
+        "kind": "clean",
+        "signature": [],
+        "flag": "clean",
+        "actionable": false,
+        "severity_counts": {},
+        "findings": [],
+        "error": ""
+      },
+      {
+        "case_id": "clean-pagination",
+        "defect_class": "",
+        "kind": "clean",
+        "signature": [],
+        "flag": "clean",
+        "actionable": false,
+        "severity_counts": {},
+        "findings": [],
+        "error": ""
+      },
+      {
+        "case_id": "clean-sql-params",
+        "defect_class": "",
+        "kind": "clean",
+        "signature": [
+          [
+            "testing-quality",
+            "Major",
+            "users_query.py",
+            1
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "testing-quality",
+            "severity": "Major",
+            "path": "users_query.py",
+            "line": 1,
+            "message": "The new query function `find_user` is not accompanied by any tests. The repository law `testing-quality` requires that core logic and dangerous paths (such as d"
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "clean-file-close",
+        "defect_class": "",
+        "kind": "clean",
+        "signature": [
+          [
+            "testing-quality",
+            "Major",
+            "count_config.py",
+            1
+          ]
+        ],
+        "flag": "defect",
+        "actionable": true,
+        "severity_counts": {
+          "Major": 1
+        },
+        "findings": [
+          {
+            "rule_id": "testing-quality",
+            "severity": "Major",
+            "path": "count_config.py",
+            "line": 1,
+            "message": "The new logic in `[redacted]` is not accompanied by any tests. The repository law requires that changes to logic ship with tests, and core logic must be tested."
+          }
+        ],
+        "error": ""
+      },
+      {
+        "case_id": "clean-threshold",
+        "defect_class": "",
+        "kind": "clean",
+        "signature": [],
+        "flag": "clean",
+        "actionable": false,
+        "severity_counts": {},
+        "findings": [],
+        "error": ""
+      }
+    ]
+  }
+}

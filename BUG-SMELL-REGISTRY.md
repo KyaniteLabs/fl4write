@@ -66,3 +66,121 @@ no triage. Curated outcomes live in LEARNINGS.md.
 - 2026-09-04 successor recovery — round-14 claimed fixes reopened by exact probes: space-containing diff paths, uncounted malformed PR rows, coercive public numeric config, invalid URL ports, reversible credential-path identity; adjacent scheduler timestamp validation gap. Six classes repaired, 45 added cases, scoped independent APPROVE; 650 passed / 3 live skips. Deployed as a5d56df on 2026-09-05; CI and runner HEAD verified. LEARNINGS #60; docs/pm-recovery/RECOVERY-REPORT.md. No exhaustive closure claimed.
 - 2026-09-05 round 15 — optional fix-flag normalization ran only inside an unrelated error branch; boolean/nonpositive source lines survived restart; uncertain triage marker identity permitted duplicate publication. Three reproduced defects repaired with 15 cases and independent approval; claimed severity crash rejected with executable counterevidence. LEARNINGS #61; ROUND15-REPAIR-REVIEW.md. Clean rounds remain 0/3.
 - 2026-09-05 live verification — model eval used a dummy endpoint; fleet-config tests leaked dummy credentials; nested suite parser rejected zero skips. Real full-suite evaluation now passes. Readiness score existed only in logs; complete issue bodies and one-time legacy refresh are now pinned. LEARNINGS #62; 672 release tests passed with zero skips, 64 added behavioral cases since recovery baseline.
+- 2026-09-05 D4 security — redact_credentials entropy gate let low-entropy 16+ char credential runs leak outside assignment context (e.g. "the value is aaaaaaaaaaaaaaaa"); fixed: any 16+ char alphanumeric run now redacted unless a known code identifier; regression test_low_entropy_run_redacted added; 674 passed / 3 skipped.
+
+## D7-031: split-token redaction swallows assignment key, leaking value
+
+**File:** `fl4write/scrub.py`, `redact_credentials()`
+**Smell:** The `_SPLIT_TOKEN_RE` rule (dotted/slash tokens >=24 chars) runs
+BEFORE the `_ASSIGN_KEY` rule. When a dotted identifier ends with an
+assignment key (e.g. `com.example.verylongidentifier.password = "abcdef"`),
+the split-token rule redacts the ENTIRE dotted token including `password`,
+so the assignment rule never matches. The credential value `abcdef` is
+left unredacted in the output.
+
+**Impact:** A model-quoted config path ending in `password`/`token`/etc.
+followed by an assignment leaks the credential value on posting surfaces.
+
+**Fix:** Run the assignment-key redaction BEFORE the split-token rule, or
+make the split-token rule stop at word boundaries that precede an
+assignment operator.
+config path or a log line containing a fully-qualified credential key
+leaks the secret value to the posting surface.
+
+**Fix:** Run the `_ASSIGN_KEY` redaction BEFORE the `_SPLIT_TOKEN_RE` rule,
+so the assignment value is redacted regardless of whether the key is part
+of a longer dotted token.
+
+**Status:** FIXED (2026-09-17, cycle 39) — assignment-key redaction now runs before the split-token rule; regression test_dotted_assignment_key_value_redacted added; 678 passed / 3 skipped.
+
+## D7-032: short assignment values (<4 chars) leak past _ASSIGN_KEY
+
+**File:** `fl4write/scrub.py`, `redact_credentials()`
+**Smell:** `_ASSIGN_KEY` matches the credential value with
+`[A-Za-z0-9_\-./+]{4,}` — a minimum of 4 chars. A hardcoded credential
+assigned to a known key with a 1-3 char value (e.g. `password = ab`,
+`password=abc`, `token = x`) is NOT redacted and leaks on posting surfaces.
+The 4-char floor was tuned to avoid over-redacting identifiers, but it
+defeats the assignment rule's purpose: a value sitting on the right-hand
+side of `password=`/`token=`/`secret=` is a credential by context, not by
+length.
+
+**Impact:** Short hardcoded credentials on known keys leak to the posting
+surface.
+
+**Fix:** Lower the assignment-value floor to `{1,}` (any non-empty value on
+a known credential key is redacted). The 16+ contiguous-run rule and the
+known-identifier guard still protect legitimate short identifiers that are
+NOT in an assignment context.
+
+**Status:** FIXED (2026-09-17, cycle 23) — reproduced: `password = ab`,
+`password=abc` leak; fix landed (assignment floor `{1,}`) + regression test
+`tests/test_gauntlet_fixes.py::TestMECERedaction::test_short_assignment_value_redacted`.
+
+## D7-033: multi-word credential values leak partial content past _ASSIGN_KEY
+
+**File:** `fl4write/scrub.py`, `redact_credentials()`
+**Smell:** The `_ASSIGN_KEY` rule matched the credential value with
+`[A-Za-z0-9_\-./+]{1,}` — a class WITHOUT whitespace. A multi-word credential
+assigned to a known key (e.g. `password = "my secret value"`,
+`token: abc def ghi`) was only redacted up to the first space, leaving the
+rest of the value on the posting surface:
+`password = "[redacted] secret value"`.
+
+**Impact:** Multi-word / spaced hardcoded credentials on known keys leak
+partial credential material to the posting surface.
+
+**Fix:** Add whitespace to the assignment-value class so the whole value is
+consumed: `[A-Za-z0-9_\-./+ ]{1,}`. The 16+ contiguous-run rule and the
+known-identifier guard still protect legitimate short identifiers that are
+NOT in an assignment context.
+
+**Status:** FIXED (2026-09-18, cycle 31) — reproduced:
+`password = "my secret value"` left `secret value` unredacted; fix landed
+(space added to `_ASSIGN_KEY` value class) + regression test
+`tests/test_fl4write.py::test_redact_credentials_multi_word_value`.
+683 passed / 3 skipped.
+
+## D7-034: plural credential keys (passwords/tokens/secrets) leak values past _ASSIGN_KEY
+
+**File:** `fl4write/scrub.py`, `redact_credentials()`
+**Smell:** The `_ASSIGN_KEY` rule used a bare key name with `\b` at the end
+(`...private[_-]?key)\b\s*[:=]\s*`). The singular forms matched, but the
+plural forms (`passwords`, `tokens`, `secrets`) matched the singular stem
+plus a trailing `s`, so the `\s*[:=]` then anchored on the `s` and the value
+class captured only up to the next space — leaking the value on plural keys:
+`passwords = abc` leaked `abc`.
+
+**Impact:** Plural-form credential keys on known keys leaked their values to
+the posting surface.
+
+**Fix:** Made the key-name suffix optional (`private[_-]?key)s?\s*[:=]\s*`) so
+both singular and plural key forms consume the whole value. The singular-key
+context guard (`my_password`) still survives; non-assignment Bearer context is
+still NOT redacted.
+
+**Status:** FIXED (2026-09-19, cycle 49) — reproduced: `passwords = abc`,
+`tokens = abc def` leaked; fix landed (`s?` on the key-name suffix) + regression
+test `tests/test_fl4write.py::test_redact_credentials_plural_key_forms`.
+684 passed / 3 skipped.
+
+## D7-035: short slash-separated AWS secret keys (16-22 chars) leak past the split-token floor
+
+**File:** `fl4write/scrub.py`, `redact_credentials()`
+**Smell:** The `_SPLIT_TOKEN_RE` rule redacts a dotted/slash-delimited token
+only when its TOTAL length is >= 24. A real AWS secret key is 30 base64 chars
+with `/` separators, but a truncated or short-form key of 16-22 chars with a
+single `/` (e.g. `wJalrXUtnFEMI/K7MDENG`) sits under the 24-char floor and is
+left verbatim — leaking partial credential material to the posting surface.
+The 16+ contiguous-run rule does not catch it because the `/` breaks the run.
+
+**Impact:** Short slash-separated AWS-style secret keys leaked their full
+value to the posting surface.
+
+**Fix:** Lower the split-token floor for slash-delimited tokens to 16 (the
+AWS-secret-key minimum) while keeping the 24-char floor for dotted tokens
+(JWTs), so legitimate dotted identifiers (com.example.Foo) are unaffected.
+
+**Status:** FIXED (2026-09-20, commit c3c0dcb — recovered from the interrupted-cycle stash after the 09-19 claim was found false; refined to pure-slash-only 16-char floor so file paths survive) — reproduced: `key=wJalrXUtnFEMI/K7MDENG`
+(16 chars) leaked; fix landed (per-separator floor) + regression test
+`tests/test_fl4write.py::test_redact_credentials_short_slash_secret`.

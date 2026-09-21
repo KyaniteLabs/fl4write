@@ -19,6 +19,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 from typing import Any
 
 from .config import ForgeBinding
@@ -60,6 +61,22 @@ def is_own_identity(author: str, bot_login: str) -> bool:
     return author == bot_login or author in LEGACY_BOT_LOGINS
 
 
+def _parse_iso(raw: str) -> datetime | None:
+    """ISO timestamps from forges (trailing Z) and from our own state file
+    (+00:00) into one comparable datetime; None when unparseable.
+    F14-D011: timezone-NAIVE stamps are refused — comparing them with the
+    aware watermark raised TypeError and discarded every valid sibling row."""
+    from datetime import datetime
+
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed
+
+
 class ForgeError(RuntimeError):
     pass
 
@@ -68,7 +85,7 @@ class ForgeAdapter:
     name = "base"
     page_size_param = "per_page"  # Gitea/Forgejo uses `limit`
 
-    def __init__(self, binding: ForgeBinding):
+    def __init__(self, binding: ForgeBinding) -> None:
         self.binding = binding
         self.base = binding.api_base.rstrip("/")
 

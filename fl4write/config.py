@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import types as _types
 import typing
+from typing import Iterator
 from pathlib import Path
 
 import yaml
@@ -30,7 +31,7 @@ class _StrictModel(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _strict_bools_and_numbers(cls, raw):
+    def _strict_bools_and_numbers(cls, raw) -> object:
         """F14-D004 (reopened F7-D009/F13-D006): strictness lives IN the
         model, not only in load_config preprocessing — public
         RepoConfig.model_validate must refuse 'shadow: "false"' (used to
@@ -76,7 +77,7 @@ def _int_field_names() -> set[str]:
     return names
 
 
-def _reject_bool_ints(raw):
+def _reject_bool_ints(raw) -> object:
     """F12-D006: pydantic coerces YAML booleans to integers ('true' -> 1) —
     a typo'd boolean must fail load-loud, never silently change a limit.
     Deep-walks the raw config and refuses bools for any field declared int."""
@@ -345,7 +346,7 @@ class _UniqueKeyLoader(yaml.SafeLoader):
     or regenerated config must abort instead (corruption class, LEARNINGS #16)."""
 
 
-def _no_dupes(loader, node, deep=False):
+def _no_dupes(loader, node, deep: bool = False) -> dict[str, object]:
     mapping = {}
     for key_node, value_node in node.value:
         key = loader.construct_object(key_node, deep=deep)
@@ -370,7 +371,7 @@ def check_model_keys(config: RepoConfig) -> None:
             log.warning("%s.key_env %s is not set in the environment (expect 401s)", name, route.key_env)
 
 
-def _iter_model_fields(obj):
+def _iter_model_fields(obj) -> Iterator[tuple[str, object]]:
     """Yield (attribute-name, value) for bool-annotated fields of a pydantic
     model, descending into nested models."""
     import types as _types

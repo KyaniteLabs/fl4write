@@ -36,7 +36,8 @@ _ESC_ALT_IMG_RE = re.compile(
 # ("![x](//host/pixel)") — both are attacker-controlled loads in the posted
 # comment, none of which may survive scrub
 _REMOTE_IMG_REF_DEF_RE = re.compile(
-    r"^ {0,3}\[[^\]\n]+\]:\s*(?:https?:)?//\S+.*$", re.IGNORECASE | re.MULTILINE)
+    r"^ {0,3}\[[^\]\n]+\]:\s*(?:[a-zA-Z][a-zA-Z0-9+.\-]*:)?(?://)?\S+.*$",
+    re.IGNORECASE | re.MULTILINE)
 _PROTOCOL_RELATIVE_IMG_RE = re.compile(
     r"!\[[^\]]*\]\(\s*//[^)]*\)", re.IGNORECASE)
 _IMG_REF_USAGE_RE = re.compile(r"!\[[^\]]*\]\[[^\]]*\]", re.IGNORECASE)
@@ -113,7 +114,7 @@ def scrub(text: str) -> str:
 # (L1-B3 needs the literal before posting decisions).
 _SECRET_PREFIX = ("ghp_", "gho_", "github_pat_", "sk-", "sk_", "AKIA",
                   "xoxb-", "xoxp-", "glpat-", "AIza")
-_REDACT_RUN_RE = re.compile(r"[A-Za-z0-9_\-]{16,}")
+_REDACT_RUN_RE = re.compile(r"[A-Za-z0-9_\-+=]{16,}")
 # Long camelCase identifiers that look high-entropy but are code, not secrets
 _KNOWN_IDENTIFIERS = {"documentQuerySelector", "getElementById", "getElementByClassName"}
 
@@ -128,29 +129,60 @@ def _entropy(s: str) -> float:
 
 def redact_credentials(text: str) -> str:
     """Replace credential-shaped strings with [redacted]. Prefix runs always;
-    16+ char runs only when high-entropy (a real secret, not an identifier).
+    16+ char runs always (a real secret, not an identifier).
     Apply at posting surfaces, never on analyzer grounding paths."""
     if not isinstance(text, str) or not text:
         return text
     out = text
-    for m in _REDACT_RUN_RE.finditer(text):
-        tok = m.group(0)
-        if tok not in _KNOWN_IDENTIFIERS and (any(
-                tok.startswith(p) for p in _SECRET_PREFIX) or _entropy(tok) >= 3.5):
-            out = out.replace(tok, "[redacted]", 1)
-    # prefix-marked tokens not caught by the 16+ run rule (shorter prefixes)
     import re as _re
-    for p in _SECRET_PREFIX:
-        out = _re.sub(re.escape(p) + r"[A-Za-z0-9_\-]{8,}", "[redacted]", out)
+    # D4: ANY 16+ char alphanumeric run is redacted unless it is a known
+    # code identifier. The old entropy gate let low-entropy credentials
+    # (e.g. 'aaaaaaaaaaaaaaaa') leak when not in an assignment context.
     # F13-A1 (CRITICAL, reopened F1-013): credential ASSIGNMENT values are
     # redacted regardless of entropy — 'password=aaaaaaaaaaaaaaaa' is a real
     # hard-coded credential even though its Shannon entropy is ~0
     _ASSIGN_KEY = (
         r"(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|"
-        r"client[_-]?secret|auth(?:orization)?|private[_-]?key)\b\s*[:=]\s*"
-        r"['\"]?([A-Za-z0-9_\-./+]{4,})['\"]?")
-    out = _re.sub(_ASSIGN_KEY,
-                  lambda m: out[m.start():m.start(1)] + "[redacted]", out)
+        r"client[_-]?secret|auth(?:orization)?|private[_-]?key)s?\s*[:=]\s*"
+        r"['\"]?([A-Za-z0-9_\-./+ ]{1,})['\"]?")
+    def _assign_sub(m: re.Match) -> str:
+        # Preserve a trailing quote char if the match consumed one, so
+        # 'password = "abcdef"' -> 'password = "[redacted]"' not '...[redacted]'
+        tail = m.group(0)[-1] if m.group(0) else ""
+        closing = tail if tail in ("'", '"') else ""
+        return out[m.start():m.start(1)] + "[redacted]" + closing
+    out = _re.sub(_ASSIGN_KEY, _assign_sub, out)
+
+    # D4: secrets split by '.' (JWT) or '/' (AWS secret key) defeat the 16+
+    # contiguous-run rule and leak partial credential material. A JWT is
+    # exactly 3 base64url segments joined by '.'; an AWS secret key is base64
+    # with '/' separators. Redact the WHOLE dotted/slash-delimited token as
+    # one unit when it is long enough to be a real secret (>=24 chars total,
+    # >=2 segments) — this catches the short middle fragments the 16+ rule
+    # leaves behind. Legitimate dotted identifiers (com.example.Foo) are
+    # short per-segment and stay under the 24-char floor.
+    _SPLIT_TOKEN_RE = _re.compile(r"[A-Za-z0-9_\-]+(?:[./][A-Za-z0-9_\-]+)+")
+    def _split_sub(m) -> str:
+        tok = m.group(0)
+        # D7-035: PURE-slash tokens (AWS secret keys: base64, never a dot)
+        # are real secrets from 16 chars up. Any token containing a dot —
+        # file paths (UNQUERYABLE/new.py), dotted identifiers, JWTs — keeps
+        # the 24-char floor: redacting a path at 16+ breaks every downstream
+        # path query (ci_watch path_is_file) and leaks nothing (paths are
+        # public repo structure, not credential material).
+        if "/" in tok and "." not in tok and len(tok) >= 16:
+            return "[redacted]"
+        if "." in tok and len(tok) >= 24:
+            return "[redacted]"
+        return tok
+    out = _SPLIT_TOKEN_RE.sub(_split_sub, out)
+    for m in _REDACT_RUN_RE.finditer(out):
+        tok = m.group(0)
+        if tok not in _KNOWN_IDENTIFIERS:
+            out = out.replace(tok, "[redacted]", 1)
+    # prefix-marked tokens not caught by the 16+ run rule (shorter prefixes)
+    for p in _SECRET_PREFIX:
+        out = _re.sub(re.escape(p) + r"[A-Za-z0-9_\-]{4,}", "[redacted]", out)
     return out
 
 

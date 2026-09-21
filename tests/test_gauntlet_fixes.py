@@ -406,6 +406,19 @@ class TestSolAudit2Pins:
         # <b>/inline code comparisons still survive as plain text
         assert scrub("a < b and c > d") == "a < b and c > d"
 
+    def test_refdef_non_http_schemes_scrubbed(self):
+        # D2: a reference-definition image can point at ANY scheme, not just
+        # http(s):// or protocol-relative. javascript:/ftp:/data: payloads in
+        # the definition line must be removed, not just the ![x][id] usage.
+        from fl4write.scrub import scrub
+        for url in ("javascript:alert(1)", "ftp://evil/x", "https://evil/x",
+                    "//host/pixel", "data:text/html;base64,PHNjcmlwdD4="):
+            out = scrub("![x][id]\n[id]: " + url)
+            assert url not in out, f"leaked refdef url {url!r} in {out!r}"
+            assert out == "[image removed]\n", repr(out)
+        # a plain inline reference (not an image) is legitimate prose: keep it
+        assert scrub("see [id]: https://evil/x") == "see [id]: https://evil/x"
+
 
 class TestADVP4TestGaming:
     """UltraQA round 3, P4 (junit-evidence semantics): a hostile diff/fix that
@@ -954,6 +967,55 @@ class TestMECERedaction:
         from fl4write.scrub import redact_credentials
         s = "uses documentQuerySelector and getElementById on the page"
         assert redact_credentials(s) == s
+
+    def test_low_entropy_run_redacted(self):
+        # D4: a low-entropy 16+ char run is a real credential even when it
+        # is not in an assignment context (the old entropy gate let it leak)
+        from fl4write.scrub import redact_credentials
+        assert "aaaaaaaaaaaaaaaa" not in redact_credentials("the value is aaaaaaaaaaaaaaaa here")
+        assert "[redacted]" in redact_credentials("leak: bbbbbbbbbbbbbbbb")
+        assert "cccccccccccccccc" not in redact_credentials("x = cccccccccccccccc")
+
+    def test_dotted_and_slashed_secret_fragments_redacted(self):
+        # D4: secrets split by '.' (JWT) or '/' (AWS secret key) defeat the
+        # 16+ contiguous-run rule, leaking partial credential material.
+        from fl4write.scrub import redact_credentials
+        jwt = ("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0."
+               "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U")
+        out = redact_credentials("Bearer " + jwt)
+        assert "eyJzdWIiOiIxIn0" not in out, "JWT middle segment leaked"
+        assert "dozjgNryP4J3jVmNHl0w5N" not in out, "JWT payload leaked"
+        aws = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        out2 = redact_credentials("aws_secret_access_key=" + aws)
+        assert "wJalrXUtnFEMI" not in out2, "AWS key fragment leaked"
+        assert "K7MDENG" not in out2, "AWS key fragment leaked"
+
+    def test_dotted_assignment_key_value_redacted(self):
+        # D7-031: a dotted token ending in an assignment key must not swallow
+        # the key so the value leaks; the value is redacted regardless.
+        from fl4write.scrub import redact_credentials
+        out = redact_credentials('com.example.verylongidentifier.password = "abcdef"')
+        assert "abcdef" not in out, "credential value leaked past dotted key"
+        assert "[redacted]" in out
+        out2 = redact_credentials("app.db.password = secret123")
+        assert "secret123" not in out2
+
+    def test_short_assignment_value_redacted(self):
+        # D7-032: a hardcoded credential on a known key with a 1-3 char
+        # value must still be redacted (the old {4,} floor leaked it).
+        import re as _re
+        from fl4write.scrub import redact_credentials
+        for src, val in (
+            ("password = ab", "ab"),
+            ("password=abc", "abc"),
+            ("token = x", "x"),
+            ("password = a", "a"),
+        ):
+            out = redact_credentials(src)
+            assert "[redacted]" in out, f"no redaction marker: {src!r} -> {out!r}"
+            pat = r"(?<![A-Za-z0-9_])" + _re.escape(val) + r"(?![A-Za-z0-9_])"
+            assert not _re.search(pat, out), f"short value leaked: {src!r} -> {out!r}"
+
 
     def test_rendered_comment_redacts(self):
         from fl4write import renderer
@@ -3109,6 +3171,12 @@ class TestMECERound9Pins:
         import re as _re
         env = dict(os.environ)
         env["FL4WRITE_DOC_TRUTH_NESTED"] = "1"
+        # F15-E001: the nested verifier must run the DEFAULT suite (the one
+        # the README's "tests green" claim asserts). If the outer run is the
+        # opt-in live suite (FL4WRITE_EVAL=1), that flag would leak in and
+        # force the paid-model tests to run without creds, turning the
+        # nested run red for reasons unrelated to doc truth.
+        env.pop("FL4WRITE_EVAL", None)
         out = _sp.run([_sys.executable, "-m", "pytest", "tests/", "-q"],
                       capture_output=True, text=True, cwd=str(REPO_ROOT),
                       env=env, timeout=900)
@@ -4170,7 +4238,11 @@ class TestMECERound12Ops:
 
     def test_readme_count_attributed_to_closing_round(self):
         readme = (REPO_ROOT / "README.md").read_text()
-        assert "round-13 desk pass" in readme
+        # The README's validation history was replaced with current evidence
+        # (commit 71c14ac); the stale "round-13 desk pass" provenance label is
+        # no longer present. Pin the current honest status line instead.
+        assert "Round 14 remains open" in readme
+        assert "no exhaustive certification is" in readme
 
 
 class TestMECERound12Pins:

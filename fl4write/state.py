@@ -53,7 +53,7 @@ class CycleLock:
     Semantics kept: a second concurrent holder raises CycleLockHeld (callers
     skip, never queue)."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path) -> None:
         self.path = path
         self._fd: int | None = None
         self._held = False

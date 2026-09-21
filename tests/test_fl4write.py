@@ -132,6 +132,22 @@ class TestState:
             token = lock.read_text()
             assert "999999999" not in token and token.strip()
 
+    def test_lock_token_is_unique_per_acquire(self, tmp_path):
+        # D1-reliability: the diagnostic token must be unique per acquire so
+        # two sequential holders can be told apart in the lock file.
+        lock = tmp_path / "c.lock"
+        with state.CycleLock(lock):
+            t1 = lock.read_text()
+        with state.CycleLock(lock):
+            t2 = lock.read_text()
+        assert t1 != t2, f"token not unique: {t1!r} == {t2!r}"
+        # token format: "<pid> <epoch> <hex>"
+        parts = t2.split()
+        assert len(parts) == 3, f"unexpected token format: {t2!r}"
+        assert parts[0].isdigit(), f"pid not int: {parts[0]!r}"
+        assert parts[1].isdigit(), f"epoch not int: {parts[1]!r}"
+        assert all(c in "0123456789abcdef" for c in parts[2]), f"hex bad: {parts[2]!r}"
+
 
 # ---------------------------------------------------------------- scrub (ULTRAQA injection)
 class TestScrub:
@@ -767,3 +783,77 @@ class TestModuleGaps:
         # legacy-slug-authored PR is OURS — must not raise
         fixlane.merge_own_pr(author="kyanitelabs[bot]", bot_identity="fl4write[bot]",
                              ci_green=True, config=c)
+
+
+def test_redact_credentials_multi_word_value():
+    """D2: multi-word credential values must be fully redacted, not just the first word."""
+    from fl4write.scrub import redact_credentials
+    out = redact_credentials('password = "my secret value"')
+    assert "secret" not in out
+    assert "value" not in out
+    assert "[redacted]" in out
+
+    out2 = redact_credentials("token: abc def ghi")
+    assert "def" not in out2
+    assert "ghi" not in out2
+    assert "[redacted]" in out2
+
+
+def test_redact_credentials_plural_key_forms():
+    """D7-034: plural credential keys (passwords/tokens/secrets) must redact
+    their values too — the singular-key rule used a bare key name with \b,
+    so 'passwords = abc' matched 'password' + 's' and leaked the value."""
+    from fl4write.scrub import redact_credentials
+    for key in ("password", "token", "secret"):
+        for form in (key, key + "s"):
+            out = redact_credentials(f"{form} = abc")
+            assert "abc" not in out, f"{form} leaked"
+            assert "[redacted]" in out
+    # plural key with a multi-word value: whole value redacted
+    out = redact_credentials("secrets = mysecret value")
+    assert "mysecret" not in out
+    assert "value" not in out
+    assert "[redacted]" in out
+    # singular-key context still survives (my_password)
+    assert redact_credentials("my_password = abc") == "my_password = [redacted]"
+    # non-assignment Bearer context is NOT redacted (still a real case)
+    assert redact_credentials("Authorization: Bearer abc") == "Authorization: Bearer abc"
+
+
+def test_redact_credentials_multiple_runs():
+    """D2: multiple 16+ char runs in one string must ALL be redacted. The 16+
+    run loop used to iterate the ORIGINAL text and replace in the already-
+    mutated output, so a run following an assignment redaction leaked."""
+    from fl4write.scrub import redact_credentials
+    out = redact_credentials('token=aaaaaaaaaaaaaaaa=zzzzzzzzzzzzzzzz')
+    assert 'zzzzzzzzzzzzzzzz' not in out
+    assert 'aaaaaaaaaaaaaaaa' not in out
+    assert out.count('[redacted]') == 2
+    out2 = redact_credentials('x=aaaaaaaaaaaaaaaa b=zzzzzzzzzzzzzzzz')
+    assert 'zzzzzzzzzzzzzzzz' not in out2
+    assert 'aaaaaaaaaaaaaaaa' not in out2
+
+
+def test_redact_credentials_short_slash_secret():
+    """D7-035: slash-separated AWS-style secret keys of 16-22 chars leaked
+    past the 24-char split-token floor (the '/' breaks the 16+ contiguous-run
+    rule). Slash tokens must redact from 16 chars up; dotted tokens (JWTs,
+    com.example.Foo identifiers) keep the 24-char floor so legitimate dotted
+    identifiers are unaffected."""
+    from fl4write.scrub import redact_credentials
+    # short slash-separated AWS secret keys (16-22 chars) must be redacted
+    for n in (16, 20, 22):
+        half = n // 2
+        tok = "A" * half + "/" + "B" * (n - half)
+        out = redact_credentials("key=" + tok)
+        assert tok not in out, f"slash secret of len {n} leaked"
+        assert "[redacted]" in out
+    # full 30-char AWS secret key still redacted
+    full = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    assert full not in redact_credentials("key=" + full)
+    # JWT (dotted, long) still redacted
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+    assert jwt not in redact_credentials(jwt)
+    # legitimate dotted identifiers stay (24-char floor for dotted tokens)
+    assert redact_credentials("com.example.Foo") == "com.example.Foo"
+    assert redact_credentials("a.b.c") == "a.b.c"

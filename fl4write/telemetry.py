@@ -86,6 +86,8 @@ def record_route(model: str, ok: bool, latency_s: float, parse_ok: bool,
             "prompt_tokens": 0, "completion_tokens": 0,
         })
         latency_s = float(latency_s or 0.0)
+        if latency_s < 0:
+            latency_s = 0.0  # F14-B001: negative latency is corrupt data
         st["calls"] += 1
         st["ok"] += int(bool(ok))
         st["parse_fail"] += int(not parse_ok)
@@ -132,6 +134,8 @@ def calibration_snapshot(recent: int = 500) -> dict[str, Any]:
         # slack, silently erasing failures from calibration
         lines = chunk.splitlines()
     except OSError:
+        return {}
+    if recent <= 0:
         return {}
     models: dict[str, dict[str, int]] = {}
     # F8-011: the contract is the last N model-CALL events — slicing the

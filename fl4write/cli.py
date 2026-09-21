@@ -1,6 +1,6 @@
 """Cron adapter — the v1 trigger. One cycle for one configured repo.
 
-Usage: python3 -m fl4write.cli <config.yaml> [--live]
+Usage: python3 -m fl4write.cli <config.yaml> [--live] [--fixes] [--issues] [--omni]
 
 Diff fetching (the required get_diff): gh pr diff for GitHub-primary repos,
 git diff for Forgejo-primary when gh can't reach it. Keys are read at runtime
@@ -21,6 +21,7 @@ import time
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 from .config import load_config
 from .engine import run_cycle
@@ -65,7 +66,7 @@ def _org_model_keys() -> None:
             os.environ["CODESITTER_DEEPSEEK_KEY"] = m.group(1)
 
 
-def make_get_diff(repo: str):
+def make_get_diff(repo: str) -> Callable[[PullRequest], tuple[set[str], str] | None]:
     def get_diff(pr: PullRequest) -> tuple[set[str], str] | None:
         """None = the diff could NOT be fetched. The engine then skips the PR
         WITHOUT marking it reviewed — an empty set here used to ground NOTHING,
@@ -204,7 +205,7 @@ def main() -> int:
               file=sys.stderr)
         return 2
     if len(sys.argv) < 2:
-        print("usage: python3 -m fl4write.cli <config.yaml> [--live]", file=sys.stderr)
+        print("usage: python3 -m fl4write.cli <config.yaml> [--live] [--fixes] [--issues] [--omni]", file=sys.stderr)
         return 2
     live = "--live" in sys.argv
     run_fixes = "--fixes" in sys.argv
@@ -271,7 +272,7 @@ def main() -> int:
 
         native = _af(primary_binding)
 
-        def diff_getter(pr: PullRequest):  # noqa: E731 - closure over adapter
+        def diff_getter(pr: PullRequest) -> tuple[set[str], str] | None:  # noqa: E731 - closure over adapter
             return native.get_pr_diff(config.repo, pr.number)
     # GitHub App auth: every github.com interaction signed as fl4write[bot].
     # Installation resolved PER REPO — the app has separate org and user
