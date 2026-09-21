@@ -345,7 +345,7 @@ def format_cycle_line(report, config) -> str:
         f"omni={report.omni_scanned}/{report.omni_findings}f "
         f"ci_red={report.ci_red_heads} ci_fix={report.ci_fix_prs_opened} "
         f"ci_esc={report.ci_escalations} "
-        f"dep_skipped={report.skipped_dependency} model_down={report.model_unavailable} "
+        f"already_done={report.already_done} mirror_dedup={report.mirror_dedup} dep_skipped={report.skipped_dependency} model_down={report.model_unavailable} "
         f"mirror_degraded={report.mirror_degraded} "
         f"gate_dropped={report.gatekeeper_dropped} gate_fail={report.gatekeeper_failed} "
         f"fix_attempts={report.fix_attempts} fix_fail={report.fix_failures} fix_prs={report.fix_prs_opened} "

@@ -857,3 +857,54 @@ def test_redact_credentials_short_slash_secret():
     # legitimate dotted identifiers stay (24-char floor for dotted tokens)
     assert redact_credentials("com.example.Foo") == "com.example.Foo"
     assert redact_credentials("a.b.c") == "a.b.c"
+
+
+class TestCycleLineReconciliation:
+    """Count-law rigor (2026-09-21): scanned must reconcile as
+    reviewed + already_done + mirror_dedup + dep_skipped + deferrals —
+    the poll-invariant no-op was the last silent remainder."""
+
+    def test_already_done_counted_on_second_cycle(self, tmp_path, monkeypatch):
+        forge = FakeForge()
+        forge.prs = [make_pr(number=7)]
+        c = make_config(shadow=False)
+        monkeypatch.setattr("fl4write.engine.adapter_for", lambda b: forge)
+        monkeypatch.setattr(
+            "fl4write.analyzer._call_model",
+            lambda route, prompt, mode="pr": json.dumps({"findings": []}),
+        )
+        r1 = run_cycle(c, tmp_path / "s.json", get_diff=lambda pr: ({"x.py"}, "d"))
+        r2 = run_cycle(c, tmp_path / "s.json", get_diff=lambda pr: ({"x.py"}, "d"))
+        assert r1.scanned == 1 and r1.reviewed == 1 and r1.already_done == 0
+        assert r2.scanned == 1 and r2.reviewed == 0 and r2.already_done == 1, \
+            "poll-invariant no-op must be counted, never silent"
+
+    def test_mirror_dedup_counted(self, tmp_path, monkeypatch):
+        class MirrorFake(FakeForge):
+            name = "forgejo"
+
+            def __init__(self):
+                super().__init__()
+                self.binding = cfg.ForgeBinding(role="mirror", api_base="http://m.local", token_env="T")
+
+        primary = FakeForge()
+        primary.prs = [make_pr(number=7)]
+        mirror = MirrorFake()
+        mirror.prs = [make_pr(number=7)]  # same head SHA -> dedup candidate
+        holders = {"http://g.local": primary, "http://m.local": mirror}
+        c = make_config(
+            shadow=False,
+            forges={
+                "github": {"role": "primary", "api_base": "http://g.local", "token_env": "GHT"},
+                "forgejo": {"role": "mirror", "api_base": "http://m.local", "token_env": "T"},
+            }
+        )
+        monkeypatch.setattr("fl4write.engine.adapter_for", lambda b: holders[b.api_base])
+        monkeypatch.setattr(
+            "fl4write.analyzer._call_model",
+            lambda route, prompt, mode="pr": json.dumps({"findings": []}),
+        )
+        r = run_cycle(c, tmp_path / "s.json",
+                      get_diff=lambda pr: ({"x.py"}, "d"), trigger_reason="mirror")
+        assert r.mirror_dedup == 1, "SHA-dedup skip must be counted, never silent"
+        assert r.reviewed == 0

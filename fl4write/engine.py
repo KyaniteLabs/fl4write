@@ -77,6 +77,8 @@ class CycleReport:
     reviewed: int = 0
     mirror_degraded: int = 0
     skipped_dependency: int = 0
+    already_done: int = 0
+    mirror_dedup: int = 0
     fix_escalations: int = 0
     model_unavailable: int = 0
     shadow_only: bool = False
@@ -532,6 +534,7 @@ def _post_merge_sweep(
             terminal += 1
             continue
         if not state.needs_review(st, pr.number, pr.head_sha):
+            report.already_done += 1  # poll-invariant no-op: counted, never silent
             resume = _resume_fix_lane(pr, config, primary, st, report, run_fixes,
                                       deadline, post_merge=True)
             state.save_state(state_path, st)
@@ -1365,6 +1368,7 @@ def _retro_sweep(
             # touch the LIVE seen belt — the local set dedupes the run only
             st["retro_seen"] = {int(n): True for n in seen}
         if not state.needs_review(st, pr.number, pr.head_sha):
+            report.already_done += 1  # poll-invariant no-op: counted, never silent
             if not config.shadow:
                 parked.pop(str(pr.number), None)
                 parked.pop(pr.number, None)
@@ -1812,6 +1816,7 @@ def run_cycle(
                     break
                 mirror_seen = pr.head_sha in mirror_shas
                 if mirror_seen and trigger_reason == "mirror":
+                    report.mirror_dedup += 1  # SHA-dedup skip: counted, never silent
                     continue  # mirrored PRs are never reviewed twice
                 bot_authored = bool(pr.is_bot_author)
                 if bot_authored and fixlane.dependency_depth(pr, pr.title, config) in ("skip",):
@@ -1824,6 +1829,7 @@ def run_cycle(
                     state.mark_reviewed(st, pr.number, pr.head_sha, "dependency-skip")
                     continue
                 if not state.needs_review(st, pr.number, pr.head_sha):
+                    report.already_done += 1  # poll-invariant no-op: counted, never silent
                     _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline)
                     state.save_state(state_path, st)
                     continue
