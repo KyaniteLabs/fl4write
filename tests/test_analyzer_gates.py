@@ -338,7 +338,7 @@ class TestSeedPassthrough:
         assert "seed" not in captured["payload"]
 
 
-class TestSeedPassthrough:
+class TestSeedPassthroughR2:
     """D1-reliability: verify the model payload includes seed when configured,
     and omits it when seed is None. This pins the reproducibility contract."""
 
