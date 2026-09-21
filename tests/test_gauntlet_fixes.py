@@ -4685,3 +4685,89 @@ class TestMECERound13Pins:
         monkeypatch.setattr(ex, "_gh_api", fake_gh)
         merged = ex.check_and_merge_own_prs(_sol_config(), "fl4write[bot]")
         assert merged == []  # B7: unproven merge never reported merged
+
+
+def _fb_make_pr(**over):
+    from fl4write.models import PullRequest
+    base = dict(forge="github", number=9, repo="KyaniteLabs/kinocut",
+                title="t", head_sha="b" * 40, author="dev")
+    base.update(over)
+    return PullRequest.model_validate(base)
+
+
+class TestFixLaneFallbackRoute:
+    """2026-09-21: the fix path used the PRIMARY model route only — a
+    deepinfra 402 payment-wall killed every fix attempt while reviews rode
+    the local fallback. The fix path now loops distinct routes like analyze."""
+
+    def test_fix_falls_back_when_primary_402s(self, monkeypatch, tmp_path):
+        import fl4write.executor as ex
+        from fl4write.models import Finding
+
+        calls = []
+
+        def fake_call(route, prompt, mode="pr", system=None, **kw):
+            calls.append(route.model)
+            if route.model == "deepseek-ai/DeepSeek-V4-Flash-0731":
+                raise RuntimeError("HTTP Error 402: Payment Required")
+            return json.dumps({"fixed_content": "def fixed():\n    return 1\n"})
+
+        monkeypatch.setattr(ex, "_call_model", fake_call)
+        monkeypatch.setattr(ex, "fix_allowed", lambda *a, **k: None)
+        monkeypatch.setattr(ex, "dependency_depth", lambda *a, **k: "patch")
+        monkeypatch.setattr(ex, "_get_file_content", lambda *a, **k: "def bug():\n    return 2\n")
+        c = make_config(
+            model={
+                "endpoint": "https://api.deepinfra.com/v1/openai/chat/completions",
+                "model": "deepseek-ai/DeepSeek-V4-Flash-0731",
+                "key_env": "MK",
+                "temperature": 0.2,
+                "max_tokens": 4000,
+            },
+            fallback_model={
+                "endpoint": "http://local:8908/v1/chat/completions",
+                "model": "Qwen3.8-27B",
+                "key_env": "",
+                "temperature": 0.2,
+                "max_tokens": 4000,
+            }
+        )
+        pr = _fb_make_pr(number=9)
+        f = Finding(rule_id="tests", severity="Major", path="x.py", line=1,
+                    message="bug")
+        out = ex.attempt_fix(pr, f, c)
+        assert calls == ["deepseek-ai/DeepSeek-V4-Flash-0731", "Qwen3.8-27B"], \
+            "primary must be tried first, fallback second"
+        assert out.get("status") != "error" or "model unavailable" not in str(out.get("error", "")), out
+
+    def test_fix_error_when_all_routes_down(self, monkeypatch):
+        import fl4write.executor as ex
+        from fl4write.models import Finding
+
+        def fake_call(route, prompt, mode="pr", system=None, **kw):
+            raise RuntimeError("HTTP Error 402: Payment Required")
+
+        monkeypatch.setattr(ex, "_call_model", fake_call)
+        monkeypatch.setattr(ex, "fix_allowed", lambda *a, **k: None)
+        monkeypatch.setattr(ex, "dependency_depth", lambda *a, **k: "patch")
+        monkeypatch.setattr(ex, "_get_file_content", lambda *a, **k: "def bug():\n    return 2\n")
+        c = make_config(
+            model={
+                "endpoint": "https://api.deepinfra.com/v1/openai/chat/completions",
+                "model": "deepseek-ai/DeepSeek-V4-Flash-0731",
+                "key_env": "MK",
+                "temperature": 0.2,
+                "max_tokens": 4000,
+            },
+            fallback_model={
+                "endpoint": "http://local:8908/v1/chat/completions",
+                "model": "Qwen3.8-27B",
+                "key_env": "",
+                "temperature": 0.2,
+                "max_tokens": 4000,
+            }
+        )
+        out = ex.attempt_fix(_fb_make_pr(number=9),
+                             Finding(rule_id="tests", severity="Major",
+                                     path="x.py", line=1, message="bug"), c)
+        assert "model unavailable" in out.get("reason", ""), out

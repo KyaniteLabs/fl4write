@@ -418,13 +418,34 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
         f"REPO LAW: {json.dumps(config.review, indent=1)}\n"
         f"FILE CONTENT ({path_display(finding.path)}):\n{_fence}\n{content}\n{_fence}"
     )
-    try:
-        from .law import SYSTEM_PROMPT_ADDENDUM
+    from .law import SYSTEM_PROMPT_ADDENDUM
 
-        response = _call_model(
-            config.model, prompt,
-            system=PATCH_SYSTEM + "\n\n" + SYSTEM_PROMPT_ADDENDUM,
-        )
+    # Fallback lane for the FIX path (2026-09-21): the review path loops
+    # routes in analyzer.analyze, but this call site used the PRIMARY only —
+    # a deepinfra 402 (payment wall) killed every fix attempt while reviews
+    # sailed on the local fallback. Same rail here: distinct routes in order.
+    _routes = [config.model]
+    if config.fallback_model and (
+        config.fallback_model.endpoint,
+        config.fallback_model.model,
+    ) != (config.model.endpoint, config.model.model):
+        _routes.append(config.fallback_model)
+    try:
+        response = None
+        _last: Exception | None = None
+        for _route in _routes:
+            try:
+                response = _call_model(
+                    _route, prompt,
+                    system=PATCH_SYSTEM + "\n\n" + SYSTEM_PROMPT_ADDENDUM,
+                )
+                break
+            except Exception as exc:  # transport on ONE route is not fatal:
+                # the next route gets the same prompt (mirror of analyze Sol#4)
+                _last = exc
+                continue
+        if response is None:
+            raise _last if _last is not None else RuntimeError("no model routes")
         from .analyzer import extract_json
 
         parsed = extract_json(response, envelope_key="fixed_content")
