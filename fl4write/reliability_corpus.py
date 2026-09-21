@@ -13,9 +13,14 @@ NO wall-clock dates anywhere in fixture data — every case is pure code):
   Cases 4-10 are new single-file classes with NO test in the diff — they
   measure the model's own reading of code, not test-tracing.
 
-- CLEAN_CASES: plausible, correct feature diffs. Any finding on them is a
-  false positive by construction (two bars: any-severity noise, and
-  Critical/Major actionable).
+- CLEAN_CASES: plausible, correct, LAW-CLEAN feature diffs (each ships its
+  tests — org law: changes to logic ship with tests). Any finding on them is
+  a false positive by construction (two bars: any-severity noise, and
+  Critical/Major actionable). Validity fix (post-baseline): the original
+  clean cases were test-less, so law-mandated missing-tests notes were
+  counted as FPs — both recorded baseline readings of actionable-FP were
+  inflated by this; the law-note rate stays derivable from records instead
+  of masquerading as noise.
 
 build_case_diff() emits a realistic new-file unified diff (diff --git +
 @@ hunks) so the analyzer's grounding gates (path in diff, line inside
@@ -217,6 +222,19 @@ CLEAN_CASES = [
         "origin": "correct counterpart of median-unsorted",
         "title": "Add median helper",
         "files": {
+            "test_stats_util.py": (
+                "from stats_util import median\n\n\n"
+                "def test_median_odd():\n"
+                "    assert median([5.0, 1.0, 3.0]) == 3.0\n\n\n"
+                "def test_median_even():\n"
+                "    assert median([4, 1, 3, 2]) == 2.5\n\n\n"
+                "def test_median_empty_raises():\n"
+                "    try:\n"
+                "        median([])\n"
+                "        raise AssertionError('expected ValueError')\n"
+                "    except ValueError:\n"
+                "        pass\n"
+            ),
             "stats_util.py": (
                 "def median(values):\n"
                 "    'Median of a numeric sequence (input not modified).'\n"
@@ -235,6 +253,15 @@ CLEAN_CASES = [
         "origin": "correct counterpart of off-by-one-boundary",
         "title": "Add pagination helper",
         "files": {
+            "test_paging.py": (
+                "from paging import page\n\n\n"
+                "def test_page_first():\n"
+                "    assert page([1, 2, 3, 4, 5], 1, 2) == [1, 2]\n\n\n"
+                "def test_page_last_partial():\n"
+                "    assert page([1, 2, 3, 4, 5], 3, 2) == [5]\n\n\n"
+                "def test_page_beyond_is_empty():\n"
+                "    assert page([1, 2], 5, 2) == []\n"
+            ),
             "paging.py": (
                 "def page(items, page_no, size):\n"
                 "    'Return slice for 1-based page_no.'\n"
@@ -248,6 +275,17 @@ CLEAN_CASES = [
         "origin": "correct counterpart of sql-string-concat",
         "title": "Add user lookup endpoint",
         "files": {
+            "test_users_query.py": (
+                "import sqlite3\n"
+                "from users_query import find_user\n\n\n"
+                "def test_find_user_parameterized():\n"
+                "    conn = sqlite3.connect(':memory:')\n"
+                "    conn.execute('CREATE TABLE users (id INT, email TEXT, plan TEXT)')\n"
+                "    conn.execute(\"INSERT INTO users VALUES (1, 'a@b.c', 'free')\")\n"
+                "    row = find_user(conn, 'a@b.c')\n"
+                "    assert row == (1, 'a@b.c', 'free')\n"
+                "    assert find_user(conn, 'nobody@x.y') is None\n"
+            ),
             "users_query.py": (
                 "import sqlite3\n\n\n"
                 "def find_user(conn: sqlite3.Connection, email: str):\n"
@@ -265,6 +303,13 @@ CLEAN_CASES = [
         "origin": "correct counterpart of file-never-closed",
         "title": "Add config line counter",
         "files": {
+            "test_count_config.py": (
+                "from count_config import count_active_lines\n\n\n"
+                "def test_counts_active_only(tmp_path):\n"
+                "    f = tmp_path / 'c.conf'\n"
+                "    f.write_text('# comment\\n\\nreal = 1\\n  \\nother = 2\\n')\n"
+                "    assert count_active_lines(str(f)) == 2\n"
+            ),
             "count_config.py": (
                 "def count_active_lines(path: str) -> int:\n"
                 "    'Count non-blank, non-comment lines in a config file.'\n"
@@ -280,6 +325,13 @@ CLEAN_CASES = [
         "origin": "correct counterpart of inverted-comparison",
         "title": "Add severity threshold check",
         "files": {
+            "test_threshold.py": (
+                "from threshold import is_critical\n\n\n"
+                "def test_boundary_at_90():\n"
+                "    assert is_critical(90) is True\n\n\n"
+                "def test_below_boundary():\n"
+                "    assert is_critical(89) is False\n"
+            ),
             "threshold.py": (
                 "def is_critical(sev_score: int) -> bool:\n"
                 "    'Critical when score >= 90.'\n"

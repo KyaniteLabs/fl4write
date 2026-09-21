@@ -73,7 +73,7 @@ no fleet repo has enabled it yet — luna F3-004 doc truth).
 Current fleet state (2026-09-05; recovered [audit ledger](docs/pm-recovery/ROUND-LEDGER.md)): **129 central configs**
 across GitHub + Forgejo in hourly cycles; the tier scheduler selects due repos
 (`run-cycle.sh`, hourly crontab, single-host law — LEARNINGS #17). **500+
-tests green** (725 passing + 3 skipped — count stamped by the doc-truth
+tests green** (752 passing + 4 skipped — count stamped by the doc-truth
 verifier run on a clean tree; hand-editing this figure is a false receipt,
 REVIEW LAWS 2026-09-19). Run it with `FL4WRITE_EVAL=1 python3 -m pytest -q`;
 
