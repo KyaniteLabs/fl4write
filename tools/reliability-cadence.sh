@@ -19,7 +19,7 @@ mkdir -p "$OUT_DIR"
 cd "$REPO_HOME"
 python3 -m fl4write.reliability \
   --config fl4write.fl4write.yaml \
-  --endpoint "${FL4WRITE_REL_ENDPOINT:-http://nucbox:8908/v1/chat/completions}" \
+  --endpoint "${FL4WRITE_REL_ENDPOINT:-http://gpu-host:8908/v1/chat/completions}" \
   --model "${FL4WRITE_REL_MODEL:-Qwen3.8-27B}" \
   --key-env "" --temperature 0.0 --max-tokens 4000 \
   --runs "$RUNS" \

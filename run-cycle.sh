@@ -1,5 +1,5 @@
 #!/bin/bash
-# fl4write (Fl4wRite) runner — deployed on nucbox
+# fl4write (Fl4wRite) runner — deployed on gpu-host
 # Audit 2026-09-01 (lane F): set -uo pipefail, flock against overlapping crons,
 # per-repo budget 900s (the old 300s was smaller than any inner timeout — every
 # real fix attempt guaranteed a mid-flight kill), self-update failures logged,

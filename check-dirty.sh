@@ -23,7 +23,7 @@ U=$(printf '%s\n' "$STATUS" | grep -c '^??' || true)
 M=$(printf '%s\n' "$STATUS" | grep -v '^??' | grep -c . || true)
 TOTAL=$((U + M))
 if [ "$TOTAL" -gt 0 ]; then
-  echo "ALERT: $U untracked + $M changed files (modified/added/deleted/renamed) in the runner config home — invisible to the nucbox runner until committed"
+  echo "ALERT: $U untracked + $M changed files (modified/added/deleted/renamed) in the runner config home — invisible to the gpu-host runner until committed"
   git status --porcelain | head -8
   exit 1
 fi

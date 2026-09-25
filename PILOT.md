@@ -31,7 +31,7 @@ resolution across the org AND user-account installations).
 
 ## The runner (single-host law)
 
-- **Host**: nucbox `simon@100.113.174.74`, clone at `~/workspaces/fl4write`,
+- **Host**: gpu-host `simon@100.113.174.74`, clone at `~/workspaces/fl4write`,
   crontab `0 * * * * ~/workspaces/fl4write/run-cycle.sh` (self-updating —
   pulls main first; model key read from `~/.bashrc`, quote-stripped).
 - **Log**: `~/workspaces/fl4write/runner.log` — per-cycle summary line, ERR

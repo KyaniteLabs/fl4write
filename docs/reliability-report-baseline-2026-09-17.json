@@ -1,7 +1,7 @@
 {
   "measured_at": "2026-09-17T13:17:13.799039+00:00",
   "route": {
-    "endpoint": "http://nucbox:8908/v1/chat/completions",
+    "endpoint": "http://gpu-host:8908/v1/chat/completions",
     "model": "Qwen3.8-27B",
     "temperature": 0.0,
     "seed": null,

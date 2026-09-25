@@ -37,7 +37,7 @@ cases law-clean (each ships tests) isolates true noise and restores the FP metri
 to what it claims to measure, without touching the analyzer.
 
 ### WHAT RAN
-Champion route Qwen3.8-27B via nucbox:8908, runs=5, 30 real model calls,
+Champion route Qwen3.8-27B via gpu-host:8908, runs=5, 30 real model calls,
 determinism 100% (15/15, 0 severity flips), recall 10/10 caught_any AND
 10/10 caught_actionable. Pre-fix corpus: actionable-FP 60% (3/5 clean cases
 flagged), severity precision 11/14 = 78.6%.

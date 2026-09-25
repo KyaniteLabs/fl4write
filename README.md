@@ -116,7 +116,7 @@ went inactive mid-session (documented, not restarted from this desk). Route fact
 `deepseek-ai/DeepSeek-V4-Flash-0731` via DeepInfra (`fl4write.fl4write.yaml`);
 the 2026-09-16 live run was executed with
 `FL4WRITE_EVAL=1 FL4WRITE_EVAL_CONFIG=<champion-eval.yaml>` pointing at the
-operator-approved self-hosted Champion Qwen3.8-27B (nucbox floor, 2026-09-06
+operator-approved self-hosted Champion Qwen3.8-27B (gpu-host floor, 2026-09-06
 approval; Ornith selection was DOWN that day). A bare `FL4WRITE_EVAL=1` run
 without the override exercises the configured DeepSeek route, not Champion.
 
