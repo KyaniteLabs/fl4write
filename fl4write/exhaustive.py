@@ -17,7 +17,7 @@ import tempfile
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from . import scrub
 from .config import ModelRoute, load_config
@@ -122,6 +122,12 @@ def _fresh_state(identity: str) -> dict[str, Any]:
         "round": 0,
         "consecutive_green": 0,
         "green_baseline": [],
+        # P0 fix (2026-09-26 review): the baseline is HEAD-SCOPED. Without
+        # this, a green round at head H followed by any upstream change that
+        # renames or removes a test made every later round "non-green"
+        # ("prior green test IDs disappeared") — permanently, burning model
+        # budget each attempt, with no recovery short of state surgery.
+        "green_baseline_head": None,
         "green_sha": None,
         "certified_sha": None,
         "pending_round": None,
@@ -173,6 +179,7 @@ def _load_state(path: Path, identity: str) -> dict[str, Any]:
         "round",
         "consecutive_green",
         "green_baseline",
+        "green_baseline_head",
         "green_sha",
         "certified_sha",
         "pending_round",
@@ -193,6 +200,9 @@ def _load_state(path: Path, identity: str) -> dict[str, Any]:
         or not isinstance(data.get("green_baseline"), list)
         or any(not isinstance(item, str) or not item.strip() for item in data.get("green_baseline", []))
         or len(set(data.get("green_baseline", []))) != len(data.get("green_baseline", []))
+        or (data.get("green_baseline_head") is not None
+            and (not isinstance(data.get("green_baseline_head"), str)
+                 or not data.get("green_baseline_head").strip()))
         or data.get("green_sha") is not None
         and not _valid_sha(data.get("green_sha"))
         or not _valid_pending(data.get("pending_round"))
@@ -224,10 +234,13 @@ def _load_state(path: Path, identity: str) -> dict[str, Any]:
                 trailing = 0
         elif pending["finding_count"]:
             trailing = 0
-    baseline = next((row["test_ids"] for row in reversed(data["ledger"]) if row["green"]), [])
+    last_green = next((row for row in reversed(data["ledger"]) if row["green"]), None)
+    baseline = last_green["test_ids"] if last_green else []
+    baseline_head = last_green["reviewed_head"] if last_green else None
     if (trailing != data["consecutive_green"]
             or data["green_sha"] != (data["head"] if trailing else None)
-            or sorted(data["green_baseline"]) != sorted(baseline)):
+            or sorted(data["green_baseline"]) != sorted(baseline)
+            or data.get("green_baseline_head") != baseline_head):
         raise Deferred("state counters disagree with verified ledger history")
     try:
         for row in data["ledger"]:
@@ -314,6 +327,19 @@ def _chunks(text: str, limit: int):
             start, buf = number, ""
         buf += line
     yield start, len(lines), buf
+
+
+def _disappeared_regressions(state: dict, head: str, test_ids: Sequence[str]) -> list:
+    """Test IDs present in the last green round but absent now — enforced ONLY
+    when that baseline was measured at the CURRENT head. Two different heads
+    have different test sets by construction, so comparing across a head move
+    reported ordinary upstream renames as regressions and wedged certification
+    permanently (review P0, 2026-09-26). The baseline itself is kept intact
+    (the ledger invariant still holds); it is simply not cross-head evidence.
+    """
+    if state.get("green_baseline_head") != head:
+        return []
+    return sorted(set(state["green_baseline"]) - set(test_ids))
 
 
 def _validated(value: Any, path: str, start: int, end: int, source: str):
@@ -849,7 +875,7 @@ def run(args: argparse.Namespace) -> int:
                 if _git(repo, "rev-parse", "HEAD") != head:
                     _non_green(state, state_path, head, "HEAD changed during tests", common)
                     raise Deferred("HEAD changed during tests")
-                regressions = sorted(set(state["green_baseline"]) - test_ids)
+                regressions = _disappeared_regressions(state, head, test_ids)
                 if regressions:
                     _non_green(
                         state,
@@ -870,6 +896,7 @@ def run(args: argparse.Namespace) -> int:
                 state["consecutive_green"] += 1
                 state["green_sha"] = head
                 state["green_baseline"] = sorted(test_ids)
+                state["green_baseline_head"] = head
                 state["ledger"].append(
                     {
                         "round": state["round"],

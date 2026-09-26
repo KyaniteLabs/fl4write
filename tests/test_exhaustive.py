@@ -531,3 +531,18 @@ def test_orphaned_pending_is_archived_not_deadlocked(tmp_path, monkeypatch):
     assert not pending.exists()
     archived = list(tmp_path.glob("publication-orphaned-*.json"))
     assert len(archived) == 1 and archived[0].read_text().count("abc")
+
+
+def test_baseline_regressions_are_head_scoped(tmp_path: Path):
+    """P0 pin (review 2026-09-26): a green baseline measured at one head must
+    never be compared against another head's suite. An upstream rename made
+    every later round 'non-green' forever and burned budget each attempt."""
+    import fl4write.exhaustive as ex
+
+    measured = {"green_baseline": ["alpha", "beta"], "green_baseline_head": "h1" * 20}
+    # same head: a vanished test is a real regression and must still be caught
+    assert ex._disappeared_regressions(measured, "h1" * 20, ["beta"]) == ["alpha"]
+    # head moved: ordinary upstream churn is NOT a regression
+    assert ex._disappeared_regressions(measured, "h2" * 20, ["beta"]) == []
+    # no baseline yet (fresh state): nothing to compare
+    assert ex._disappeared_regressions({"green_baseline": [], "green_baseline_head": None}, "h2" * 20, []) == []
