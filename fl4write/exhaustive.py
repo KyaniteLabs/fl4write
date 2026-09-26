@@ -343,7 +343,6 @@ def _validated(value: Any, path: str, start: int, end: int, source: str):
         # ledger's allowlisted DTO excludes findings and source paths.
         clean["path"] = path
         clean["line"] = line
-        clean["path"] = path
         out.append(clean)
     return out
 
