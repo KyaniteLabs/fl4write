@@ -584,6 +584,42 @@ def test_lost_merge_response_is_recovered_without_another_push_or_merge(tmp_path
     assert forge.merged_calls == before
 
 
+def test_retry_consults_proved_merge_receipt_before_rerunning_proof_suites(tmp_path, monkeypatch):
+    """P2a: a retry for the same head must not spend the three full suite runs
+    (_prove_patch's baseline/regression-red/fixed-green) to rediscover a merge
+    the receipt already recorded."""
+    class Lost(_FakeForge):
+        merge_response = {"message": "accepted"}
+        def call(self, method, path, data=None):
+            assert method == "GET" and path.endswith("/pulls/7")
+            return {"number": 7, "merged": True, "state": "closed",
+                    "user": {"login": self.identity},
+                    "head": {"sha": self.commit, "repo": {"full_name": "acme/widget"}},
+                    "base": {"ref": "main", "repo": {"full_name": "acme/widget"}},
+                    "merge_commit_sha": self.merged}
+
+    first, forge = _flow(tmp_path, monkeypatch, Lost)
+    assert first["status"] == "pending" and first["phase"] == "merging"
+    proved: list[str] = []
+
+    def counting_suite(command, tree, junit, timeout):
+        proved.append(str(junit))
+        return _verify(command, tree, junit, timeout)
+
+    monkeypatch.setattr(ef, "_model_patch", lambda *a: pytest.fail("model repeated during merge recovery"))
+    real_git = ef._git
+    def no_push(args, *a, **kw):
+        assert args[0] != "push", "recovery pushed an already merged branch"
+        return real_git(args, *a, **kw)
+    monkeypatch.setattr(ef, "_git", no_push)
+    second = ef.attempt_fix_with_regression_pin(
+        tmp_path / "repo", _config(), forge.base, [{"id": "F1", "path": "calc.py"}], ["pytest"],
+        tmp_path / "evidence", verify_suite=counting_suite)
+    assert second["status"] == "merged", second
+    assert second["merged_head"] == forge.merged
+    assert proved == []  # the receipt was consulted before any proof suite ran
+
+
 def test_scoped_credential_restores_existing_env_on_error(monkeypatch):
     config = _config(github=False)
     binding = config.forges["origin"]

@@ -640,6 +640,48 @@ def _recover_merge(forge, config, reviewed_head, commit_sha, author, default, ev
     return result
 
 
+def _receipt_merge_attempt(evidence_dir: Path, reviewed_head: str) -> dict | None:
+    """P2a: the receipt of a prior attempt for this head that already reached
+    the merge-request phase — the only state a retry can recover from."""
+    receipt = evidence_dir / _RECEIPT
+    if not receipt.exists():
+        return None
+    try:
+        saved = json.loads(receipt.read_bytes())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(saved, dict) or saved.get("reviewed_head") != reviewed_head \
+            or saved.get("phase") not in {"merging", "merged"}:
+        return None
+    commit_sha = saved.get("commit_sha")
+    if not isinstance(commit_sha, str) or not _SHA.fullmatch(commit_sha):
+        return None
+    return saved
+
+
+def _recover_prior_merge(config, binding, reviewed_head, evidence_dir, base_branch):
+    """P2a: an already-requested merge is verified against the forge BEFORE the
+    patch is re-proved — the three full verification suites must not be spent
+    rediscovering a merge the receipt already recorded. Returns None when there
+    is nothing proved to recover, so the caller keeps the ordinary path."""
+    attempt = _receipt_merge_attempt(evidence_dir, reviewed_head)
+    if attempt is None:
+        return None
+    with _credential(config, binding) as token:
+        forge = _Forge(binding, token)
+        info = forge.repo(config.repo)
+        full_name = info.get("full_name") if isinstance(info, dict) else None
+        default = info.get("default_branch") if isinstance(info, dict) else None
+        fork = info.get("fork") if isinstance(info, dict) else None
+        author = forge.user()
+        if (full_name != config.repo or fork is not False
+                or not isinstance(default, str) or not default
+                or author != config.bot_login):
+            return None  # identity rail unresolved: the ordinary path reports it
+        return _recover_merge(forge, config, reviewed_head, attempt["commit_sha"],
+                              author, base_branch or default, evidence_dir)
+
+
 def attempt_fix_with_regression_pin(
     repo: Path,
     config: RepoConfig,
@@ -686,6 +728,11 @@ def attempt_fix_with_regression_pin(
             return _result("pending", "local reviewed HEAD drifted", reviewed_head)
         _, binding = _primary(config)
         evidence_dir.mkdir(parents=True, exist_ok=True)
+        # P2a: a retry for this head consults the recorded merge before
+        # re-running the three proof suites.
+        recovered = _recover_prior_merge(config, binding, reviewed_head, evidence_dir, base_branch)
+        if recovered is not None:
+            return recovered
         files, regressions = _prepared_patch(config, reviewed_head, findings, repo, evidence_dir, test_command)
         workspace = tempfile.TemporaryDirectory(prefix="fl4write-exhaustive-fix-")
         fixed, test_ids, junit_hash, _ = _prove_patch(

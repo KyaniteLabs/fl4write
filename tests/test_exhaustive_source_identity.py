@@ -84,6 +84,25 @@ def test_internal_path_still_requires_exact_grounding():
         }]}, 'fl4write/exhaustive_budget.py', 1, 1, 'VALUE = 1\n')
 
 
+def test_finding_on_an_empty_archived_file_is_refused_not_crashed(tmp_path):
+    """P2d: an empty tracked file produces the fabricated chunk (1, 1, '') while
+    its splitlines() is empty — a model finding grounded at that reported line
+    must be refused with the grounding error, never index an empty line list."""
+    (tmp_path / 'empty.py').write_bytes(b'')
+    sources = list(exhaustive._text_sources(tmp_path))
+    assert [(rel, text) for rel, text, _ in sources] == [('empty.py', '')]
+    chunks = list(exhaustive._chunks('', 48_000))
+    assert chunks == [(1, 1, '')]
+    start, end, body = chunks[0]
+    with pytest.raises(exhaustive.Deferred, match='not grounded'):
+        exhaustive._validated({'findings': [{
+            'path': 'empty.py', 'line': 1, 'evidence': 'anything',
+            'severity': 'Major', 'message': 'fixture finding',
+        }]}, 'empty.py', start, end, body)
+    # The empty chunk's ordinary (no-finding) response stays valid.
+    assert exhaustive._validated({'findings': []}, 'empty.py', start, end, body) == []
+
+
 @pytest.mark.parametrize('fenced', [False, True])
 def test_recon_displays_absolute_line_numbers_across_chunks_and_preserves_source(tmp_path, fenced):
     tree = tmp_path / 'tree'

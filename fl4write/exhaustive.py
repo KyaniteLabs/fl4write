@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from . import scrub
-from .config import ModelRoute, load_config
+from .config import ModelRoute, assert_credential_endpoints_trusted, load_config
 from .executor import _sandbox_env_for
 from .exhaustive_evidence import EvidenceError, recon_ledger_context, seal_bundle, verify_bundle
 from .exhaustive_adjudication import AdjudicationError, apply_decision, verified_findings
@@ -47,13 +47,20 @@ def _request_identity(args, config):
             validate_runtime(test_image, require_model_proxy=getattr(args, "live_model_tests", False))
         except SandboxUnavailable as exc:
             raise Deferred(str(exc)) from exc
-    executable = shutil.which(args.test_command[0]) if args.test_command else None
-    selected = Path(executable).resolve() if executable else None
-    if selected is None and isolation != "docker":
-        raise Deferred("selected test executable is unavailable")
+    # P2e: under Docker the container resolves the command with the image's own
+    # interpreter (the argv carries the image entrypoint and the raw command),
+    # so the HOST binary is not part of what is tested and must not enter the
+    # request identity — a host toolchain upgrade mid-run would otherwise
+    # invalidate a round for a change the tested environment never sees.
+    executable = None
+    if isolation != "docker":
+        found = shutil.which(args.test_command[0]) if args.test_command else None
+        if found is None:
+            raise Deferred("selected test executable is unavailable")
+        executable = Path(found).resolve()
     value = {
-        "test_command": args.test_command, "executable": str(selected),
-        "executable_sha256": hashlib.sha256(selected.read_bytes()).hexdigest() if selected else None,
+        "test_command": args.test_command, "executable": str(executable) if executable else None,
+        "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest() if executable else None,
         "config": config.model_dump(mode="json"),
         "test_timeout": args.test_timeout, "process_timeout": args.process_timeout,
         "max_model_calls": args.max_model_calls, "max_output_tokens": args.max_output_tokens,
@@ -360,6 +367,10 @@ def _validated(value: Any, path: str, start: int, end: int, source: str):
             or line > end
             or not isinstance(evidence, str)
             or not evidence
+            # P2d: an empty archived file reports one fabricated chunk line
+            # (1, 1, "") while splitlines() is empty — indexing it crashed the
+            # recon worker with IndexError instead of the grounding refusal.
+            or not lines
             or evidence not in lines[line - 1]
         ):
             raise Deferred("model finding is not grounded at its claimed archived line")
@@ -538,12 +549,18 @@ def _test(command: list[str], tree: Path, evidence: Path, timeout: int, *, isola
     argv = [str(evidence) if x == "{junit}" else x for x in command]
     if str(evidence) not in argv:
         raise NonGreen("test command requires standalone {junit}")
+    cleanup_note = ""
     if isolation == "docker":
-        from .exhaustive_sandbox import SandboxUnavailable, run_isolated
+        from .exhaustive_sandbox import SandboxCleanupPending, SandboxUnavailable, run_isolated
 
         try:
             options = {"model_proxy": model_proxy} if model_proxy is not None else {}
             done = run_isolated(command, tree, evidence, timeout, image, **options)
+        except SandboxCleanupPending as exc:
+            # P2c: the report is already written, so the run's own verdict
+            # stands — an unresolved container cleanup must not reclassify a
+            # red suite as a deferral. The reason rides alongside the verdict.
+            done, cleanup_note = exc.result, str(exc)
         except SandboxUnavailable as exc:
             raise Deferred(str(exc)) from exc
     elif isolation == "process":
@@ -556,9 +573,13 @@ def _test(command: list[str], tree: Path, evidence: Path, timeout: int, *, isola
         raise Deferred("unknown test isolation mode")
     ids, green, digest = _junit(evidence)
     if done.returncode or not green:
-        raise NonGreen(
-            f"full suite not green (exit={done.returncode})", {"test_ids": sorted(ids), "junit_sha256": digest}
-        )
+        reason = f"full suite not green (exit={done.returncode})"
+        if cleanup_note:
+            reason = f"{reason}; {cleanup_note}"
+        raise NonGreen(reason, {"test_ids": sorted(ids), "junit_sha256": digest})
+    if cleanup_note:
+        # A green run whose container was never cleaned up cannot certify.
+        raise Deferred(cleanup_note)
     return ids, digest
 
 
@@ -652,6 +673,16 @@ def _non_green(state, state_path, head, reason, evidence=None):
     _atomic_json(state_path, state)
 
 
+def _repo_supplied_config(config_path: Path, repo: Path) -> bool:
+    """P1: a config that lives inside the reviewed tree is supplied by that
+    tree, so its model route must not be allowed to aim a host credential at
+    an endpoint of the repository's choosing."""
+    try:
+        return config_path.resolve().is_relative_to(repo.resolve())
+    except (OSError, ValueError, RuntimeError):
+        return True  # unresolvable path: treat as untrusted, never as trusted
+
+
 def run(args: argparse.Namespace) -> int:
     repo, identity = _identity(args.repo.resolve())
     state_dir = args.state_dir.resolve() / identity
@@ -665,7 +696,13 @@ def run(args: argparse.Namespace) -> int:
                 raise Deferred("desk decisions must be in an external directory")
         with CycleLock(state_dir / "loop.lock"), ExitStack() as transports:
             state = _load_state(state_path, identity)
-            config = load_config(args.config or repo / ".fl4write.yaml")
+            config_path = args.config or repo / ".fl4write.yaml"
+            config = load_config(config_path)
+            if _repo_supplied_config(config_path, repo):
+                try:
+                    assert_credential_endpoints_trusted(config, source=str(config_path))
+                except ValueError as exc:
+                    raise Deferred(str(exc)) from exc
             request_sha = _request_identity(args, config)
             request_path = state_dir / "request-identity.json"
             if request_path.exists():

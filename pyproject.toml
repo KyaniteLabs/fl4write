@@ -25,3 +25,10 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The suite is also invoked from OUTSIDE this repo (a sibling checkout runs it
+# as `../<repo>/tests/`), where `python -m pytest` puts the INVOCATION
+# directory on sys.path and `import fl4write` fails for every module — 59
+# collection errors before a single test runs. Rootdir-relative pythonpath
+# pins the import root to this repository, so the suite behaves the same from
+# any working directory.
+pythonpath = ["."]

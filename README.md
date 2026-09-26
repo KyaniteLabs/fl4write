@@ -74,7 +74,7 @@ Current fleet state (2026-09-05; recovered [audit ledger](docs/pm-recovery/ROUND
 across GitHub + Forgejo in hourly cycles; the tier scheduler selects due repos
 (`run-cycle.sh`, hourly crontab, single-host law — LEARNINGS #17).
 
-The merged suite (exhaustive-loop candidate + main) is **1259 passing + 4 skipped** — count stamped by the doc-truth verifier run on a clean tree; hand-editing this figure is a false receipt (REVIEW LAWS 2026-09-19).
+The merged suite (exhaustive-loop candidate + main) is **1273 passing + 4 skipped** — count stamped by the doc-truth verifier run on a clean tree; hand-editing this figure is a false receipt (REVIEW LAWS 2026-09-19).
 
 The unmerged repair candidate at `81a97d5` passed **1039 live tests with zero
 skips**, Ruff and canonical Forgejo CI. Its default suite passed 1036 tests

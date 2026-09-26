@@ -26,6 +26,20 @@ python3 -m fl4write.exhaustive \
   --max-model-calls 64 --max-output-tokens 100000
 ```
 
+A configuration loaded from inside the reviewed tree may not choose where the
+operator's environment credential is sent. A route whose `key_env` reads a host
+secret is admitted only when its `endpoint` is loopback, or when its host is
+named by the operator out-of-band:
+
+```bash
+FL4WRITE_TRUSTED_MODEL_ENDPOINTS=api.example.com,router.example.com:8443
+```
+
+The list is comma- or space-separated `host` (any port) or `host:port` entries.
+A repo-supplied route aimed anywhere else defers with an escalation naming the
+endpoint, and no credential leaves the host. Set this variable in the loop's
+own environment, never in the reviewed repository.
+
 Use `--live-model-tests` when the configured suite needs the live model evaluation
 transport. It requires Docker and a runtime image declaring model-proxy support.
 The selected model credential remains in owned host processes. Recon, repair
