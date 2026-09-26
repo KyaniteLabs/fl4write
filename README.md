@@ -61,7 +61,7 @@ Run in shadow mode (`shadow: true`) first — findings log, nothing posts.
 Cutover checklist: 48h shadow diff reviewed → host decision recorded (always-on
 host OR explicitly accepted sleep gap) → PAT scopes enumerated + rotation set.
 
-## Status — v0.4+ production (fleet of 129 central configs; see PILOT.md)
+## Status — v0.4+ production (fleet of 130 central configs; see PILOT.md)
 
 All five review modes live (open-PR, post-merge, retro audit, ci_watch,
 omnisweep) plus gatekeeper, verify-tests and acceptance metrics. The issues
@@ -70,11 +70,11 @@ no fleet repo has enabled it yet — luna F3-004 doc truth).
 **Usage:** `python3 -m fl4write.cli <config> [--live] [--fixes] [--issues] [--omni]`
 (mode flag typos are refused — unknown flags exit 2).
 
-Current fleet state (2026-09-05; recovered [audit ledger](docs/pm-recovery/ROUND-LEDGER.md)): **129 central configs**
+Current fleet state (2026-09-05; recovered [audit ledger](docs/pm-recovery/ROUND-LEDGER.md)): **130 central configs**
 across GitHub + Forgejo in hourly cycles; the tier scheduler selects due repos
 (`run-cycle.sh`, hourly crontab, single-host law — LEARNINGS #17).
 
-The merged suite (exhaustive-loop candidate + main) is **1257 passing + 4 skipped** — count stamped by the doc-truth verifier run on a clean tree; hand-editing this figure is a false receipt (REVIEW LAWS 2026-09-19).
+The merged suite (exhaustive-loop candidate + main) is **1259 passing + 4 skipped** — count stamped by the doc-truth verifier run on a clean tree; hand-editing this figure is a false receipt (REVIEW LAWS 2026-09-19).
 
 The unmerged repair candidate at `81a97d5` passed **1039 live tests with zero
 skips**, Ruff and canonical Forgejo CI. Its default suite passed 1036 tests
