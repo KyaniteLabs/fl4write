@@ -1,5 +1,6 @@
 """Interrupted recon keeps validated coverage without reusing another round."""
 import json
+from pathlib import Path
 import subprocess
 import sys
 
@@ -8,6 +9,8 @@ import pytest
 from fl4write import exhaustive
 from fl4write.exhaustive_recon import _digest
 from test_exhaustive_fix import _config
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _fixture(tmp_path):
@@ -177,5 +180,9 @@ def test_optimized_python_still_rejects_identity_change(tmp_path):
         'except Deferred: sys.exit(0)\n'
         'sys.exit(8)\n'
     )
-    done = subprocess.run([sys.executable, '-O', '-c', code, str(request)], capture_output=True)
+    done = subprocess.run([sys.executable, '-O', '-c', code, str(request)], capture_output=True,
+                          # The child imports fl4write from CWD when launched with
+                          # `-c`; anchor it to this repository so the suite behaves
+                          # the same from any invocation directory.
+                          cwd=REPO_ROOT)
     assert done.returncode == 0, done.stderr

@@ -371,6 +371,91 @@ def check_model_keys(config: RepoConfig) -> None:
             log.warning("%s.key_env %s is not set in the environment (expect 401s)", name, route.key_env)
 
 
+# Review P1: a route names BOTH the credential (key_env, read from the host
+# environment) and the destination (endpoint). A config that came out of the
+# reviewed tree therefore chooses where the operator's secret is sent. Only
+# loopback is trusted implicitly (the documented BYO-LLM localhost-router
+# case); every other destination must be named by the operator out-of-band.
+TRUSTED_MODEL_ENDPOINTS_ENV = "FL4WRITE_TRUSTED_MODEL_ENDPOINTS"
+
+
+def _endpoint_destination(endpoint: str) -> tuple[str, int | None] | None:
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(endpoint)
+        host, port = parts.hostname, parts.port
+    except (TypeError, ValueError):
+        return None
+    if not host:
+        return None
+    return host.lower(), port
+
+
+def _loopback_host(host: str) -> bool:
+    import ipaddress
+
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _trust_entry(entry: str) -> tuple[str, str | None]:
+    """Parse one FL4WRITE_TRUSTED_MODEL_ENDPOINTS entry: `host` or `host:port`
+    (an optional scheme prefix is accepted and ignored)."""
+    from urllib.parse import urlsplit
+
+    entry = entry.strip().lower()
+    if "://" in entry:
+        parts = urlsplit(entry)
+        return parts.hostname or "", (str(parts.port) if parts.port else None)
+    if entry.startswith("["):  # bracketed IPv6 literal
+        host, _, rest = entry[1:].partition("]")
+        return host, (rest[1:] or None) if rest.startswith(":") else None
+    host, _, port = entry.partition(":")
+    return host, (port or None)
+
+
+def credential_endpoint_trusted(endpoint: str, trusted: str | None = None) -> bool:
+    """May the host send an environment credential to `endpoint`?
+
+    Fail-closed and destination-keyed (the credential NAME cannot be
+    enumerated — any host secret is a valid `key_env`). Loopback is trusted
+    implicitly; anything else must appear in FL4WRITE_TRUSTED_MODEL_ENDPOINTS.
+    `trusted` overrides the environment list (test seam)."""
+    import os
+
+    destination = _endpoint_destination(endpoint)
+    if destination is None:
+        return False
+    host, port = destination
+    if _loopback_host(host):
+        return True
+    raw = os.environ.get(TRUSTED_MODEL_ENDPOINTS_ENV) if trusted is None else trusted
+    for entry in (raw or "").replace(",", " ").split():
+        entry_host, entry_port = _trust_entry(entry)
+        if entry_host == host and (entry_port is None or str(entry_port) == str(port)):
+            return True
+    return False
+
+
+def assert_credential_endpoints_trusted(config: RepoConfig, *, source: str) -> None:
+    """Refuse to admit a config whose credential-bearing route aims at an
+    endpoint the operator has not authorized. `source` names the config path
+    for the operator-facing error."""
+    for name, route in (("model", config.model), ("fallback_model", config.fallback_model)):
+        if route is None or not route.key_env:
+            continue
+        if not credential_endpoint_trusted(route.endpoint):
+            raise ValueError(
+                f"{name}.key_env {route.key_env!r} would send a host credential to "
+                f"untrusted endpoint {route.endpoint!r} (config: {source}); name that "
+                f"host in {TRUSTED_MODEL_ENDPOINTS_ENV} to authorize the destination")
+
+
 def _iter_model_fields(obj) -> Iterator[tuple[str, object]]:
     """Yield (attribute-name, value) for bool-annotated fields of a pydantic
     model, descending into nested models."""

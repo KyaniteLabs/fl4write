@@ -93,6 +93,140 @@ def test_failed_cleanup_defers_and_retains_owned_recovery_identity(tmp_path, mon
         assert not (tmp_path / "result.xml").exists()
 
 
+# ---- P2b: the retained record must be consumable by the next run -------------
+
+def test_retained_recovery_record_is_consumed_so_the_next_run_proceeds(tmp_path, monkeypatch):
+    """P2b: a retained cleanup record must be RESOLVED on the next run at the
+    same evidence path — the exclusive create alone wedged every retry."""
+    evidence = tmp_path / "fixed-green.xml"
+    containers: set[str] = set()
+    fail_rm = {"on": True}
+    calls: list[list[str]] = []
+    report = b'<testsuite><testcase name="ok"/></testsuite>'
+
+    def docker(argv, timeout, binary=False):
+        calls.append(argv)
+        if argv[1:3] == ["image", "inspect"]:
+            return subprocess.CompletedProcess(argv, 0, IMAGE + " 1\n", "")
+        if argv[1:3] == ["inspect", "--type"]:
+            return subprocess.CompletedProcess(argv, 0 if argv[-1] in containers else 1, "", "")
+        if argv[1] == "run":
+            containers.add(argv[argv.index("--name") + 1])
+            return subprocess.CompletedProcess(argv, 0, "container\n", "")
+        if argv[1:3] == ["rm", "--force"]:
+            if fail_rm["on"]:
+                return subprocess.CompletedProcess(argv, 1, "", "")
+            containers.discard(argv[3])
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "wait" in argv:
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps({"kind": "completed", "returncode": 0}), "")
+        if "report" in argv:
+            return subprocess.CompletedProcess(argv, 0, report, "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    with pytest.raises(sandbox.SandboxUnavailable, match="cleanup remains unresolved"):
+        sandbox.run_isolated(["pytest", "{junit}"], tmp_path, evidence, 30, IMAGE)
+    record = json.loads((tmp_path / "fixed-green.xml.container.json").read_text())
+    assert record["state"] == "cleanup_required"
+    assert record["container"] in containers  # the owned container is really still there
+
+    fail_rm["on"] = False
+    result = sandbox.run_isolated(["pytest", "{junit}"], tmp_path, evidence, 30, IMAGE)
+    assert result.returncode == 0 and evidence.read_bytes() == report
+    assert record["container"] not in containers  # the retained container was removed
+
+
+def test_recovery_record_for_an_absent_container_is_released(tmp_path, monkeypatch):
+    """An owned container that is already gone satisfies the cleanup
+    obligation: the stale record must be released, not wedge the path."""
+    record = tmp_path / "r.xml.container.json"
+    record.write_text(json.dumps({"container": "fl4write-test-" + "a" * 32,
+                                  "image": IMAGE, "state": "cleanup_required"}))
+    calls: list[list[str]] = []
+
+    def docker(argv, timeout, binary=False):
+        calls.append(argv)
+        if argv[1:3] == ["inspect", "--type"]:
+            return subprocess.CompletedProcess(argv, 1, "", "")  # container is gone
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    sandbox._consume_prior_recovery(record)
+    assert not record.exists()
+    assert not any(argv[1:3] == ["rm", "--force"] for argv in calls)
+
+
+def test_recovery_record_naming_a_foreign_container_is_refused(tmp_path, monkeypatch):
+    """Only names this module generates may reach `docker rm --force`."""
+    record = tmp_path / "r.xml.container.json"
+    record.write_text(json.dumps({"container": "some-other-container",
+                                  "image": IMAGE, "state": "cleanup_required"}))
+    calls: list[list[str]] = []
+    monkeypatch.setattr(sandbox, "_docker",
+                        lambda argv, timeout, binary=False: calls.append(argv) or
+                        subprocess.CompletedProcess(argv, 0, "", ""))
+    with pytest.raises(sandbox.SandboxUnavailable, match="no removable container"):
+        sandbox._consume_prior_recovery(record)
+    assert record.exists() and calls == []
+
+
+# ---- P2c: a cleanup failure must not erase a finished run's verdict ----------
+
+def _completed_then_failed_cleanup(report: bytes, returncode: int):
+    def docker(argv, timeout, binary=False):
+        if argv[1:3] == ["image", "inspect"]:
+            return subprocess.CompletedProcess(argv, 0, IMAGE + " 1\n", "")
+        if argv[1:3] == ["rm", "--force"]:
+            return subprocess.CompletedProcess(argv, 1, "", "")
+        if "wait" in argv:
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps({"kind": "completed", "returncode": returncode}), "")
+        if "report" in argv:
+            return subprocess.CompletedProcess(argv, 0, report, "")
+        return subprocess.CompletedProcess(argv, 0, "container\n", "")
+    return docker
+
+
+def test_completed_run_with_unresolved_cleanup_carries_its_result(tmp_path, monkeypatch):
+    """The cleanup failure travels WITH the finished result instead of
+    replacing it."""
+    evidence = tmp_path / "suite.xml"
+    monkeypatch.setattr(sandbox, "_docker", _completed_then_failed_cleanup(
+        b'<testsuite><testcase classname="t" name="test_x"><failure/></testcase></testsuite>', 1))
+    with pytest.raises(sandbox.SandboxCleanupPending) as caught:
+        sandbox.run_isolated(["pytest", "{junit}"], tmp_path, evidence, 30, IMAGE)
+    assert caught.value.result.returncode == 1
+    assert evidence.is_file()
+    assert "cleanup remains unresolved" in str(caught.value)
+
+
+def test_red_suite_with_unresolved_cleanup_stays_non_green(tmp_path, monkeypatch):
+    """P2c: the cleanup failure must not reclassify a red suite as a deferral —
+    a non-green round must still be recorded."""
+    from fl4write import exhaustive as ex
+
+    evidence = tmp_path / "suite.xml"
+    monkeypatch.setattr(sandbox, "_docker", _completed_then_failed_cleanup(
+        b'<testsuite><testcase classname="t" name="test_x"><failure/></testcase></testsuite>', 1))
+    with pytest.raises(ex.NonGreen, match="not green") as caught:
+        ex._test(["pytest", "{junit}"], tmp_path, evidence, 30, isolation="docker", image=IMAGE)
+    assert "cleanup remains unresolved" in str(caught.value)
+
+
+def test_green_suite_with_unresolved_cleanup_defers_without_certifying(tmp_path, monkeypatch):
+    """The lenient half of the rule: unresolved cleanup still blocks a green
+    certification (only the verdict's CLASSIFICATION is preserved)."""
+    from fl4write import exhaustive as ex
+
+    evidence = tmp_path / "suite.xml"
+    monkeypatch.setattr(sandbox, "_docker", _completed_then_failed_cleanup(
+        b'<testsuite><testcase classname="t" name="test_x"/></testsuite>', 0))
+    with pytest.raises(ex.Deferred, match="cleanup remains unresolved"):
+        ex._test(["pytest", "{junit}"], tmp_path, evidence, 30, isolation="docker", image=IMAGE)
+
+
 # ---- 2026-09-16 adversarial Arch-1: evidence frozen before host readback ------
 
 def test_embedded_supervisor_report_is_preferred_over_post_exit_readback(tmp_path, monkeypatch):

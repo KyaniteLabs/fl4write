@@ -15,6 +15,18 @@ class SandboxUnavailable(RuntimeError):
     pass
 
 
+class SandboxCleanupPending(SandboxUnavailable):
+    """P2c: the run produced its report, but container cleanup is unresolved.
+
+    Carries the run's own result so a cleanup failure cannot reclassify the
+    verdict — the caller keeps the report's outcome and only carries this
+    reason alongside it."""
+
+    def __init__(self, reason: str, result):
+        super().__init__(reason)
+        self.result = result
+
+
 WORKER = "/opt/fl4write-test-worker.py"
 MAX_REPORT = 16 * 1024 * 1024
 
@@ -67,6 +79,40 @@ def _docker(argv, timeout, *, binary=False):
         raise SandboxUnavailable("container runtime unavailable or timed out") from exc
 
 
+# P2b: the recovery record names a container this process generated. Consuming
+# it must be possible on the next run — a record nothing ever reads wedges
+# every later attempt at the same evidence path.
+_RECOVERY_CONTAINER_RE = re.compile(r"fl4write-test-[0-9a-f]{32}")
+
+
+def _container_exists(name: str) -> bool:
+    return _docker(["docker", "inspect", "--type", "container", name], 30).returncode == 0
+
+
+def _consume_prior_recovery(recovery: Path) -> None:
+    """Resolve a retained cleanup record before a new record is created.
+
+    The recorded container is removed (or confirmed already gone), then the
+    record is released. Anything unresolvable keeps the record and fails the
+    run rather than silently abandoning an owned container."""
+    if not recovery.exists():
+        return
+    try:
+        saved = json.loads(recovery.read_bytes())
+    except (OSError, ValueError) as exc:
+        raise SandboxUnavailable("container recovery record is unreadable or malformed") from exc
+    name = saved.get("container") if isinstance(saved, dict) else None
+    if not isinstance(name, str) or not _RECOVERY_CONTAINER_RE.fullmatch(name):
+        raise SandboxUnavailable("container recovery record names no removable container")
+    if saved.get("state") != "cleanup_required":
+        raise SandboxUnavailable("container recovery record is not in a cleanup state")
+    if _container_exists(name):
+        removed = _docker(["docker", "rm", "--force", name], 30)
+        if removed.returncode:
+            raise SandboxUnavailable("container cleanup remains unresolved; recovery record retained")
+    recovery.unlink()
+
+
 def validate_runtime(image: str, *, require_model_proxy=False):
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", image or ""):
         raise SandboxUnavailable("test image must be an immutable local image SHA-256")
@@ -86,6 +132,7 @@ def run_isolated(command: list[str], tree: Path, evidence: Path, timeout: int, i
     validate_runtime(image, require_model_proxy=model_proxy is not None)
     evidence.parent.mkdir(parents=True, exist_ok=True)
     recovery = evidence.with_name(evidence.name + ".container.json")
+    _consume_prior_recovery(recovery)
     try:
         with recovery.open("x", encoding="utf-8") as stream:
             json.dump({"container": name, "image": image, "state": "cleanup_required"}, stream)
@@ -93,6 +140,7 @@ def run_isolated(command: list[str], tree: Path, evidence: Path, timeout: int, i
             os.fsync(stream.fileno())
     except OSError as exc:
         raise SandboxUnavailable("container recovery record unavailable or prior cleanup unresolved") from exc
+    completed = None
     try:
         started = _docker(argv, 30)
         if started.returncode:
@@ -136,7 +184,7 @@ def run_isolated(command: list[str], tree: Path, evidence: Path, timeout: int, i
             temporary.replace(evidence)
         finally:
             temporary.unlink(missing_ok=True)
-        return subprocess.CompletedProcess(command, result["returncode"], "", "")
+        completed = subprocess.CompletedProcess(command, result["returncode"], "", "")
     finally:
         # This generated name belongs only to this invocation.
         original = sys.exception()
@@ -149,4 +197,10 @@ def run_isolated(command: list[str], tree: Path, evidence: Path, timeout: int, i
             reason = "container cleanup remains unresolved; recovery record retained"
             if original is not None:
                 reason = str(original) + "; " + reason
-            raise SandboxUnavailable(reason) from (original or exc)
+            if completed is None:
+                raise SandboxUnavailable(reason) from (original or exc)
+            # P2c: the report is already written and this invocation's verdict is
+            # decided — a cleanup failure must not erase it. The reason travels
+            # with the result and the retained record is consumed by the next run.
+            raise SandboxCleanupPending(reason, completed) from exc
+    return completed

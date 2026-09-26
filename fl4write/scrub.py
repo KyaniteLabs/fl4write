@@ -115,8 +115,12 @@ def scrub(text: str) -> str:
 _SECRET_PREFIX = ("ghp_", "gho_", "github_pat_", "sk-", "sk_", "AKIA",
                   "xoxb-", "xoxp-", "glpat-", "AIza")
 _REDACT_RUN_RE = re.compile(r"[A-Za-z0-9_\-+=]{16,}")
-# Long camelCase identifiers that look high-entropy but are code, not secrets
-_KNOWN_IDENTIFIERS = {"documentQuerySelector", "getElementById", "getElementByClassName"}
+# Long camelCase identifiers that look high-entropy but are code, not secrets.
+# FL4WRITE_TRUSTED_MODEL_ENDPOINTS is a public operator setting
+# (config.TRUSTED_MODEL_ENDPOINTS_ENV): the escalation that refuses an
+# unauthorized credential destination must be able to name it.
+_KNOWN_IDENTIFIERS = {"documentQuerySelector", "getElementById", "getElementByClassName",
+                      "FL4WRITE_TRUSTED_MODEL_ENDPOINTS"}
 
 
 def _entropy(s: str) -> float:

@@ -86,6 +86,40 @@ class TestConfig:
         assert c.fix.max_fix_depth == 2
         assert {b.role for b in c.forges.values()} == {"primary"}
 
+    def test_credential_endpoint_trust_is_destination_keyed_and_fail_closed(self):
+        """P1: only loopback, or an operator-declared host, may receive a host
+        credential; anything malformed refuses."""
+        assert cfg.credential_endpoint_trusted("http://127.0.0.1:9/v1", trusted="")
+        assert cfg.credential_endpoint_trusted("http://localhost:11434/v1", trusted="")
+        assert cfg.credential_endpoint_trusted("http://[::1]:8080/v1", trusted="")
+        assert not cfg.credential_endpoint_trusted("https://evil.example/v1", trusted="")
+        assert cfg.credential_endpoint_trusted("https://evil.example/v1", trusted="evil.example")
+        assert cfg.credential_endpoint_trusted("https://evil.example:8443/v1",
+                                               trusted="other.example evil.example:8443")
+        assert not cfg.credential_endpoint_trusted("https://evil.example:8443/v1",
+                                                   trusted="evil.example:9999")
+        assert cfg.credential_endpoint_trusted("https://evil.example/v1",
+                                               trusted="https://evil.example/v1")
+        # loopback lookalikes and malformed endpoints never ride the implicit pass
+        assert not cfg.credential_endpoint_trusted("https://127.0.0.1.evil.example/v1", trusted="")
+        assert not cfg.credential_endpoint_trusted("https:///v1", trusted="")
+        assert not cfg.credential_endpoint_trusted("not-a-url", trusted="")
+
+    def test_credential_endpoint_admission_names_the_route_and_source(self):
+        route = {"endpoint": "https://collector.invalid/v1", "model": "m", "key_env": "OPENAI_API_KEY"}
+        config = cfg.RepoConfig.model_validate({
+            "repo": "acme/widget",
+            "forges": {"origin": {"role": "primary", "api_base": "https://api.github.com",
+                                  "token_env": "TEST_FORGE_TOKEN"}},
+            "model": route,
+        })
+        with pytest.raises(ValueError) as exc:
+            cfg.assert_credential_endpoints_trusted(config, source="repo/.fl4write.yaml")
+        assert "collector.invalid" in str(exc.value)
+        assert "OPENAI_API_KEY" in str(exc.value)
+        assert cfg.credential_endpoint_trusted(route["endpoint"], trusted="") is False
+        assert cfg.credential_endpoint_trusted(route["endpoint"], trusted="collector.invalid") is True
+
 
 # ---------------------------------------------------------------- state (#67)
 class TestState:
@@ -528,7 +562,9 @@ class TestReviewGateRegressions:
         scrub.assert_clean(doc.findings[0].category)
 
     def test_f9_pyyaml_declared(self):
-        deps = open("pyproject.toml").read()
+        # Resolved from this file, never from the process CWD: the suite is also
+        # invoked from a sibling checkout, where a bare relative path is absent.
+        deps = (Path(__file__).parent.parent / "pyproject.toml").read_text()
         assert "pyyaml" in deps
 
 

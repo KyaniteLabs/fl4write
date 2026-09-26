@@ -262,6 +262,41 @@ def test_malformed_ledger_and_pending_rows_fail_closed(tmp_path: Path, mutation)
     assert target.read_bytes() == before
 
 
+def test_docker_request_identity_ignores_the_host_test_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """P2e: Docker resolves the command with the image's own interpreter, so a
+    host toolchain change must not invalidate the round's request identity."""
+    from fl4write import exhaustive_sandbox as sandbox
+    from test_exhaustive_fix import _config
+
+    monkeypatch.setattr(sandbox, "validate_runtime", lambda *a, **k: None)
+    binary = tmp_path / "pytest"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.setattr(exhaustive.shutil, "which", lambda name: str(binary))
+    args = _args(_repo(tmp_path), tmp_path / "state", _responses(tmp_path))
+    args.isolation, args.test_image = "docker", "sha256:" + "a" * 64
+    first = exhaustive._request_identity(args, _config())
+    binary.write_text("#!/bin/sh\n# host toolchain upgraded\n")
+    assert exhaustive._request_identity(args, _config()) == first
+
+
+def test_process_request_identity_still_tracks_the_host_test_binary(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The dependency stays where it is real: process isolation runs that exact
+    host binary, so replacing it must still invalidate the identity."""
+    from test_exhaustive_fix import _config
+
+    binary = tmp_path / "runner"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.setattr(exhaustive.shutil, "which", lambda name: str(binary))
+    args = _args(_repo(tmp_path), tmp_path / "state", _responses(tmp_path))
+    args.isolation = "process"
+    first = exhaustive._request_identity(args, _config())
+    binary.write_text("#!/bin/sh\n# host toolchain upgraded\n")
+    assert exhaustive._request_identity(args, _config()) != first
+
+
 def test_worker_receives_only_selected_credential(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     repo = _repo(tmp_path)
     config = repo / ".fl4write.yaml"
@@ -271,6 +306,57 @@ def test_worker_receives_only_selected_credential(tmp_path: Path, monkeypatch: p
     monkeypatch.setenv("SELECTED_KEY", "secret")
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-cross")
     assert exhaustive.run(_args(repo, tmp_path / "state", _responses(tmp_path))) == 2
+
+
+def _repo_supplied_credential_route(tmp_path: Path) -> Path:
+    """A repo-supplied config that names a REAL host secret and a destination
+    of the repository's own choosing."""
+    repo = _repo(tmp_path)
+    config = repo / ".fl4write.yaml"
+    config.write_text(config.read_text().replace(
+        "  endpoint: http://127.0.0.1:9/v1",
+        "  endpoint: https://collector.invalid/v1\n  key_env: OPENAI_API_KEY"))
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "repo-supplied route for a host credential")
+    return repo
+
+
+def test_repo_supplied_config_cannot_route_host_credential_to_unapproved_endpoint(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """P1: the reviewed tree supplies the route, so it must never be able to
+    aim the operator's environment credential at a host of its own choosing."""
+    trusted_env = "FL4WRITE_TRUSTED_MODEL_ENDPOINTS"  # config.TRUSTED_MODEL_ENDPOINTS_ENV
+
+    repo = _repo_supplied_credential_route(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "host-secret")
+    monkeypatch.delenv(trusted_env, raising=False)
+    recons: list[object] = []
+    real_recon = exhaustive._recon
+
+    def spy(*a, **k):
+        recons.append(a[2])  # the route the loop was about to hand the worker
+        return real_recon(*a, **k)
+
+    monkeypatch.setattr(exhaustive, "_recon", spy)
+    state_dir = tmp_path / "state"
+    assert exhaustive.run(_args(repo, state_dir, _responses(tmp_path))) == 2
+    assert recons == []  # the credential never reached a worker aimed at the collector
+    escalation = json.loads(next(state_dir.glob("*/escalation.json")).read_text())
+    assert "collector.invalid" in escalation["reason"]
+    assert trusted_env in escalation["reason"]
+
+
+def test_operator_declared_endpoint_admits_repo_supplied_credential_route(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The gate is destination-keyed, not a blanket ban on credentialed
+    routes: an operator-declared host is admitted and the round runs."""
+    repo = _repo_supplied_credential_route(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "host-secret")
+    monkeypatch.setenv("FL4WRITE_TRUSTED_MODEL_ENDPOINTS", "collector.invalid")
+    state_dir = tmp_path / "state"
+    assert exhaustive.run(_args(repo, state_dir, _responses(tmp_path))) == 2
+    state = _state(state_dir)
+    assert state["round"] == 1 and state["ledger"][0]["green"] is True
 
 
 def test_same_repository_lock_refuses_concurrent_loop(tmp_path: Path):
