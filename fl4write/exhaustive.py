@@ -373,7 +373,16 @@ def _validated(value: Any, path: str, start: int, end: int, source: str):
             or not lines
             or evidence not in lines[line - 1]
         ):
-            raise Deferred("model finding is not grounded at its claimed archived line")
+            from .scrub import redact_credentials
+            head = redact_credentials(str(evidence))[:70] if isinstance(evidence, str) else type(evidence).__name__
+            raise Deferred(
+                "model finding is not grounded at its claimed archived line: "
+                f"path={row.get('path') if isinstance(row, dict) else '?'} "
+                f"line={row.get('line') if isinstance(row, dict) else '?'} "
+                f"claimed={head!r} "
+                f"actual={redact_credentials(lines[line - 1])[:70]!r}" if isinstance(line, int) and 0 < line <= len(lines)
+                else f"path={row.get('path') if isinstance(row, dict) else '?'} line={row.get('line') if isinstance(row, dict) else '?'} claimed={head!r} out-of-range"
+            )
         clean = {str(k): scrub.redact_credentials(scrub.scrub(str(v))) for k, v in row.items()}
         # This is the already-grounded internal file identity, used by repair
         # and evidence replay. Presentation text remains sanitized; the public
