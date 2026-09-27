@@ -417,13 +417,18 @@ def _recon_prompts(source: str, limit: int, ledger: dict, path: str, route: Mode
             sort_keys=True,
         )
         # The prompt rides to every route that will see it (deep + optional
-        # screen); it must fit the transport for EACH of them.
-        for target in (route, screen_route):
+        # screen), each with the exact system prompt its dispatch uses
+        # (_RECON_SYSTEM deep, the longer _SCREEN_SYSTEM screening) — it must
+        # fit the transport for EACH of those real envelopes. Validating the
+        # screen leg with _RECON_SYSTEM left a ~32-byte window at the limit
+        # where a chunk passed fit() yet the screen request itself bust
+        # client-side (review 2026-09-27).
+        for target, system in ((route, _RECON_SYSTEM), (screen_route, _SCREEN_SYSTEM)):
             if target is None:
                 continue
             try:
                 _encode({"endpoint": target.endpoint,
-                         "payload": _model_payload(target, prompt, "file", _RECON_SYSTEM)}, MAX_REQUEST)
+                         "payload": _model_payload(target, prompt, "file", system)}, MAX_REQUEST)
             except ProxyError:
                 if len(lines) < 2:
                     raise Deferred(f"recon request for source line {start} exceeds transport limit") from None

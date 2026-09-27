@@ -328,3 +328,50 @@ def test_proxy_refuses_unavailable_screen_credentials(monkeypatch):
     monkeypatch.delenv("MISSING_SCREEN_KEY", raising=False)
     with pytest.raises(ProxyError, match="credential unavailable"):
         ModelProxy(primary, max_calls=1, max_output_tokens=10, screen_route=screen)
+
+
+def test_fit_loop_validates_each_leg_with_its_own_system(monkeypatch):
+    """Review 2026-09-27: the fit loop validated BOTH legs with _RECON_SYSTEM,
+    but each leg dispatches with its own system prompt — a gap window at
+    MAX_REQUEST let a chunk pass fit() yet bust its real dispatch client-side
+    (deterministic deferral on every retry). Pinned two ways, agnostic to
+    which system prompt is the longer one on this tree: (a) mechanically, the
+    fit loop must encode each endpoint with exactly its own system prompt;
+    (b) every emitted chunk must fit BOTH legs' real envelopes."""
+    from fl4write import model_proxy
+    from fl4write.analyzer import _model_payload
+    from fl4write.model_proxy import MAX_REQUEST, _encode
+
+    route = _config().model
+    screen = _screen_route()
+    ledger = {'ledger': []}
+
+    def fits(target, system, prompt):
+        try:
+            _encode({'endpoint': target.endpoint,
+                     'payload': _model_payload(target, prompt, 'file', system)}, MAX_REQUEST)
+            return True
+        except ProxyError:
+            return False
+
+    # (a) mechanical pairing: spy on the fit loop's transport encodes. The
+    # screen endpoint validated with _RECON_SYSTEM (the old bug) shows up
+    # here as a cross-pairing no matter which prompt is longer.
+    seen, real_encode = [], _encode
+
+    def spy(value, limit):
+        seen.append((value['endpoint'], value['payload']['messages'][0]['content']))
+        return real_encode(value, limit)
+
+    monkeypatch.setattr(model_proxy, '_encode', spy)
+    source = ('y' * 50 + '\n') * 100  # many short lines: several chunks, none un-splittable
+    chunks = list(exhaustive._recon_prompts(source, 512, ledger, 'value.txt', route, screen))
+    correct = {(route.endpoint, exhaustive._RECON_SYSTEM),
+               (screen.endpoint, exhaustive._SCREEN_SYSTEM)}
+    assert set(seen) == correct  # each leg validated with ITS system — no cross-pairing
+
+    # (b) size invariant: every emitted chunk fits BOTH legs' real envelopes
+    assert chunks
+    for _start, _end, prompt in chunks:
+        assert fits(route, exhaustive._RECON_SYSTEM, prompt)
+        assert fits(screen, exhaustive._SCREEN_SYSTEM, prompt)
