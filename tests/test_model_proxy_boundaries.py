@@ -54,7 +54,10 @@ def provider():
         thread.join(timeout=2)
 
 
-def setup(base, mode):
+def _proxy_setup(base, mode):
+    # Must NOT be named `setup`: pytest < 8 (e.g. the runner host's distro
+    # pytest 7.4.4) still calls a module-level nose-style setup() hook with no
+    # arguments — TypeError before any test body runs. Plain helper, no fixture.
     route = ModelRoute(endpoint=base + '/' + mode, model='synthetic', key_env='',
                        max_tokens=10, temperature=0.2)
     payload = {'model': route.model, 'max_tokens': 10, 'temperature': 0.2,
@@ -66,7 +69,7 @@ def setup(base, mode):
 @pytest.mark.parametrize('status', [401, 429, 503])
 def test_http_status_survives_real_transport_without_provider_text(provider, status):
     base, calls = provider
-    route, payload, proxy = setup(base, str(status))
+    route, payload, proxy = _proxy_setup(base, str(status))
     with proxy:
         with pytest.raises(mp.ProxyError) as caught:
             mp.request(str(proxy.socket_path), route.endpoint, payload)
@@ -85,7 +88,7 @@ def test_http_status_survives_real_transport_without_provider_text(provider, sta
                                        ('oversize', 'response_too_large')])
 def test_invalid_provider_output_has_safe_category(provider, mode, code):
     base, _ = provider
-    route, payload, proxy = setup(base, mode)
+    route, payload, proxy = _proxy_setup(base, mode)
     with proxy:
         with pytest.raises(mp.ProxyError) as caught:
             mp.request(str(proxy.socket_path), route.endpoint, payload)
@@ -97,7 +100,7 @@ def test_invalid_provider_output_has_safe_category(provider, mode, code):
 def test_incomplete_clients_cannot_exceed_host_limit_and_capacity_recovers(provider, monkeypatch):
     monkeypatch.setattr(mp, 'MAX_CONNECTIONS', 2, raising=False)
     base, calls = provider
-    route, payload, proxy = setup(base, 'ok')
+    route, payload, proxy = _proxy_setup(base, 'ok')
     peers = []
     try:
         with proxy:
@@ -137,7 +140,7 @@ def test_incomplete_clients_cannot_exceed_host_limit_and_capacity_recovers(provi
 def test_slow_frame_uses_total_deadline_not_per_byte_timeout(provider, monkeypatch):
     monkeypatch.setattr(mp, 'FRAME_TIMEOUT_S', 0.1, raising=False)
     base, calls = provider
-    _, _, proxy = setup(base, 'ok')
+    _, _, proxy = _proxy_setup(base, 'ok')
     with proxy, socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
         peer.settimeout(0.5)
         peer.connect(str(proxy.socket_path))
