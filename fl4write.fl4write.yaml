@@ -24,6 +24,15 @@ fallback_model:
   key_env: ''
   temperature: 0.2
   max_tokens: 8000
+screen_model:
+  # Lever 2 cascade: a cheap screen pass flags suspect chunks and only flagged
+  # chunks reach the primary model. FLUORITE-LFM is the loopback P-1 lane
+  # (2.7B); loopback endpoints are implicitly trusted.
+  endpoint: http://127.0.0.1:46422/v1/chat/completions
+  model: FLUORITE-LFM
+  key_env: ''
+  temperature: 0.2
+  max_tokens: 4000
 review:
   secrets: "Never commit or echo secrets, tokens, or credentials."
   tests: "Changes to logic ship with tests; tests stay green."
