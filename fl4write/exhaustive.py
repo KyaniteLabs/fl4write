@@ -440,6 +440,7 @@ def _recon(
     chunk_chars: int,
     fake_responses: Path | None = None,
     checkpoint: Path | None = None,
+    concurrency: int = 1,
 ):
     request, result = artifact_dir / "worker-request.json", artifact_dir / "worker-result.json"
     payload = {
@@ -451,6 +452,11 @@ def _recon(
         "chunk_chars": chunk_chars,
         "result": str(result),
     }
+    # Only carried when it changes behavior: at the default 1 the request
+    # stays byte-identical to the serial format, so existing checkpoints
+    # keep their identity (the key rides ReconProgress identity when set).
+    if concurrency > 1:
+        payload["concurrency"] = concurrency
     if fake_responses:
         payload["fake_responses"] = str(fake_responses)
     if checkpoint is not None:
@@ -831,6 +837,7 @@ def run(args: argparse.Namespace) -> int:
                         args.chunk_chars,
                         getattr(args, "_fake_responses", None),
                         state_dir / "recon-checkpoints" / f"round-{state['round']+1:04d}-{head}.json",
+                        getattr(config, "concurrency", 1),
                     )
                 common = {
                     "request_sha256": request_sha,
