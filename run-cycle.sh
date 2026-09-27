@@ -72,6 +72,13 @@ if [ -z "${CODESITTER_FORGEJO_TOKEN:-}" ]; then
     export CODESITTER_FORGEJO_TOKEN=$(grep "^export CODESITTER_FORGEJO_TOKEN=" ~/.bashrc 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')
 fi
 
+# Lever 3b (2026-09-27): the tracked fl4write config takes its LAN model
+# endpoint from the environment (${FL4WRITE_MODEL_ENDPOINT} placeholder).
+# Without it the hourly scheduler alert-fallbacks this repo every cycle.
+if [ -z "${FL4WRITE_MODEL_ENDPOINT:-}" ]; then
+    export FL4WRITE_MODEL_ENDPOINT=http://127.0.0.1:46399/v1/chat/completions
+fi
+
 # SCALE Phase 2: tiered due-list + process pool (consensus-gated, #6).
 # The scheduler is invoked EXACTLY ONCE (Sol#2: three invocations = 3x the
 # probe cost + fragile grep-splitting); its JSON envelope carries due files,
