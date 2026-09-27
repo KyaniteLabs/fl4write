@@ -379,7 +379,9 @@ def _validated(value: Any, path: str, start: int, end: int, source: str):
             continue
         # A well-formed claim about THIS chunk that misquotes it is the
         # anti-hallucination gate — still fatal, now with the offending detail.
-        if evidence not in lines[line - 1]:
+        # Whitespace-tolerant grounding: models drop leading indentation when
+        # quoting; content must still match exactly (a paraphrase still fails).
+        if evidence not in lines[line - 1] and evidence.strip() not in lines[line - 1].strip():
             from .scrub import redact_credentials
             raise Deferred(
                 "model finding is not grounded at its claimed archived line: "
