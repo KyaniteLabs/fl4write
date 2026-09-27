@@ -12,6 +12,7 @@ YAML duplicate keys abort too (merge-conflict/regenerator corruption class).
 from __future__ import annotations
 
 import logging
+import re
 import types as _types
 import typing
 from typing import Iterator
@@ -514,9 +515,43 @@ def _warn_missing_forge_credentials(config) -> None:
                         binding.token_env)
 
 
+_ENV_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _expand_env(value, source: str):
+    """Minimal ${VAR} expansion over the raw config tree (Lever 3b, 2026-09-27):
+    a tracked config can carry a placeholder for host-specific values — the
+    LAN model endpoint — and take the real value from the launcher environment,
+    the same pattern as FL4WRITE_TRUSTED_MODEL_ENDPOINTS. Only the explicit
+    ${VAR} form expands (never a bare $VAR); an unset variable aborts the load
+    naming the variable and the config. Expansion runs BEFORE strict-boolean
+    and model validation, so an expanded value faces every fail-loud check a
+    literal would."""
+    import os
+
+    if isinstance(value, dict):
+        return {key: _expand_env(item, source) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_env(item, source) for item in value]
+    if not isinstance(value, str) or "${" not in value:
+        return value
+
+    def substitute(match):
+        name = match.group(1)
+        if name not in os.environ:
+            raise ValueError(
+                f"config references unset environment variable {name!r} ({source}) — "
+                "set it or inline the value"
+            )
+        return os.environ[name]
+
+    return _ENV_REFERENCE.sub(substitute, value)
+
+
 def load_config(path: str | Path) -> RepoConfig:
     """Fail-loud loader: config errors abort the cycle, never silently skip."""
     raw = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
+    raw = _expand_env(raw, source=str(path))
     _assert_strict_bools(raw, RepoConfig)  # F7-D009: pre-validation
     config = RepoConfig.model_validate(raw)
     for rid in config.review:

@@ -138,6 +138,9 @@ def test_selected_route_cannot_collide_with_forge_credentials(monkeypatch):
 
     monkeypatch.setenv("FL4WRITE_EVAL_CONFIG", str(
         Path(__file__).parents[1] / "fl4write.fl4write.yaml"))
+    # The tracked config's endpoint is a ${FL4WRITE_MODEL_ENDPOINT} placeholder
+    # (Lever 3b); the real load must resolve before the collision check fires.
+    monkeypatch.setenv("FL4WRITE_MODEL_ENDPOINT", "http://192.168.1.72:8908/v1/chat/completions")
     monkeypatch.setenv("FL4WRITE_LIVE_EVAL_PROXY_SOCKET", "/tmp/none.sock")
     monkeypatch.setenv("FL4WRITE_EVAL_MODEL", _json.dumps({
         "endpoint": "http://provider/v1/chat/completions", "model": "m",

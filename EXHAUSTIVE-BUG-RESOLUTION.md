@@ -84,6 +84,19 @@ from repair; a duplicate label remains actionable and cannot hide an unresolved
 defect. Repeated identical raw findings share one fingerprint decision while their
 raw occurrence count remains intact. Empty recon results need no desk file.
 
+**Standing carve-out (accepted LAN self-hosting posture, 2026-09-27).** Recon findings
+whose cited evidence is an `endpoint:` config line naming a plain-http URL on a
+non-routable private or loopback host (RFC1918, IPv6 ULA/link-local, `127.0.0.1`,
+`localhost`) are adjudicated invalid by standing policy before the desk sees them —
+plain-http to a LAN self-hosted model is the documented accepted posture
+(`ModelRoute`: "http allowed: BYO-LLM localhost routers"), not a privacy or
+insecure-transport defect, and the desk was re-invalidating the same rows every
+round. The carve-out is narrow by construction: public or routable endpoints,
+embedded credentials (URL userinfo, credential query parameters, credential-asserting
+messages), and private addresses used outside a model-transport `endpoint:` line
+still reach the desk. Carved rows are recorded in the round's `worker-result.json`
+(`carved_findings`) — suppressed from repair, never silently erased.
+
 Resume with the same HEAD and request settings. Pending recon and its reservations
 are reused. Once accepted, decision bytes are sealed before testing; later edits to
 the external file cannot change a retry. Adjudicated round evidence retains the raw

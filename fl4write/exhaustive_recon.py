@@ -116,8 +116,12 @@ def worker(request_path, caller=None):
                              "start_line": start, "end_line": end})
     if len(coverage) != len(progress.value["entries"]):
         raise Deferred("recon checkpoint contains excess coverage")
+    from .exhaustive_adjudication import apply_endpoint_carveout
+
+    findings, carved = apply_endpoint_carveout(findings)
     _atomic_json(Path(request["result"]), {
         "findings": findings, "coverage": coverage, "calls": progress.value["attempts"],
         "reserved_output_tokens": progress.value["attempts"] * route.max_tokens,
+        "carved_findings": carved,
     })
     return 0
