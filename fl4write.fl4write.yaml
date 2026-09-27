@@ -12,7 +12,7 @@ model:
   endpoint: http://127.0.0.1:46399/v1/chat/completions
   model: CRACK-Ornith-Uncensored
   key_env: ''
-  temperature: 0.0
+  temperature: 0.2
   max_tokens: 4000
 fallback_model:
   endpoint: http://192.168.1.72:8908/v1/chat/completions
