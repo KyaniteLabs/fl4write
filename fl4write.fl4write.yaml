@@ -10,13 +10,13 @@ forges:
     token_env: CODESITTER_GITHUB_TOKEN
 model:
   endpoint: http://127.0.0.1:46399/v1/chat/completions
-  model: Qwen3.8-27B
+  model: CRACK-Ornith-Uncensored
   key_env: ''
   temperature: 0.0
   max_tokens: 4000
 fallback_model:
   endpoint: http://192.168.1.72:8908/v1/chat/completions
-  model: CRACK-Ornith-Uncensored
+  model: Qwen3.8-27B
   key_env: ''
   temperature: 0.2
   max_tokens: 4000
