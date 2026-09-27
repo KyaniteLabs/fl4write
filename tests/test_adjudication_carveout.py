@@ -76,6 +76,29 @@ class TestEndpointCarveout:
     def test_public_and_credential_cases_still_flag(self, evidence):
         assert not accepted_lan_endpoint(_finding(evidence))
 
+    # Review 2026-09-27: exact key-name set matching SUPPRESSED credential
+    # parameters outside the enumerated names (authorization, pass, userkey,
+    # client_secret all leaked as carved=True). Keys now match by marker
+    # substring in any spelling — these rows must keep reaching the desk.
+    @pytest.mark.parametrize("evidence", [
+        "endpoint: http://192.168.1.5:9/v1?authorization=BearerXYZ",
+        "endpoint: http://192.168.1.5:9/v1?pass=abc",
+        "endpoint: http://192.168.1.5:9/v1?userkey=abc",
+        "endpoint: http://192.168.1.5:9/v1?client_secret=abc",
+        "endpoint: http://192.168.1.5:9/v1?api-key=abc",  # hyphenated spelling
+        "endpoint: http://192.168.1.5:9/v1?ApiKey=abc",  # case variation
+        "endpoint: http://192.168.1.5:9/v1?access-token=abc",
+        "endpoint: http://192.168.1.5:9/v1?session_password=abc",  # marker as substring
+        "endpoint: http://192.168.1.5:9/v1?foo=1&token=abc",  # credential among benign params
+        "endpoint: http://192.168.1.5:9/v1?creds=abc",
+        "endpoint: http://192.168.1.5:9/v1?pwd=abc",
+    ])
+    def test_credential_query_keys_in_any_spelling_still_flag(self, evidence):
+        assert not accepted_lan_endpoint(_finding(evidence))
+
+    def test_benign_query_parameters_do_not_block_the_carveout(self):
+        assert accepted_lan_endpoint(_finding("endpoint: http://192.168.1.5:9/v1?mode=fast&retries=3"))
+
     def test_credential_asserting_message_on_a_private_endpoint_still_flags(self):
         assert not accepted_lan_endpoint(_finding(
             "endpoint: http://192.168.1.5:9/v1", message="API key is sent to a private endpoint"))
@@ -92,6 +115,10 @@ class TestEndpointCarveout:
     def test_recon_system_prompt_states_the_accepted_posture(self):
         assert "documented LAN self-hosting" in _RECON_SYSTEM
         assert "${ENV} endpoint placeholder" in _RECON_SYSTEM
+        # prompt-level suppression must stay narrow and biased to report:
+        # nothing downstream can restore a finding the model never emitted
+        assert "Do not generalize this acceptance" in _RECON_SYSTEM
+        assert "still report the finding" in _RECON_SYSTEM
 
 
 def _worker_request(tmp_path):

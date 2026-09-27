@@ -38,8 +38,17 @@ def _unique(pairs):
 # no credential query parameter, and whose message does not assert a
 # credential leak. Public/routable endpoints and credentials still flag.
 _ENDPOINT_LINE = re.compile(r"^\s*endpoint\s*:\s*[\"']?(https?://[^\s\"']+)", re.IGNORECASE)
-_CREDENTIAL_QUERY_KEYS = frozenset(
-    {"token", "key", "api_key", "apikey", "secret", "password", "access_token", "auth"}
+# Credential-bearing query keys match by marker SUBSTRING against the
+# punctuation-stripped key name, not by exact name: the desk invariant is
+# that credential parameters still reach the desk, so an unrecognized
+# credential spelling ("authorization", "pass", "userkey", "client_secret",
+# "api-key", ...) must fail OUT of the carve-out (still flag). Exact-name
+# set membership leaked exactly that way (review 2026-09-27: authorization/
+# pass/userkey/client_secret were all suppressed). A false positive here
+# merely keeps a benign row on the desk — the safe direction.
+_CREDENTIAL_QUERY_MARKERS = (
+    "token", "key", "secret", "password", "passwd", "pass", "pwd",
+    "auth", "credential", "cred", "signature", "bearer",
 )
 _CREDENTIAL_MESSAGE_MARKERS = (
     "credential", "secret", "token", "password", "api key", "api-key", "apikey",
@@ -64,6 +73,12 @@ def _non_routable_private(host: str) -> bool:
     except ValueError:
         return False
     return any(address in net for net in (_NON_ROUTABLE_V4 if address.version == 4 else _NON_ROUTABLE_V6))
+
+
+def _credential_query_key(name: str) -> bool:
+    """Does a query-parameter name carry a credential marker in any spelling?"""
+    normalized = re.sub(r"[^a-z0-9]", "", name.lower())
+    return any(marker in normalized for marker in _CREDENTIAL_QUERY_MARKERS)
 
 
 def accepted_lan_endpoint(finding: dict) -> bool:
@@ -92,7 +107,7 @@ def accepted_lan_endpoint(finding: dict) -> bool:
     if not host or not _non_routable_private(host):
         return False
     query = url.split("?", 1)[1].split("#", 1)[0] if "?" in url else ""
-    if {part.split("=", 1)[0].lower() for part in query.split("&") if part} & _CREDENTIAL_QUERY_KEYS:
+    if any(_credential_query_key(part.split("=", 1)[0]) for part in query.split("&") if part):
         return False
     message = str(finding.get("message", "")).lower()
     return not any(marker in message for marker in _CREDENTIAL_MESSAGE_MARKERS)
