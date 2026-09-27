@@ -31,7 +31,7 @@ def test_selected_route_reaches_analyzer_through_supervisor_without_credential(t
     proxy = ModelProxy(route, max_calls=1, max_output_tokens=37)
     payloads = []
 
-    def forward(payload):
+    def forward(payload, endpoint, key):
         payloads.append(payload)
         return {"choices": [{"message": {"content": '{"findings": []}'}, "finish_reason": "stop"}]}
 
