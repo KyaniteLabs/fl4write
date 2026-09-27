@@ -163,16 +163,26 @@ class ModelProxy:
     """Host-owned context; only its Unix socket directory is mounted in tests.
 
     Reservations are not refunded on failed or abandoned requests. The server
-    forwards only the configured model/endpoint/settings and never client headers.
+    forwards only the configured model/endpoint/settings and never client
+    headers. The optional screen_route (cascade recon) is served under the
+    same admission rules; every call — screen or primary — reserves the
+    largest configured output window, so no stage rides free.
     """
 
-    def __init__(self, route, *, max_calls: int, max_output_tokens: int, reserve=None):
+    def __init__(self, route, *, max_calls: int, max_output_tokens: int, reserve=None, screen_route=None):
         if any(type(v) is not int or v <= 0 for v in (max_calls, max_output_tokens)):
             raise ProxyError("model proxy budgets must be positive integers")
         self.route = route.model_copy(deep=True)
         self.key = os.environ.get(route.key_env, "") if route.key_env else ""
         if route.key_env and not self.key:
             raise ProxyError("configured model credential unavailable")
+        self._pairs = [(self.route, self.key)]
+        if screen_route is not None:
+            skey = os.environ.get(screen_route.key_env, "") if screen_route.key_env else ""
+            if screen_route.key_env and not skey:
+                raise ProxyError("configured model credential unavailable")
+            self._pairs.append((screen_route.model_copy(deep=True), skey))
+        self.charge = max(r.max_tokens for r, _ in self._pairs)
         self.max_calls, self.max_output_tokens = max_calls, max_output_tokens
         self.reserve = reserve
         self.calls = self.reserved_output_tokens = self.completed = self.failed = 0
@@ -183,11 +193,11 @@ class ModelProxy:
         self.streams = set()
         self.handlers = set()
 
-    def _forward(self, payload):
+    def _forward(self, payload, endpoint, key):
         with self.lock:
             if self.closed:
                 raise ProxyError("model proxy closed")
-            body = json.dumps({"endpoint": self.route.endpoint, "key": self.key, "payload": payload}).encode()
+            body = json.dumps({"endpoint": endpoint, "key": key, "payload": payload}).encode()
             child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--provider"],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                      env={k: os.environ[k] for k in ("PATH", "SYSTEMROOT") if k in os.environ})
@@ -210,21 +220,30 @@ class ModelProxy:
             with self.lock:
                 self.children.discard(child)
 
+    def _selected(self, value):
+        """The (route, key) pair a request matches exactly; None when it matches none."""
+        for route, key in self._pairs:
+            payload = value["payload"]
+            expected = {"model": route.model, "temperature": route.temperature,
+                        "max_tokens": route.max_tokens}
+            if route.seed is not None:
+                expected["seed"] = route.seed
+            if route.thinking is not None:
+                expected["thinking"] = {"type": route.thinking}
+            if (value["endpoint"] == route.endpoint and isinstance(payload, dict)
+                    and set(payload) == set(expected) | {"messages"}
+                    and all(payload[k] == v and type(payload[k]) is type(v) for k, v in expected.items())):
+                return route, key
+        return None
+
     def _dispatch(self, value):
         if not isinstance(value, dict) or set(value) != {"endpoint", "payload"}:
             raise ProxyError("invalid model request")
-        payload = value["payload"]
-        expected = {"model": self.route.model, "temperature": self.route.temperature,
-                    "max_tokens": self.route.max_tokens}
-        if self.route.seed is not None:
-            expected["seed"] = self.route.seed
-        if self.route.thinking is not None:
-            expected["thinking"] = {"type": self.route.thinking}
-        if (value["endpoint"] != self.route.endpoint or not isinstance(payload, dict)
-                or set(payload) != set(expected) | {"messages"}
-                or any(payload[k] != v or type(payload[k]) is not type(v) for k, v in expected.items())):
+        selected = self._selected(value)
+        if selected is None:
             raise ProxyError("model request differs from selected route")
-        messages = payload["messages"]
+        route, key = selected
+        messages = value["payload"]["messages"]
         if (not isinstance(messages, list) or len(messages) != 2
                 or any(not isinstance(m, dict) or set(m) != {"role", "content"}
                        or m["role"] != role or not isinstance(m["content"], str)
@@ -232,14 +251,14 @@ class ModelProxy:
             raise ProxyError("invalid model messages")
         with self.lock:
             if (self.closed or self.calls >= self.max_calls
-                    or self.reserved_output_tokens + self.route.max_tokens > self.max_output_tokens):
+                    or self.reserved_output_tokens + self.charge > self.max_output_tokens):
                 raise ProxyError("model test budget exhausted")
             if self.reserve is not None:
-                self.reserve(self.route.max_tokens)
+                self.reserve(self.charge)
             self.calls += 1
-            self.reserved_output_tokens += self.route.max_tokens
+            self.reserved_output_tokens += self.charge
         try:
-            result = self._forward(payload)
+            result = self._forward(value["payload"], route.endpoint, key)
             _encode(result, MAX_RESPONSE)
         except Exception:
             with self.lock:

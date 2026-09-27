@@ -26,7 +26,7 @@ def test_real_unix_transport_uses_selected_route_and_retains_budget_after_failur
     monkeypatch.setenv("MODEL_PROXY_FIXTURE_KEY", "fixture-only")
     route = _route()
     calls = []
-    def forward(payload):
+    def forward(payload, endpoint, key):
         calls.append(payload)
         if len(calls) == 1:
             raise RuntimeError("provider unavailable")
@@ -65,7 +65,7 @@ def test_analyzer_uses_proxy_without_receiving_provider_credential(monkeypatch):
     monkeypatch.setenv("MODEL_PROXY_FIXTURE_KEY", "fixture-only")
     route = _route()
     proxy = ModelProxy(route, max_calls=1, max_output_tokens=10)
-    monkeypatch.setattr(proxy, "_forward", lambda payload: {
+    monkeypatch.setattr(proxy, "_forward", lambda payload, endpoint, key: {
         "choices": [{"message": {"content": '{"findings": []}'}, "finish_reason": "stop"}]})
     with proxy:
         monkeypatch.delenv("MODEL_PROXY_FIXTURE_KEY")
@@ -78,7 +78,7 @@ def test_response_near_limit_survives_unicode_encoding_and_envelope(monkeypatch)
     route = _route()
     value = {"x": "é" * (MAX_RESPONSE // 2 - 10)}
     proxy = ModelProxy(route, max_calls=1, max_output_tokens=10)
-    monkeypatch.setattr(proxy, "_forward", lambda payload: value)
+    monkeypatch.setattr(proxy, "_forward", lambda payload, endpoint, key: value)
     with proxy:
         assert request(str(proxy.socket_path), route.endpoint, _payload(route)) == value
         assert proxy.snapshot()["completed"] == 1
@@ -88,7 +88,7 @@ def test_oversize_result_is_failure_with_reservation_retained(monkeypatch):
     monkeypatch.setenv("MODEL_PROXY_FIXTURE_KEY", "fixture-only")
     route = _route()
     proxy = ModelProxy(route, max_calls=1, max_output_tokens=10)
-    monkeypatch.setattr(proxy, "_forward", lambda payload: {"x": "a" * MAX_RESPONSE})
+    monkeypatch.setattr(proxy, "_forward", lambda payload, endpoint, key: {"x": "a" * MAX_RESPONSE})
     with proxy:
         with pytest.raises(ProxyError):
             request(str(proxy.socket_path), route.endpoint, _payload(route))
