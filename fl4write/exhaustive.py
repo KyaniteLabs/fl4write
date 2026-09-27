@@ -379,9 +379,28 @@ def _validated(value: Any, path: str, start: int, end: int, source: str):
             continue
         # A well-formed claim about THIS chunk that misquotes it is the
         # anti-hallucination gate — still fatal, now with the offending detail.
-        # Whitespace-tolerant grounding: models drop leading indentation when
-        # quoting; content must still match exactly (a paraphrase still fails).
-        if evidence not in lines[line - 1] and evidence.strip() not in lines[line - 1].strip():
+        # Grounding (2026-09-27 Q10): the quote's CONTENT must appear verbatim
+        # in the chunk — whitespace-tolerant, multi-line quotes matched against
+        # up to 4 consecutive lines from the claim, and off-by-N citations
+        # self-corrected to the line that actually carries the quote. Fabricated
+        # content still fails everywhere and stays fatal.
+        ev = evidence.strip() if isinstance(evidence, str) else ""
+        grounded_line = None
+        if ev and (ev in lines[line - 1] or ev in lines[line - 1].strip()):
+            grounded_line = line
+        else:
+            for probe in range(max(start, line - 2), min(end, line + 3)):
+                if ev and (ev in lines[probe - 1] or ev in lines[probe - 1].strip()):
+                    grounded_line = probe
+                    break
+            if grounded_line is None:
+                for k in range(1, 4):
+                    hi = min(end, line + k)
+                    window = "\n".join(l.strip() for l in lines[line - 1:hi])
+                    if ev and ev in window:
+                        grounded_line = line
+                        break
+        if grounded_line is None:
             from .scrub import redact_credentials
             raise Deferred(
                 "model finding is not grounded at its claimed archived line: "
@@ -389,6 +408,7 @@ def _validated(value: Any, path: str, start: int, end: int, source: str):
                 f"claimed={redact_credentials(str(evidence))[:70]!r} "
                 f"actual={redact_credentials(lines[line - 1])[:70]!r}"
             )
+        line = grounded_line
         clean = {str(k): scrub.redact_credentials(scrub.scrub(str(v))) for k, v in row.items()}
         # This is the already-grounded internal file identity, used by repair
         # and evidence replay. Presentation text remains sanitized; the public

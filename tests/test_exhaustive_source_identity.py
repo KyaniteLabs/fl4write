@@ -143,12 +143,30 @@ def test_recon_displays_absolute_line_numbers_across_chunks_and_preserves_source
     assert (tree / 'value.txt').read_text() == source
 
 
-@pytest.mark.parametrize('line,evidence', [(1, 'beta'), (2, '2: beta')])
-def test_recon_numbering_does_not_relax_original_line_grounding(line, evidence):
+@pytest.mark.parametrize('evidence', [('totally absent text'), ('2: beta')])
+def test_recon_numbering_does_not_relax_original_line_grounding(evidence):
+    """Q10 contract: real verbatim content grounds (self-corrected to its true
+    line); fabricated or number-prefixed content still refuses."""
     with pytest.raises(exhaustive.Deferred, match='not grounded'):
         exhaustive._validated({'findings': [{
-            'path': 'value.txt', 'line': line, 'evidence': evidence,
+            'path': 'value.txt', 'line': 1, 'evidence': evidence,
         }]}, 'value.txt', 1, 3, 'alpha\nbeta\ngamma\n')
+
+
+def test_q10_off_by_n_citation_self_corrects():
+    kept = exhaustive._validated({'findings': [{
+        'path': 'value.txt', 'line': 1, 'evidence': 'beta',
+        'severity': 'Minor', 'message': 'fixture',
+    }]}, 'value.txt', 1, 3, 'alpha\nbeta\ngamma\n')
+    assert kept[0]['line'] == 2
+
+
+def test_q10_multiline_quote_grounds():
+    kept = exhaustive._validated({'findings': [{
+        'path': 'value.txt', 'line': 2, 'evidence': 'beta\ngamma',
+        'severity': 'Minor', 'message': 'fixture',
+    }]}, 'value.txt', 1, 3, 'alpha\nbeta\ngamma\n')
+    assert kept[0]['line'] == 2
 
 
 def test_recon_projects_large_test_history_without_changing_evidence(tmp_path):
