@@ -77,28 +77,30 @@ def test_offline_recon_evidence_and_cached_repair_keep_source_identity(tmp_path,
     assert '"findings"' not in public
 
 
-def test_internal_path_still_requires_exact_grounding():
-    with pytest.raises(exhaustive.Deferred, match='not grounded'):
-        exhaustive._validated({'findings': [{
-            'path': 'fl4write/exhaustive_sandbox.py', 'line': 1, 'evidence': 'VALUE = 1',
-        }]}, 'fl4write/exhaustive_budget.py', 1, 1, 'VALUE = 1\n')
+def test_off_chunk_finding_is_dropped_not_fatal():
+    """Cross-file chatter is dropped; it cannot sneak in via another chunk, and
+    the round survives (the file gets its own chunk pass in coverage)."""
+    kept = exhaustive._validated({'findings': [
+        {'path': 'fl4write/exhaustive_sandbox.py', 'line': 1, 'evidence': 'VALUE = 1'},
+        {'path': 'fl4write/exhaustive_budget.py', 'line': 1, 'evidence': 'VALUE = 1'},
+    ]}, 'fl4write/exhaustive_budget.py', 1, 1, 'VALUE = 1\n')
+    assert [row['path'] for row in kept] == ['fl4write/exhaustive_budget.py']
 
 
 def test_finding_on_an_empty_archived_file_is_refused_not_crashed(tmp_path):
     """P2d: an empty tracked file produces the fabricated chunk (1, 1, '') while
     its splitlines() is empty — a model finding grounded at that reported line
-    must be refused with the grounding error, never index an empty line list."""
+    must be dropped without crashing, never index an empty line list."""
     (tmp_path / 'empty.py').write_bytes(b'')
     sources = list(exhaustive._text_sources(tmp_path))
     assert [(rel, text) for rel, text, _ in sources] == [('empty.py', '')]
     chunks = list(exhaustive._chunks('', 48_000))
     assert chunks == [(1, 1, '')]
     start, end, body = chunks[0]
-    with pytest.raises(exhaustive.Deferred, match='not grounded'):
-        exhaustive._validated({'findings': [{
+    assert exhaustive._validated({'findings': [{
             'path': 'empty.py', 'line': 1, 'evidence': 'anything',
             'severity': 'Major', 'message': 'fixture finding',
-        }]}, 'empty.py', start, end, body)
+        }]}, 'empty.py', start, end, body) == []
     # The empty chunk's ordinary (no-finding) response stays valid.
     assert exhaustive._validated({'findings': []}, 'empty.py', start, end, body) == []
 

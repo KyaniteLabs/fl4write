@@ -358,6 +358,11 @@ def _validated(value: Any, path: str, start: int, end: int, source: str):
             row.get("line") if isinstance(row, dict) else None,
             row.get("evidence") if isinstance(row, dict) else None,
         )
+        # Off-chunk chatter: the model cites a file other than the chunk under
+        # review, or omits/mangles the line shape. Dropped, not fatal — every
+        # covered file gets its own chunk pass, so a real finding resurfaces
+        # there; killing the round for cross-file chatter made rounds coin-flips
+        # (2026-09-27: path=.fl4write.yaml line=None killed 6 consecutive rounds).
         if (
             not isinstance(row, dict)
             or row.get("path") != path
@@ -368,20 +373,19 @@ def _validated(value: Any, path: str, start: int, end: int, source: str):
             or not isinstance(evidence, str)
             or not evidence
             # P2d: an empty archived file reports one fabricated chunk line
-            # (1, 1, "") while splitlines() is empty — indexing it crashed the
-            # recon worker with IndexError instead of the grounding refusal.
+            # (1, 1, "") while splitlines() is empty — nothing can ground there.
             or not lines
-            or evidence not in lines[line - 1]
         ):
+            continue
+        # A well-formed claim about THIS chunk that misquotes it is the
+        # anti-hallucination gate — still fatal, now with the offending detail.
+        if evidence not in lines[line - 1]:
             from .scrub import redact_credentials
-            head = redact_credentials(str(evidence))[:70] if isinstance(evidence, str) else type(evidence).__name__
             raise Deferred(
                 "model finding is not grounded at its claimed archived line: "
-                f"path={row.get('path') if isinstance(row, dict) else '?'} "
-                f"line={row.get('line') if isinstance(row, dict) else '?'} "
-                f"claimed={head!r} "
-                f"actual={redact_credentials(lines[line - 1])[:70]!r}" if isinstance(line, int) and 0 < line <= len(lines)
-                else f"path={row.get('path') if isinstance(row, dict) else '?'} line={row.get('line') if isinstance(row, dict) else '?'} claimed={head!r} out-of-range"
+                f"path={row.get('path')} line={line} "
+                f"claimed={redact_credentials(str(evidence))[:70]!r} "
+                f"actual={redact_credentials(lines[line - 1])[:70]!r}"
             )
         clean = {str(k): scrub.redact_credentials(scrub.scrub(str(v))) for k, v in row.items()}
         # This is the already-grounded internal file identity, used by repair
