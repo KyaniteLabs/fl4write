@@ -17,7 +17,7 @@ def test_selected_thinking_is_transported_and_cannot_be_overridden(thinking):
         assert payload["thinking"] == {"type": thinking}
     observed = []
     with ModelProxy(route, max_calls=2, max_output_tokens=8000) as proxy:
-        proxy._forward = lambda value: observed.append(value) or {"ok": True}
+        proxy._forward = lambda value, endpoint, key: observed.append(value) or {"ok": True}
         assert request(str(proxy.socket_path), route.endpoint, payload) == {"ok": True}
         changed = {**payload, "thinking": {"type": "enabled" if thinking != "enabled" else "disabled"}}
         with pytest.raises(ProxyError):

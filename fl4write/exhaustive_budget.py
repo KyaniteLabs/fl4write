@@ -47,7 +47,8 @@ def round_transport(args, config, budget_path, request_sha):
     previous = os.environ.get("FL4WRITE_MODEL_PROXY_SOCKET")
     try:
         with ModelProxy(config.model, max_calls=args.max_model_calls,
-                        max_output_tokens=args.max_output_tokens, reserve=budget.reserve) as proxy:
+                        max_output_tokens=args.max_output_tokens, reserve=budget.reserve,
+                        screen_route=config.screen_model) as proxy:
             args._model_proxy = proxy
             os.environ["FL4WRITE_MODEL_PROXY_SOCKET"] = str(proxy.socket_path)
             yield budget

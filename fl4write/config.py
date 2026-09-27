@@ -222,6 +222,10 @@ class RepoConfig(_StrictModel):
     forges: dict[str, ForgeBinding]
     model: ModelRoute
     fallback_model: ModelRoute | None = None
+    # Cascade recon (screen-then-deep): when set, a cheap first pass flags
+    # suspect chunks and only flagged chunks reach `model`. Unset = the
+    # single-model path, byte-for-byte.
+    screen_model: ModelRoute | None = None
     review: dict[str, str] = Field(default_factory=dict)  # rule-id -> prose law
     # Renderer/engine are vocab-hardcoded until they are vocab-driven; a
     # custom vocab that renders wrong is worse than refusing it.
@@ -268,7 +272,7 @@ class RepoConfig(_StrictModel):
         if not isinstance(raw, dict):
             return raw
         _key_envs: set[str] = set()
-        for _route in (raw.get("model"), raw.get("fallback_model")):
+        for _route in (raw.get("model"), raw.get("fallback_model"), raw.get("screen_model")):
             if isinstance(_route, ModelRoute):
                 _route = _route.model_dump()
             if isinstance(_route, dict):
@@ -340,6 +344,18 @@ class RepoConfig(_StrictModel):
             )
         return v
 
+    @field_validator("screen_model")
+    @classmethod
+    def _screen_differs(cls, v: ModelRoute | None, info) -> ModelRoute | None:
+        primary = info.data.get("model")
+        if v is not None and primary is not None and (v.endpoint, v.model) == (primary.endpoint, primary.model):
+            log.warning(
+                "screen_model is identical to model (%s @ %s) — the cascade "
+                "screens with the primary model and saves no calls",
+                v.model, v.endpoint,
+            )
+        return v
+
 
 class _UniqueKeyLoader(yaml.SafeLoader):
     """PyYAML silently keeps the LAST duplicate mapping key; a merge-conflicted
@@ -366,7 +382,8 @@ def check_model_keys(config: RepoConfig) -> None:
     the failure would otherwise surface as an opaque per-cycle 401."""
     import os
 
-    for name, route in (("model", config.model), ("fallback_model", config.fallback_model)):
+    for name, route in (("model", config.model), ("fallback_model", config.fallback_model),
+                        ("screen_model", config.screen_model)):
         if route is not None and route.key_env and not os.environ.get(route.key_env):
             log.warning("%s.key_env %s is not set in the environment (expect 401s)", name, route.key_env)
 
@@ -446,7 +463,8 @@ def assert_credential_endpoints_trusted(config: RepoConfig, *, source: str) -> N
     """Refuse to admit a config whose credential-bearing route aims at an
     endpoint the operator has not authorized. `source` names the config path
     for the operator-facing error."""
-    for name, route in (("model", config.model), ("fallback_model", config.fallback_model)):
+    for name, route in (("model", config.model), ("fallback_model", config.fallback_model),
+                        ("screen_model", config.screen_model)):
         if route is None or not route.key_env:
             continue
         if not credential_endpoint_trusted(route.endpoint):

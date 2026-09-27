@@ -23,7 +23,7 @@ def test_recon_repair_and_live_suite_share_persistent_reservations(tmp_path, mon
     path = tmp_path / "round-budget.json"
     ledger = tmp_path / "ledger.json"
     ledger.write_text('{"ledger": []}')
-    monkeypatch.setattr(ModelProxy, "_forward", lambda self, payload: _answer(payload))
+    monkeypatch.setattr(ModelProxy, "_forward", lambda self, payload, endpoint, key: _answer(payload))
     def suite(command, tree, evidence, timeout, *, isolation, image, model_proxy):
         assert isolation == "docker" and model_proxy is args._model_proxy
         route = config.model
@@ -54,7 +54,7 @@ def test_failed_real_worker_request_is_reserved_across_retry(tmp_path, monkeypat
     args = _args(repo, tmp_path / "state", None)
     args.max_model_calls, args.max_output_tokens = 1, 10
     calls = []
-    def unavailable(self, payload):
+    def unavailable(self, payload, endpoint, key):
         calls.append(payload)
         raise RuntimeError("fixture outage")
     monkeypatch.setattr(ModelProxy, "_forward", unavailable)
@@ -71,7 +71,7 @@ def test_partial_real_worker_resumes_with_failed_reservation_retained(tmp_path, 
     args.max_model_calls, args.max_output_tokens = 4, 40
     calls = []
 
-    def interrupted(self, payload):
+    def interrupted(self, payload, endpoint, key):
         calls.append(json.loads(payload["messages"][1]["content"])["path"])
         if len(calls) == 2:
             raise RuntimeError("fixture outage")

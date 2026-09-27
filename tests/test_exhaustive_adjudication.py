@@ -244,7 +244,7 @@ def test_real_budget_survives_missing_decisions_and_unavailable_live_suite(tmp_p
     config = load_config(repo / ".fl4write.yaml")
     forwarded = []
 
-    def upstream(self, payload):
+    def upstream(self, payload, endpoint, key):
         prompt = payload["messages"][1]["content"]
         forwarded.append(prompt)
         findings = []
