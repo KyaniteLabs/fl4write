@@ -778,12 +778,15 @@ class TestAuditRegressions:
 ), ids=lambda p: Path(p).name)
 def test_all_fleet_configs_load(cfg_path, monkeypatch):
     """Every fleet config loads against the strict schema (audit E8: 1-of-31
-    coverage). Set the token env vars the schemas now require."""
+    coverage). Set the token env vars the schemas now require, and the LAN
+    model endpoint the tracked fl4write config takes from the environment
+    (Lever 3b: ${FL4WRITE_MODEL_ENDPOINT} placeholder)."""
     import os
     for name in ("CODESITTER_GITHUB_TOKEN", "CODESITTER_DEEPSEEK_KEY",
-                 "CODESITTER_FORGEJO_TOKEN"):
+                 "CODESITTER_FORGEJO_TOKEN", "FL4WRITE_MODEL_ENDPOINT"):
         if name not in os.environ:
-            monkeypatch.setenv(name, "test")
+            monkeypatch.setenv(name, "http://192.168.1.72:8908/v1/chat/completions"
+                              if name == "FL4WRITE_MODEL_ENDPOINT" else "test")
     c = cfg.load_config(cfg_path)
     assert c.repo and "/" in c.repo
 

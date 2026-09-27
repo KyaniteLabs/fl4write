@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
+import re
 from pathlib import Path
 
 from .exhaustive_evidence import EvidenceError, verify_bundle
@@ -22,6 +24,103 @@ def _unique(pairs):
     if len(value) != len(pairs):
         raise AdjudicationError("duplicate desk JSON key")
     return value
+
+
+# Standing carve-out (Lever 3, 2026-09-27): recon re-flagged the fleet's
+# ~100 *.fl4write.yaml model endpoints ("Configuration exposes a private IP
+# address...", "Insecure HTTP endpoint...") every round, and the desk
+# re-invalidated them every round. Policy, settled once: plain-http to a
+# non-routable private/loopback host IS the documented accepted posture for
+# LAN self-hosting (config.ModelRoute: "http allowed: BYO-LLM localhost
+# routers"), so those rows are adjudicated invalid here instead of returning
+# as desk work. Narrow by construction — only an `endpoint:` config line
+# whose URL host is loopback or RFC1918/ULA/link-local, with no userinfo and
+# no credential query parameter, and whose message does not assert a
+# credential leak. Public/routable endpoints and credentials still flag.
+_ENDPOINT_LINE = re.compile(r"^\s*endpoint\s*:\s*[\"']?(https?://[^\s\"']+)", re.IGNORECASE)
+# Credential-bearing query keys match by marker SUBSTRING against the
+# punctuation-stripped key name, not by exact name: the desk invariant is
+# that credential parameters still reach the desk, so an unrecognized
+# credential spelling ("authorization", "pass", "userkey", "client_secret",
+# "api-key", ...) must fail OUT of the carve-out (still flag). Exact-name
+# set membership leaked exactly that way (review 2026-09-27: authorization/
+# pass/userkey/client_secret were all suppressed). A false positive here
+# merely keeps a benign row on the desk — the safe direction.
+_CREDENTIAL_QUERY_MARKERS = (
+    "token", "key", "secret", "password", "passwd", "pass", "pwd",
+    "auth", "credential", "cred", "signature", "bearer",
+)
+_CREDENTIAL_MESSAGE_MARKERS = (
+    "credential", "secret", "token", "password", "api key", "api-key", "apikey",
+)
+_NON_ROUTABLE_V4 = tuple(
+    ipaddress.ip_network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+)
+_NON_ROUTABLE_V6 = tuple(
+    ipaddress.ip_network(net) for net in ("fc00::/7", "fe80::/10")  # ULA, link-local
+)
+
+
+def _non_routable_private(host: str) -> bool:
+    """Loopback or non-routable private literal: RFC1918, IPv6 ULA/link-local,
+    loopback, `localhost`. A public DNS name or routable IP is never private."""
+    from .config import _loopback_host
+
+    if _loopback_host(host):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(address in net for net in (_NON_ROUTABLE_V4 if address.version == 4 else _NON_ROUTABLE_V6))
+
+
+def _credential_query_key(name: str) -> bool:
+    """Does a query-parameter name carry a credential marker in any spelling?"""
+    normalized = re.sub(r"[^a-z0-9]", "", name.lower())
+    return any(marker in normalized for marker in _CREDENTIAL_QUERY_MARKERS)
+
+
+def accepted_lan_endpoint(finding: dict) -> bool:
+    """Does this recon finding target the accepted LAN self-hosting posture?
+
+    True only when the finding's cited evidence is a model-transport
+    `endpoint:` line whose URL host is non-routable private/loopback, the URL
+    carries no embedded credential (userinfo or credential query parameter),
+    and the finding's message does not assert a credential leak. The authority
+    is parsed by hand: findings arrive AFTER scrub.redact_credentials, which
+    can collapse an URL's port-and-path into `[redacted]` (a bracketed token
+    urllib refuses as an IPv6 netloc) — the host itself always survives."""
+    match = _ENDPOINT_LINE.match(str(finding.get("evidence", "")))
+    if match is None:
+        return False
+    url = match.group(1)
+    _, _, rest = url.partition("://")
+    authority = re.split(r"[/?#\s]", rest, maxsplit=1)[0]
+    if "@" in authority:
+        return False  # credential in userinfo: still flags
+    if authority.startswith("["):  # bracketed IPv6 literal
+        host = authority[1:authority.find("]")]
+    else:
+        host = authority.split(":", 1)[0]
+    host = host.strip().lower()
+    if not host or not _non_routable_private(host):
+        return False
+    query = url.split("?", 1)[1].split("#", 1)[0] if "?" in url else ""
+    if any(_credential_query_key(part.split("=", 1)[0]) for part in query.split("&") if part):
+        return False
+    message = str(finding.get("message", "")).lower()
+    return not any(marker in message for marker in _CREDENTIAL_MESSAGE_MARKERS)
+
+
+def apply_endpoint_carveout(findings: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split recon findings into (actionable, carved). Carved rows are the
+    standing-policy invalids above; they stay recorded in the round artifact
+    (log-what-you-dropped) — suppressed from repair, never silently erased."""
+    actionable_rows, carved_rows = [], []
+    for row in findings:
+        (carved_rows if accepted_lan_endpoint(row) else actionable_rows).append(row)
+    return actionable_rows, carved_rows
 
 
 def read_decision(path: Path) -> tuple[dict, bytes]:

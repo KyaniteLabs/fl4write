@@ -424,7 +424,14 @@ _RECON_SYSTEM = (
     'Content lines begin with their absolute line number followed by ": ". '
     'Return only {"findings": []}; findings require path, absolute line, exact single-line evidence, '
     'severity, message. Copy the displayed line number; evidence must quote original source text '
-    'without the added line-number prefix.'
+    'without the added line-number prefix. '
+    'ACCEPTED POSTURE: an endpoint: value using plain http to a non-routable private or loopback '
+    'host (RFC1918, loopback) is documented LAN self-hosting configuration — never a privacy or '
+    'insecure-transport finding; an ${ENV} endpoint placeholder is environment-injected '
+    'configuration, also not a finding. Public or routable endpoints over plain http and embedded '
+    'credentials remain findings. Do not generalize this acceptance: it covers only that exact '
+    'posture, nothing adjacent — when unsure whether a row falls under it, still report the '
+    'finding; only the deterministic code-level adjudicator may suppress a reported row.'
 )
 
 _SCREEN_SYSTEM = (

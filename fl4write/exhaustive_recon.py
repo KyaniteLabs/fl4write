@@ -169,8 +169,16 @@ def worker(request_path, caller=None):
                              "start_line": start, "end_line": end})
     if len(coverage) != len(progress.value["entries"]):
         raise Deferred("recon checkpoint contains excess coverage")
+    from .exhaustive_adjudication import apply_endpoint_carveout
+
+    findings, carved = apply_endpoint_carveout(findings)
     _atomic_json(Path(request["result"]), {
         "findings": findings, "coverage": coverage, "calls": progress.value["attempts"],
+        # attempt_tokens (the largest configured route window) — not
+        # route.max_tokens — so a screen model with a larger window is not
+        # under-reported in the result artifact; carved_findings records the
+        # standing carve-out rows (log-what-you-dropped).
         "reserved_output_tokens": progress.value["attempts"] * progress.attempt_tokens,
+        "carved_findings": carved,
     })
     return 0
