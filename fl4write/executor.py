@@ -237,7 +237,7 @@ def _push_token_env(workdir: Path, token: str) -> dict[str, str]:
     temp dir; callers MUST call _drop_askpass() before running any tests."""
     askpass_dir = Path(tempfile.mkdtemp(prefix="fl4write-askpass-"))
     helper = askpass_dir / "askpass.sh"
-    helper.write_text(f"#!/bin/sh\necho '{token}'\n")
+    helper.write_text("#!/bin/sh\necho " + shlex.quote(token) + "\n")
     helper.chmod(stat.S_IRUSR | stat.S_IXUSR)
     env = _sandbox_env()
     env["GIT_ASKPASS"] = str(helper)

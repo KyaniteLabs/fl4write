@@ -134,7 +134,7 @@ def _escape_path(path: str) -> str:
             out.append("\\n")
         elif ch == "\r":
             out.append("\\r")
-        elif cp in (0x09, 0x0A):
+        elif cp == 0x09:
             out.append(ch)
         elif unicodedata.category(ch) in ("Cc", "Cf"):
             out.append(f"\\u{cp:04x}")

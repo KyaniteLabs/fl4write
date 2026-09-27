@@ -95,7 +95,7 @@ esac
 # MECE round-4 (terra F4-401): "starts with {" is not JSON — "{not-json"
 # slipped past and the downstream parsers silently produced an empty plan
 # (quiet no-op, breaking the loud-failure contract)
-echo "$PLAN" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>>"$LOG" || PLAN=""
+ printf '%s' "$PLAN" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>>"$LOG" || PLAN=""
 if [ $PLAN_RC -ne 0 ] || [ -z "$PLAN" ]; then
     echo "$(date -Iseconds) ERR: tier scheduler failed — fleet NOT cycled this hour" >> "$LOG"
     exit 1
@@ -103,7 +103,7 @@ fi
 # MECE round-6 (sol F6-E04): valid JSON with the WRONG SHAPE ({"due": null})
 # used to pass syntax validation and silently become an empty successful
 # cycle — validate the envelope: due/alerts must be string lists, summary str
-if ! echo "$PLAN" | python3 -c 'import json,sys
+if !  printf '%s' "$PLAN" | python3 -c 'import json,sys
 p = json.load(sys.stdin)
 ok = isinstance(p, dict) \
      and isinstance(p.get("due"), list) and all(isinstance(d, str) for d in p["due"]) \
@@ -113,8 +113,8 @@ sys.exit(0 if ok else 1)' 2>>"$LOG"; then
     echo "$(date -Iseconds) ERR: tier scheduler plan MALFORMED (shape) — fleet NOT cycled this hour" >> "$LOG"
     exit 1
 fi
-PLAN_ALERTS=$(echo "$PLAN" | python3 -c "import json,sys; [print('ALERT: '+a) for a in json.load(sys.stdin).get('alerts',[])]" 2>/dev/null)
-PLAN_SUMMARY=$(echo "$PLAN" | python3 -c "import json,sys; print(json.load(sys.stdin).get('summary',''))" 2>/dev/null)
+PLAN_ALERTS=$( printf '%s' "$PLAN" | python3 -c "import json,sys; [print('ALERT: '+a) for a in json.load(sys.stdin).get('alerts',[])]" 2>/dev/null)
+PLAN_SUMMARY=$( printf '%s' "$PLAN" | python3 -c "import json,sys; print(json.load(sys.stdin).get('summary',''))" 2>/dev/null)
 [ -n "$PLAN_SUMMARY" ] && echo "$(date -Iseconds) $PLAN_SUMMARY" >> "$LOG"
 if [ -n "$PLAN_ALERTS" ]; then
     echo "$PLAN_ALERTS" | while read -r line; do echo "$(date -Iseconds) $line" >> "$LOG"; done
@@ -123,7 +123,7 @@ fi
 # mapfile = no word-splitting on filenames with spaces (Sol#3).
 # F7-E001: NUL-delimited dispatch — a due path containing a NEWLINE used to
 # split into multiple worker records (the intended config was skipped)
-mapfile -d '' -t DUE_FILES < <(echo "$PLAN" | python3 -c "import json,sys; [print(f, end='\0') for f in json.load(sys.stdin).get('due',[])]" 2>/dev/null)
+mapfile -d '' -t DUE_FILES < <( printf '%s' "$PLAN" | python3 -c "import json,sys; [print(f, end='\0') for f in json.load(sys.stdin).get('due',[])]" 2>/dev/null)
 
 # stale result files cleared BEFORE dispatch (the Critic's amendment)
 for f in "${DUE_FILES[@]}"; do

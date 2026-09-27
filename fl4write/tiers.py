@@ -142,9 +142,9 @@ def classify(repo: str, forge_github: bool, pushed_epoch: float | None,
         # Forgejo repos have no GitHub pushed signal; the org merges fast
         # (LEARNINGS #24) — WARM floor, refined by local activity below.
         base = "warm"
-    elif pushed_epoch and (now - pushed_epoch) < 25 * 3600:
+    elif pushed_epoch is not None and (now - pushed_epoch) < 25 * 3600:
         base = "hot"
-    elif pushed_epoch and (now - pushed_epoch) < 7 * 86400:
+    elif pushed_epoch is not None and (now - pushed_epoch) < 7 * 86400:
         base = "warm"
     elif pushed_epoch:
         base = "cold"

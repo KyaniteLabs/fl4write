@@ -841,3 +841,10 @@ shared time-relative helper OR carry an explicit `# time-rot-safe:`
 justification on the same line. The corpus guard will fail CI either
 way; the question is whether a future contributor finds out before
 the next calendar roll instead of after.
+
+## #64 — 2026-09-27 (CEO empor: machine speed) — loop-hardening lessons
+- A provider death is a route change, never a stop: dual local lanes + cycler chaining + crontab sentry with evidence lines (employs the 402 empor cure).
+- Zero-tolerance grounding killed rounds on benign shape violations (off-chunk chatter, line=None): drop those, keep fatal only for well-formed-but-false quotes (commit 9e2ea2e).
+- Temp-0.0 makes retries reproduce identical failures; deterministic lanes need temp>0.
+- Reasoning models on lanes need budget-bounded thinking + forced-answer message (CRACK and LFM lanes both).
+- Queue rulings: reliability_corpus.py planted API-key fixture is harness contract (RULED, not a defect); prism llama-server b10743 on the Dell crashes on code-heavy prompts (lane defect, reported to CS).
