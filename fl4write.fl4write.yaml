@@ -40,6 +40,7 @@ review:
 severity_vocab: [Critical, Major, Minor, Nit]
 tone: balanced
 tone_fork_override: balanced
+concurrency: 4
 fix:
   enabled: true  # exhaustive lane implements Forgejo PR create/squash-merge (exhaustive_fix.py:428-433,517-528); token verified as bot login
   merge_own_prs: true
