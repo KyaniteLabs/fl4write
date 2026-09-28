@@ -19,7 +19,7 @@ model:
   temperature: 0.2
   max_tokens: 8000
 fallback_model:
-  endpoint: http://192.168.1.72:8908/v1/chat/completions
+  endpoint: http://127.0.0.1:8908/v1/chat/completions
   model: Qwen3.8-27B
   key_env: ''
   temperature: 0.2
