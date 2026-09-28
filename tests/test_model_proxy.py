@@ -96,6 +96,43 @@ def test_oversize_result_is_failure_with_reservation_retained(monkeypatch):
                                     "completed": 0, "failed": 1, "active": 0}
 
 
+@pytest.mark.parametrize("ceiling", ["calls", "tokens"])
+def test_budget_ceilings_hold_under_parallel_requests(monkeypatch, ceiling):
+    """Lever 1 (concurrent recon): the transport budget under self.lock must
+    grant exactly the ceiling no matter how many requests race it."""
+    monkeypatch.setenv("MODEL_PROXY_FIXTURE_KEY", "fixture-only")
+    route = _route()
+    limits = {"calls": (2, 990), "tokens": (99, 20)}[ceiling]
+
+    def slow(payload, endpoint, key):  # main's _forward signature
+        time.sleep(0.05)  # keep the racing requests overlapping at the lock
+        return {"choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}]}
+
+    proxy = ModelProxy(route, max_calls=limits[0], max_output_tokens=limits[1])
+    monkeypatch.setattr(proxy, "_forward", slow)
+    value = {"endpoint": route.endpoint, "payload": _payload(route)}
+    with proxy:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(proxy._dispatch, value) for _ in range(6)]
+        granted = 0
+        for future in futures:
+            try:
+                future.result()
+                granted += 1
+            except ProxyError as exc:
+                # only the in-process layer carries the refusal text
+                assert "model test budget exhausted" in str(exc)
+        assert granted == 2  # both ceilings admit exactly two reservations
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            sockets = [pool.submit(request, str(proxy.socket_path), route.endpoint, _payload(route))
+                       for _ in range(4)]
+        for future in sockets:
+            with pytest.raises(ProxyError):  # spent ceiling refuses end to end
+                future.result()
+        assert proxy.snapshot() == {"calls": 2, "reserved_output_tokens": 20,
+                                    "completed": 2, "failed": 0, "active": 0}
+
+
 def test_exit_reaps_real_provider_process_without_waiting_for_http(monkeypatch):
     monkeypatch.setenv("MODEL_PROXY_FIXTURE_KEY", "fixture-only")
     entered, release = threading.Event(), threading.Event()

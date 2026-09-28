@@ -245,6 +245,10 @@ class RepoConfig(_StrictModel):
     # against a pnpm/vitest monorepo whose CI was green on the same tree)
     test_timeout: int = Field(default=240, ge=30, le=1800)  # monorepo
     # install+test chains need more than the 240s single-suite default
+    concurrency: int = Field(default=1, ge=1, le=8)  # parallel recon model
+    # calls; 1 = exactly the serial behavior. Capped at the model proxy's
+    # MAX_CONNECTIONS admissions semaphore (model_proxy.py) — a higher value
+    # would be refused mid-round at the socket, so it fails loud at load.
     verify_tests: bool = True  # run the diff's own tests sandboxed; a failing
     # diff is a deterministic Critical (prompt-only tracing missed planted bugs)
     shadow: bool = False  # True = log findings, post nothing

@@ -503,6 +503,7 @@ def _recon(
     fake_responses: Path | None = None,
     checkpoint: Path | None = None,
     screen_route: ModelRoute | None = None,
+    concurrency: int = 1,
 ):
     request, result = artifact_dir / "worker-request.json", artifact_dir / "worker-result.json"
     payload = {
@@ -516,6 +517,11 @@ def _recon(
     }
     if screen_route is not None:
         payload["screen_route"] = screen_route.model_dump()
+    # Only carried when it changes behavior: at the default 1 the request
+    # stays byte-identical to the serial format, so existing checkpoints
+    # keep their identity (the key rides ReconProgress identity when set).
+    if concurrency > 1:
+        payload["concurrency"] = concurrency
     if fake_responses:
         payload["fake_responses"] = str(fake_responses)
     if checkpoint is not None:
@@ -900,6 +906,7 @@ def run(args: argparse.Namespace) -> int:
                         getattr(args, "_fake_responses", None),
                         state_dir / "recon-checkpoints" / f"round-{state['round']+1:04d}-{head}.json",
                         screen_route=config.screen_model,
+                        concurrency=getattr(config, "concurrency", 1),
                     )
                 common = {
                     "request_sha256": request_sha,
