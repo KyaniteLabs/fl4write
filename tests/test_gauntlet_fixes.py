@@ -3281,7 +3281,7 @@ class TestMECERound8SolB:
     def test_merge_gate_source_laws(self):
         src = (REPO_ROOT / "fl4write/executor.py").read_text()
         assert '"sha": pr_data["head"]["sha"]' in src  # F8-004 precondition
-        assert "/status" in src and "combined_state" in src  # F8-005
+        assert "/status" in src and "_combined_status" in src  # F8-005
         assert "fl4write-fix-test-" in src  # F8-002 isolation copy
         assert "compact = \"\".join(data[\"content\"].split())" in src  # F8-001
         # F8-006/F10-B001/E002: arity is modeled explicitly and anything
