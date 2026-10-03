@@ -112,6 +112,32 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
 
 _FRESH_STATE = {"version": STATE_VERSION, "prs": {}}
 
+# Cycle-3: omni identity keys carried across a BOUNDED reconcile. A torn
+# write or hand-edit that breaks the state shape used to drop omni_issue
+# (and cursors), so the next cycle opened a SECOND audit issue and burned
+# a full re-audit. Parseable-but-misshapen state keeps validated omni
+# identity; truly unreadable bytes (JSON/UTF-8 failures) still reset.
+# Types are exact (bool is not int here) — anything else is dropped.
+_OMNI_CARRY: tuple[tuple[str, tuple], ...] = (
+    ("omni_issue", (int,)), ("omni_published", (bool,)),
+    ("omni_complete", (bool,)), ("omni_findings", (list,)),
+    ("omni_cursor", (str, int)), ("omni_head", (str,)),
+    ("omni_total", (int,)), ("omni_report_version", (int,)),
+    ("omni_pub_fail", (int,)), ("omni_scope_pending", (list,)),
+    ("omni_scanned_total", (int,)),
+)
+
+
+def _carry_omni_identity(data: object) -> dict[str, Any]:
+    carried: dict[str, Any] = {}
+    if not isinstance(data, dict):
+        return carried
+    for key, kinds in _OMNI_CARRY:
+        value = data.get(key)
+        if any(type(value) is kind for kind in kinds):
+            carried[key] = value
+    return carried
+
 
 def load_state(path: Path) -> dict[str, Any]:
     """Load or reconcile. Corrupt/unknown-version state -> bounded reconcile:
@@ -119,6 +145,7 @@ def load_state(path: Path) -> dict[str, Any]:
     last_reviewed_sha re-review once — that is the bounded cost). Transient
     I/O errors ABORT the cycle (StateIOError) — discarding memory on a flaky
     read is silent data loss."""
+    data: Any = None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
@@ -185,7 +212,9 @@ def load_state(path: Path) -> dict[str, Any]:
         log.warning("state %s corrupt (%s); bounded reconcile — per-PR memory lost", path, exc)
     except OSError as exc:
         raise StateIOError(f"state {path} unreadable ({exc}) — aborting cycle, will retry") from exc
-    return json.loads(json.dumps(_FRESH_STATE))
+    fresh = json.loads(json.dumps(_FRESH_STATE))
+    fresh.update(_carry_omni_identity(data))
+    return fresh
 
 
 def parse_number_key(value: object) -> int | None:

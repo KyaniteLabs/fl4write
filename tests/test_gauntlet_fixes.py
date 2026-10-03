@@ -2007,6 +2007,29 @@ class TestMECERound5SolPins:
         assert st["merged_since"] == "2026-09-01T00:00:00Z"
         assert st["retro_seen"] == {"1": True}
 
+    def test_reconcile_carries_validated_omni_identity(self, tmp_path):
+        from fl4write.state import load_state
+
+        p = tmp_path / "s.json"
+        # shape-wrong but parseable: omni identity survives, prs reset
+        p.write_text('{"version": 999, "prs": {"1": {}}, "omni_issue": 42, '
+                     '"omni_complete": true, "omni_findings": [{"id": 1}], '
+                     '"omni_head": "abc", "omni_issue_typo": "x"}', encoding="utf-8")
+        st = load_state(p)
+        assert st["prs"] == {}
+        assert st["omni_issue"] == 42 and st["omni_complete"] is True
+        assert st["omni_findings"] == [{"id": 1}] and st["omni_head"] == "abc"
+        assert "omni_issue_typo" not in st
+        # mistyped omni values are dropped, not carried
+        p.write_text('{"version": "v1", "omni_issue": "42", "omni_complete": 1}',
+                     encoding="utf-8")
+        st = load_state(p)
+        assert "omni_issue" not in st and "omni_complete" not in st
+        # truly unreadable bytes still reset fully
+        p.write_bytes(b"\xff\xfe{corrupt")
+        st = load_state(p)
+        assert st["prs"] == {} and "omni_issue" not in st
+
     # -- F5-010: bounded top-level lane belts ---------------------------------
 
     def test_prune_garbage_collects_top_level_belts(self, tmp_path):
