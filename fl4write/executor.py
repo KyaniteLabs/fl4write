@@ -38,6 +38,7 @@ import re
 import os
 import shutil
 import shlex
+import signal
 import stat
 import subprocess
 import tempfile
@@ -75,17 +76,55 @@ _SECRET_ENV_KEYS = ("GITHUB_TOKEN", "CODESITTER", "MINIMAX", "ANTHROPIC", "OPENA
 
 
 def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 120,
-         env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    """Run a fixed-argv subprocess (no shell) with optional timeout and env."""
-    return subprocess.run(  # fixed argv, no shell
+         env: dict[str, str] | None = None, new_session: bool = False) -> subprocess.CompletedProcess[str]:
+    """Run a fixed-argv subprocess (no shell) with optional timeout and env.
 
-        cmd,
-        cwd=str(cwd) if cwd else None,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env=env,
-    )
+    Cycle-5: new_session=True starts the child as a process-group leader
+    and kills the whole group on return — a test that backgrounds a
+    daemon (setsid writer outliving the suite) can no longer rewrite
+    evidence or the workdir after the verdict was read. Timeout keeps the
+    subprocess.TimeoutExpired contract. Git plumbing callers keep False.
+    """
+    if not new_session:
+        return subprocess.run(  # fixed argv, no shell
+
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    proc = subprocess.Popen(
+        cmd, cwd=str(cwd) if cwd else None,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, env=env, start_new_session=True)
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        pgid = None
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_group(pgid)
+        out, err = proc.communicate()
+        raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
+    _kill_group(pgid)
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
+def _kill_group(pgid: int | None) -> None:
+    """Best-effort SIGKILL of the whole process group (straggler daemons).
+
+    The pgid is captured before communicate() — looking it up after the
+    leader is reaped misses the surviving group (observed live).
+    """
+    if pgid is None:
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
 
 
 def _sandbox_home() -> str:
@@ -290,7 +329,8 @@ def _pytest_evidence(argv: list[str], cwd: Path, timeout: int,
     except ValueError:
         sep = len(xml_argv)
     xml_argv = xml_argv[:sep] + ["--junitxml", str(junit_path)] + xml_argv[sep:]
-    result = _run(xml_argv, cwd=cwd, timeout=timeout, env=env)
+    result = _run(xml_argv, cwd=cwd, timeout=timeout, env=env,
+                   new_session=True)
     if result.returncode != 0:
         return False, result
     try:
@@ -913,7 +953,8 @@ def verify_diff_tests(pr: PullRequest, config: RepoConfig, test_files: list[str]
             # chained or non-pytest runner: no host-controlled evidence yet —
             # rc is the only signal; a zero-exit with NO output is treated as
             # UNPROVEN (never a clean claim, never a false "did not run")
-            result = _run(argv, cwd=workdir, timeout=config.test_timeout, env=env)
+            result = _run(argv, cwd=workdir, timeout=config.test_timeout, env=env,
+                          new_session=True)
             green = result.returncode == 0
             if green and not f"{result.stdout}\n{result.stderr}".strip():
                 green = False
@@ -980,6 +1021,16 @@ def open_issue(repo: str, title: str, body: str) -> int:
     stays comment-only; this is the one bounded exception, config-gated by
     ci_watch.escalate_issues."""
     return _gh_api("POST", f"/repos/{repo}/issues", {"title": title, "body": body})["number"]
+
+
+def _combined_status(config: RepoConfig, sha: str) -> str | None:
+    """Combined commit-status state for one SHA, or None when unqueryable
+    (probe failure reads as not-green at every call site)."""
+    try:
+        combined = _gh_api("GET", f"/repos/{config.repo}/commits/{sha}/status")
+    except Exception:  # noqa: BLE001 - status probe failure = not green
+        return None
+    return (combined or {}).get("state") if isinstance(combined, dict) else None
 
 
 def check_and_merge_own_prs(config: RepoConfig, bot_identity: str,
@@ -1085,13 +1136,15 @@ def check_and_merge_own_prs(config: RepoConfig, bot_identity: str,
                 ci_green = False  # F12-B004: partial evidence never merges
             # F8-005: legacy commit STATUSES also gate — check-runs green with
             # a failing commit status must never authorize a merge
-            try:
-                combined = _gh_api("GET",
-                                   f"/repos/{config.repo}/commits/{pr_data['head']['sha']}/status")
-            except Exception:  # noqa: BLE001 - status probe failure = not green
-                combined = {}
-            combined_state = (combined or {}).get("state") if isinstance(combined, dict) else None
+            combined_state = _combined_status(config, pr_data["head"]["sha"])
             if combined_state != "success":
+                ci_green = False
+            # Cycle-5: re-probe combined status immediately before the PUT —
+            # the scan above can be minutes old on CI-heavy repos. This
+            # narrows (not closes: no atomic primitive) the red-flip window.
+            if ci_green and _combined_status(config, pr_data["head"]["sha"]) != "success":
+                log.warning("merge of %s#%s deferred: status flipped since scan",
+                            config.repo, number)
                 ci_green = False
             # The gate re-verifies authorship + CI IN CODE. is_own_identity
             # accepts the current + legacy bot slugs across renames.

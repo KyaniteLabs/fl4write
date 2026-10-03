@@ -672,7 +672,8 @@ def _test(command: list[str], tree: Path, evidence: Path, timeout: int, *, isola
     elif isolation == "process":
         home = tempfile.mkdtemp(prefix="fl4write-exhaustive-test-")
         try:
-            done = _run(argv, tree, timeout, _sandbox_env_for(home))
+            done = _run(argv, tree, timeout, _sandbox_env_for(home),
+                            new_session=True)
         finally:
             shutil.rmtree(home, ignore_errors=True)
     else:
