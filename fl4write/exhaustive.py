@@ -578,16 +578,22 @@ def _junit(path: Path):
         raise NonGreen(f"JUnit evidence unreadable: {exc}") from exc
     ids: set[str] = set()
 
+    def _local(tag: str) -> str:
+        # Cycle-1 fix: namespaced documents parse as "{ns}testsuite",
+        # which the exact-match walk rejected — certification unwinnable.
+        # JUnit semantics live in the local name.
+        return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
     def walk(node):
-        if node.tag not in {"testsuites", "testsuite"}:
+        if _local(node.tag) not in {"testsuites", "testsuite"}:
             raise NonGreen("JUnit unsupported root, namespace, or suite")
         counts = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
         for child in node:
-            if child.tag in {"testsuite", "testsuites"}:
+            if _local(child.tag) in {"testsuite", "testsuites"}:
                 subtotal = walk(child)
                 for key in counts:
                     counts[key] += subtotal[key]
-            elif child.tag == "testcase" and node.tag == "testsuite":
+            elif _local(child.tag) == "testcase" and _local(node.tag) == "testsuite":
                 name = child.get("name", "")
                 identity = f"{child.get('classname', '')}::{name}"
                 if not name.strip() or identity in ids:
@@ -596,15 +602,15 @@ def _junit(path: Path):
                 counts["tests"] += 1
                 outcomes = []
                 for detail in child:
-                    if detail.tag in {"failure", "error", "skipped"}:
-                        outcomes.append(detail.tag)
-                    elif detail.tag not in {"properties", "system-out", "system-err"}:
+                    if _local(detail.tag) in {"failure", "error", "skipped"}:
+                        outcomes.append(_local(detail.tag))
+                    elif _local(detail.tag) not in {"properties", "system-out", "system-err"}:
                         raise NonGreen("JUnit unsupported testcase shape")
                 if len(outcomes) > 1:
                     raise NonGreen("JUnit contradictory testcase outcomes")
                 for outcome in outcomes:
                     counts[{"failure": "failures", "error": "errors", "skipped": "skipped"}[outcome]] += 1
-            elif child.tag not in {"properties", "system-out", "system-err"}:
+            elif _local(child.tag) not in {"properties", "system-out", "system-err"}:
                 raise NonGreen("JUnit unsupported suite child")
         for key, actual in counts.items():
             if key in node.attrib and _number(node.get(key), key) != actual:

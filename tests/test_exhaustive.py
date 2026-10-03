@@ -188,6 +188,25 @@ def test_malformed_junit_is_contained(tmp_path: Path, xml: str):
         exhaustive._junit(path)
 
 
+def test_namespaced_junit_evaluated_green(tmp_path: Path):
+    path = tmp_path / "junit.xml"
+    path.write_text(
+        '<testsuite xmlns="http://maven.apache.org/surefire" tests="1">'
+        '<testcase classname="t" name="test_one"/></testsuite>')
+    ids, green, _ = exhaustive._junit(path)
+    assert green is True and ids == {"t::test_one"}
+
+
+def test_namespaced_junit_red_case_counts(tmp_path: Path):
+    path = tmp_path / "junit.xml"
+    path.write_text(
+        '<testsuites><testsuite xmlns="urn:junit" tests="1" failures="1">'
+        '<testcase classname="t" name="test_one"><failure/></testcase>'
+        "</testsuite></testsuites>")
+    _, green, _ = exhaustive._junit(path)
+    assert green is False
+
+
 @pytest.mark.parametrize("attribute", ["failures", "errors", "skipped"])
 def test_aggregate_bad_junit_is_rejected_without_child_nodes(tmp_path: Path, attribute: str):
     path = tmp_path / "junit.xml"
