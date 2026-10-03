@@ -64,6 +64,20 @@ class ForgeError(RuntimeError):
     pass
 
 
+# Cycle-2: bound every forge body read (a hostile/compromised forge or a
+# runaway diff endpoint must not OOM the cycle). Mirrors model_proxy's
+# read(MAX+1) overflow shape; callers already degrade ForgeError to
+# None (unqueryable), so oversize degrades, never crashes.
+MAX_BODY = 8 * 1024 * 1024
+
+
+def _bounded_read(resp: Any, forge: str, method: str, path: str) -> bytes:
+    body = resp.read(MAX_BODY + 1)
+    if len(body) > MAX_BODY:
+        raise ForgeError(f"{forge} {method} {path}: response exceeds {MAX_BODY} bytes")
+    return body
+
+
 class ForgeAdapter:
     name = "base"
     page_size_param = "per_page"  # Gitea/Forgejo uses `limit`
@@ -92,7 +106,7 @@ class ForgeAdapter:
         )
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
-                body = resp.read().decode()
+                body = _bounded_read(resp, self.name, method, path).decode()
                 try:
                     return json.loads(body) if body else {}
                 except ValueError as exc:  # MECE round-3 (terra F3-002): a 2xx
@@ -138,7 +152,7 @@ class ForgeAdapter:
         )
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
-                return resp.read().decode()
+                return _bounded_read(resp, self.name, method, path).decode()
         except urllib.error.HTTPError as exc:
             if method == "GET" and _retry and exc.code in (403, 429, 500, 502, 503, 504):
                 wait = 0.0
