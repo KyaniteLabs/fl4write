@@ -42,7 +42,7 @@ def test_nested_junit_aggregates_and_red_cases(tmp_path):
 
 
 @pytest.mark.parametrize("xml", [
-    '<testsuites xmlns="urn:unknown"><testsuite tests="1"><testcase name="n"/></testsuite></testsuites>',
+    '<testsuites xmlns:t="urn:unknown"><testsuite tests="1"><t:testcase name="n"/></testsuite></testsuites>',
     '<testsuite tests="+1"><testcase name="n"/></testsuite>',
     '<testsuite tests="1"><testcase name="n"><failure/><skipped/></testcase></testsuite>',
     '<testsuite tests="2"><testcase name="n"/><testcase name="n"/></testsuite>',

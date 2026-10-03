@@ -578,16 +578,31 @@ def _junit(path: Path):
         raise NonGreen(f"JUnit evidence unreadable: {exc}") from exc
     ids: set[str] = set()
 
+    def _local(tag: str) -> str:
+        # Cycle-1 fix: uniformly-namespaced documents (surefire et al.)
+        # parse as "{ns}testsuite", which the exact-match walk rejected —
+        # certification unwinnable. JUnit semantics live in the local name,
+        # but MIXED namespaces stay fatal: elements from two vocabularies
+        # in one document are ambiguous evidence, not a dialect.
+        return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+    def _ns(tag: str) -> str:
+        return tag.rsplit("}", 1)[0] + "}" if "}" in tag else ""
+
+    seen_ns = {_ns(el.tag) for el in root.iter()}
+    if len(seen_ns) > 1:
+        raise NonGreen("JUnit mixed namespaces across elements")
+
     def walk(node):
-        if node.tag not in {"testsuites", "testsuite"}:
+        if _local(node.tag) not in {"testsuites", "testsuite"}:
             raise NonGreen("JUnit unsupported root, namespace, or suite")
         counts = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
         for child in node:
-            if child.tag in {"testsuite", "testsuites"}:
+            if _local(child.tag) in {"testsuite", "testsuites"}:
                 subtotal = walk(child)
                 for key in counts:
                     counts[key] += subtotal[key]
-            elif child.tag == "testcase" and node.tag == "testsuite":
+            elif _local(child.tag) == "testcase" and _local(node.tag) == "testsuite":
                 name = child.get("name", "")
                 identity = f"{child.get('classname', '')}::{name}"
                 if not name.strip() or identity in ids:
@@ -596,15 +611,15 @@ def _junit(path: Path):
                 counts["tests"] += 1
                 outcomes = []
                 for detail in child:
-                    if detail.tag in {"failure", "error", "skipped"}:
-                        outcomes.append(detail.tag)
-                    elif detail.tag not in {"properties", "system-out", "system-err"}:
+                    if _local(detail.tag) in {"failure", "error", "skipped"}:
+                        outcomes.append(_local(detail.tag))
+                    elif _local(detail.tag) not in {"properties", "system-out", "system-err"}:
                         raise NonGreen("JUnit unsupported testcase shape")
                 if len(outcomes) > 1:
                     raise NonGreen("JUnit contradictory testcase outcomes")
                 for outcome in outcomes:
                     counts[{"failure": "failures", "error": "errors", "skipped": "skipped"}[outcome]] += 1
-            elif child.tag not in {"properties", "system-out", "system-err"}:
+            elif _local(child.tag) not in {"properties", "system-out", "system-err"}:
                 raise NonGreen("JUnit unsupported suite child")
         for key, actual in counts.items():
             if key in node.attrib and _number(node.get(key), key) != actual:
@@ -620,9 +635,12 @@ def _junit(path: Path):
 
 def _test(command: list[str], tree: Path, evidence: Path, timeout: int, *, isolation="process", image=None,
           model_proxy=None):
-    argv = [str(evidence) if x == "{junit}" else x for x in command]
-    if str(evidence) not in argv:
-        raise NonGreen("test command requires standalone {junit}")
+    # Cycle-1: the evidence token may also ride embedded in an argument
+    # (e.g. --junit-xml={junit}.xml); it must still appear exactly once in
+    # the substituted argv so the runner knows where evidence lands.
+    argv = [x.replace("{junit}", str(evidence)) if "{junit}" in x else x for x in command]
+    if sum(a.count(str(evidence)) for a in argv) != 1:
+        raise NonGreen("test command requires {junit} exactly once")
     cleanup_note = ""
     if isolation == "docker":
         from .exhaustive_sandbox import SandboxCleanupPending, SandboxUnavailable, run_isolated

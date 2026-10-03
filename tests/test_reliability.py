@@ -152,6 +152,25 @@ class TestDeterminismMetrics:
         assert m["min_agreement"] == pytest.approx(0.75)
         assert m["total_runs"] == 9
 
+    def test_outage_runs_do_not_score_stability(self):
+        recs = [_rec("c", "cls", SIG_C, "clean", False, {}) for _ in range(5)]
+        for r in recs:
+            r.update(flag="error", signature=[], severity_counts={},
+                     error="route down")
+        m = determinism_metrics(recs)
+        assert m["per_case"]["c"]["agreement_rate"] == 0.0
+        assert m["mean_agreement"] == 0.0
+        assert m["errors"] == 5
+
+    def test_partial_outage_excluded_from_agreement(self):
+        recs = ([_rec("c", "cls", SIG_A, "defect", True, {"Major": 1})] * 4)
+        err = _rec("c", "cls", SIG_C, "clean", False, {})
+        err.update(flag="error", signature=[], severity_counts={},
+                   error="route down")
+        m = determinism_metrics(recs + [err])
+        assert m["per_case"]["c"]["agreement_rate"] == 1.0
+        assert m["per_case"]["c"]["errors"] == 1
+
 
 class TestRecallMetrics:
     def test_trend_row_uses_case_counts(self):
@@ -287,6 +306,15 @@ class TestFpMetrics:
         assert m["noise_fp_rate"] == pytest.approx(0.5)
         assert m["actionable_fp_rate"] == pytest.approx(0.25)
         assert m["flagged_case_ids"] == ["k2", "k3"]
+
+    def test_outage_is_missing_data_not_clean(self):
+        recs = [_rec("k1", "", SIG_C, "clean", False, {}) for _ in range(3)]
+        for r in recs:
+            r.update(flag="error", error="route down")
+        m = fp_metrics(recs)
+        assert m["clean_cases"] == 0
+        assert m["errors"] == 3
+        assert m["actionable_fp_rate"] == 0.0
 
 
 class TestSeverityCalibration:
@@ -474,6 +502,8 @@ class TestRunnerOffline:
         assert det["errors"] == 2 and det["per_case"]["clean-pagination"]["runs"] == 2
         assert all(r["flag"] == "error" for r in report["records"]["recall"])
         assert report["recall"]["recall_any"] == 0.0
+        budget = report["call_budget"]
+        assert budget["failed_calls"] == budget["real_calls"] > 0
 
 
 # ---------------------------------------------------------------------------
@@ -514,9 +544,12 @@ class TestConfigAndGates:
             record = _rec(case["id"], cls, SIG_A if cls else SIG_C,
                           "defect" if cls else "clean", bool(cls),
                           {"Major": 1} if cls else {})
-            # All repeated determinism samples fail identically; one failed
-            # recall/clean case still leaves the configured numeric bars green.
-            if lane == failed_lane and (lane == "determinism" or calls == det_calls + 1
+            # Determinism errors hit only the first run of each pair, so the
+            # surviving runs still agree (metrics stay green, isolating the
+            # error gate); one failed recall/clean case likewise leaves the
+            # configured numeric bars green.
+            det_err = lane == "determinism" and (calls % 2 == 1)
+            if lane == failed_lane and (det_err or calls == det_calls + 1
                                         or calls == det_calls + len(corpus.DEFECT_CASES) + 1):
                 record.update(flag="error", actionable=False, signature=[],
                               severity_counts={}, error="route unavailable")

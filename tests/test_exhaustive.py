@@ -188,6 +188,61 @@ def test_malformed_junit_is_contained(tmp_path: Path, xml: str):
         exhaustive._junit(path)
 
 
+def test_namespaced_junit_evaluated_green(tmp_path: Path):
+    path = tmp_path / "junit.xml"
+    path.write_text(
+        '<testsuite xmlns="http://maven.apache.org/surefire" tests="1">'
+        '<testcase classname="t" name="test_one"/></testsuite>')
+    ids, green, _ = exhaustive._junit(path)
+    assert green is True and ids == {"t::test_one"}
+
+
+def test_namespaced_junit_red_case_counts(tmp_path: Path):
+    path = tmp_path / "junit.xml"
+    path.write_text(
+        '<testsuites xmlns="urn:junit"><testsuite tests="1" failures="1">'
+        '<testcase classname="t" name="test_one"><failure/></testcase>'
+        "</testsuite></testsuites>")
+    _, green, _ = exhaustive._junit(path)
+    assert green is False
+
+
+def test_mixed_namespace_junit_stays_ambiguous(tmp_path: Path):
+    path = tmp_path / "junit.xml"
+    path.write_text(
+        '<testsuites xmlns:t="urn:other"><testsuite tests="1">'
+        '<t:testcase classname="t" name="test_one"/></testsuite></testsuites>')
+    with pytest.raises(exhaustive.NonGreen, match="namespace"):
+        exhaustive._junit(path)
+
+
+def _green_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def fake_run(argv, tree, timeout, env):
+        (tmp_path / "suite.xml").write_text(
+            '<testsuite tests="1"><testcase classname="t" name="t"/></testsuite>')
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+    monkeypatch.setattr(exhaustive, "_run", fake_run)
+
+
+def test_embedded_junit_token_substituted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _green_run(monkeypatch, tmp_path)
+    ids, _ = exhaustive._test(
+        ["runner", "--junit-xml={junit}.xml"], tmp_path, tmp_path / "suite.xml", 60)
+    assert ids == {"t::t"}
+
+
+def test_missing_junit_token_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _green_run(monkeypatch, tmp_path)
+    with pytest.raises(exhaustive.NonGreen, match="exactly once"):
+        exhaustive._test(["runner", "--junit-xml=out.xml"], tmp_path, tmp_path / "suite.xml", 60)
+
+
+def test_doubled_junit_token_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _green_run(monkeypatch, tmp_path)
+    with pytest.raises(exhaustive.NonGreen, match="exactly once"):
+        exhaustive._test(["runner", "{junit}", "{junit}"], tmp_path, tmp_path / "suite.xml", 60)
+
+
 @pytest.mark.parametrize("attribute", ["failures", "errors", "skipped"])
 def test_aggregate_bad_junit_is_rejected_without_child_nodes(tmp_path: Path, attribute: str):
     path = tmp_path / "junit.xml"

@@ -313,3 +313,24 @@ class TestCalibrationSnapshotEdgeCases:
         out = tel.calibration_snapshot()
         assert out["a"].startswith("1/2"), out
         assert out["b"].startswith("0/1"), out
+
+
+class TestStreamPathGuard:
+    def _resolve(self, monkeypatch, value):
+        monkeypatch.setenv("FL4WRITE_TELEMETRY", value)
+        monkeypatch.setattr(tel, "_STREAM", None)
+        try:
+            return tel._path()
+        finally:
+            monkeypatch.setattr(tel, "_STREAM", None)
+
+    def test_git_hook_path_refused(self, tmp_path, monkeypatch):
+        hook = str(tmp_path / "repo" / ".git" / "hooks" / "pre-commit")
+        assert self._resolve(monkeypatch, hook).name == "telemetry.jsonl"
+
+    def test_non_log_suffix_refused(self, tmp_path, monkeypatch):
+        assert self._resolve(monkeypatch, str(tmp_path / "out.txt")).suffix == ".jsonl"
+
+    def test_jsonl_path_accepted(self, tmp_path, monkeypatch):
+        p = self._resolve(monkeypatch, str(tmp_path / "custom.jsonl"))
+        assert p == tmp_path / "custom.jsonl"
