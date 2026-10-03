@@ -31,7 +31,8 @@ DEFAULT_INSTALLATION_ID = 129423294  # KyaniteLabs org — used when no repo giv
 KEY_PATH = Path.home() / ".sinter" / "forgejo" / "github-app-key.pem"
 
 # installation_id -> (token, minted_at). Tokens last 1h; 50min refresh margin.
-_TOKEN_CACHE: dict[int, tuple[str, float]] = {}
+# Scoped single-repo tokens share the cache under ("scoped", id, repo) keys.
+_TOKEN_CACHE: dict = {}
 _TOKEN_TTL = 50 * 60
 
 
@@ -148,7 +149,12 @@ def verified_app_login() -> str:
 
 
 def get_repository_token(repo: str, bot_login: str) -> str:
-    """Mint a fresh single-repository token with only exhaustive-workflow rights."""
+    """Mint a fresh single-repository token with only exhaustive-workflow rights.
+
+    Cycle-3: scoped tokens are cached like installation tokens (same 50m
+    TTL) — previously every call cost verify + resolve + mint, so a tight
+    fix/publish retry loop self-DoSed into secondary rate limits.
+    """
     import re
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
@@ -156,6 +162,10 @@ def get_repository_token(repo: str, bot_login: str) -> str:
     if verified_app_login() != bot_login:
         raise RuntimeError("configured bot does not match the signing GitHub App")
     installation_id = resolve_installation_id(repo)
+    cache_key = ("scoped", installation_id, repo)
+    cached = _TOKEN_CACHE.get(cache_key)
+    if cached and time.time() - cached[1] < _TOKEN_TTL:
+        return cached[0]
     permissions = {"contents": "write", "pull_requests": "write", "issues": "write",
                    "actions": "read", "statuses": "read"}
     req = urllib.request.Request(
@@ -176,4 +186,5 @@ def get_repository_token(repo: str, bot_login: str) -> str:
             or not isinstance(data.get("permissions"), dict)
             or any(data["permissions"].get(k) != v for k, v in permissions.items())):
         raise RuntimeError("GitHub App token scope could not be verified")
+    _TOKEN_CACHE[cache_key] = (token, time.time())
     return token

@@ -35,6 +35,33 @@ def test_app_identity_mismatch_stops_before_mint(monkeypatch):
         appauth.get_repository_token("acme/widget", "fl4write[bot]")
 
 
+def test_scoped_token_cached_with_ttl(monkeypatch):
+    appauth._TOKEN_CACHE.clear()
+    monkeypatch.setattr(appauth, "verified_app_login", lambda: "fl4write[bot]")
+    monkeypatch.setattr(appauth, "resolve_installation_id", lambda repo: 7)
+    monkeypatch.setattr(appauth, "_make_jwt", lambda: "synthetic-jwt")
+    calls = {"n": 0}
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self):
+            return json.dumps({"token": "t", "repositories": [{"full_name": "acme/widget"}],
+                               "permissions": {"contents": "write", "pull_requests": "write",
+                                               "issues": "write", "actions": "read",
+                                               "statuses": "read"}}).encode()
+
+    def open_request(request, timeout):
+        calls["n"] += 1
+        return Response()
+
+    monkeypatch.setattr(appauth.urllib.request, "urlopen", open_request)
+    assert appauth.get_repository_token("acme/widget", "fl4write[bot]") == "t"
+    assert appauth.get_repository_token("acme/widget", "fl4write[bot]") == "t"
+    assert calls["n"] == 1, "second call must serve cache, not re-mint"
+    appauth._TOKEN_CACHE.clear()
+
+
 def test_verified_app_login_requires_exact_signing_app_id(monkeypatch):
     monkeypatch.setattr(appauth, "_api", lambda *a: {"id": appauth.APP_ID + 1, "slug": "fl4write"})
     with pytest.raises(RuntimeError, match="identity"):
