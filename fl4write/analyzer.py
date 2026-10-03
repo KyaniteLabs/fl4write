@@ -784,7 +784,8 @@ def analyze(
             # survives only because of the wide 60-line slack. Counted for
             # the future tighten-or-keep decision; nothing is dropped here.
             from . import telemetry as _tel_gate
-            _tel_gate.emit("slack_reliance", rule_id=f.rule_id)
+            _tel_gate.emit("slack_reliance", rule_id=f.rule_id,
+                           path=f.path, line=f.line)
         # L1-B4 severity-integrity gate (2026-09-03 adjudication sample, council
         # consult CTO+CS): a finding whose own body concludes "passes / no issue /
         # no failure / no change needed" refutes itself and may not post at any

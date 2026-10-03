@@ -94,7 +94,7 @@ class TestTruncatedGrounding:
         )
         doc = analyze(_pr(), {"a.py"}, diff, _config())
         assert [f.path for f in doc.findings] == ["a.py"]
-        assert ("slack_reliance", {"rule_id": "general"}) in events
+        assert ("slack_reliance", {"rule_id": "general", "path": "a.py", "line": 30}) in events
 
     def test_tight_slack_hit_emits_nothing(self, monkeypatch):
         from fl4write import telemetry as tel
