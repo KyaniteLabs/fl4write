@@ -709,6 +709,11 @@ def analyze(
     findings: list[Finding] = []
     dropped: list[str] = []
     _diff_truncated = mode != "file" and len(diff_text or "") > MAX_DIFF_CHARS
+    # Cycle-1 fix: the gates below must judge the text the model actually
+    # saw (the truncated slice), not the full diff — checking the full text
+    # accepted findings on hunks that were never sent (inert guard).
+    _seen_text = scrub.controls((diff_text or "")[:source_limit]) \
+        if _diff_truncated else (diff_text or "")
     for item in items:
         try:
             if not isinstance(item, dict):
@@ -737,7 +742,7 @@ def analyze(
         if f.path not in diff_files:
             dropped.append(f"path not in diff {f.path}:{f.line}")
             continue
-        if _diff_truncated and f.path not in _diff_path_texts(diff_text or ""):
+        if _diff_truncated and f.path not in _diff_path_texts(_seen_text):
             # F14-A02: with a truncated diff, an absent hunk map means the
             # finding's evidence is simply NOT HERE — never accept it
             dropped.append(f"no hunks in truncated diff {f.path}:{f.line}")
@@ -755,7 +760,7 @@ def analyze(
                 dropped.append(
                     f"line {f.line} beyond file length {_n_lines} {f.path} ({f.rule_id})")
                 continue
-        if _line_outside_diff(f.path, f.line, diff_text):
+        if _line_outside_diff(f.path, f.line, _seen_text):
             # MECE round-1 (terra F1-03): the anchor must plausibly exist in
             # the changed file (a probe posted line 999999 on a 50-line diff)
             dropped.append(f"line {f.line} beyond diff spans {f.path} ({f.rule_id})")
