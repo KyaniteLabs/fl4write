@@ -64,10 +64,15 @@ fi
 # Cycle-4: strip exactly one wrapping quote layer (single or double).
 # The old `tr -d '"'` deleted every INTERIOR quote and never touched
 # single quotes, so export K='"v"' and export K='v' both authed 401.
+# Review round 2: also tolerate trailing whitespace and trailing
+# `# comments` (comment stripping skips quote-led values so quoted
+# secrets containing ` #` survive; unbalanced quotes stay visibly broken).
 _bashrc_export() {  # $1 = VAR name; prints the unquoted value or nothing
     grep -E "^[[:space:]]*export[[:space:]]+$1=" ~/.bashrc 2>/dev/null \
         | head -1 | cut -d= -f2- \
-        | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+        | sed -e "/^[\"']/!s/[[:space:]][[:space:]]*#.*$//" \
+              -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+              -e 's/^"\([^"]*\)".*$/\1/' -e "s/^'\([^']*\)'.*$/\1/"
 }
 if [ -z "${CODESITTER_DEEPSEEK_KEY:-}" ]; then
     export CODESITTER_DEEPSEEK_KEY=$(_bashrc_export CODESITTER_DEEPSEEK_KEY)

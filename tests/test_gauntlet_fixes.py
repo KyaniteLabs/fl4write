@@ -3069,9 +3069,10 @@ class TestMECERound7BE:
         assert m, "helper body not found"
         (tmp_path / ".bashrc").write_text(
             "export CODESITTER_DEEPSEEK_KEY='sq'\n"
-            'export CODESITTER_FORGEJO_TOKEN="dq"\n'
-            "export PADDED=bare\n"
-            'export INNER=\'a"b\'\n')
+            'export CODESITTER_FORGEJO_TOKEN="dq" \n'
+            "export PADDED=bare # comment\n"
+            'export INNER=\'a"b\'\n'
+            "export HASHED='a # b'\n")
         helper = tmp_path / "helper.sh"
         helper.write_text(m.group(0) + "\n_bashrc_export \"$1\"\n")
         home = {"HOME": str(tmp_path)}
@@ -3083,9 +3084,10 @@ class TestMECERound7BE:
             return out.stdout.strip()
 
         assert val("CODESITTER_DEEPSEEK_KEY") == "sq"
-        assert val("CODESITTER_FORGEJO_TOKEN") == "dq"
-        assert val("PADDED") == "bare"
+        assert val("CODESITTER_FORGEJO_TOKEN") == "dq"  # trailing space tolerated
+        assert val("PADDED") == "bare"  # trailing comment stripped
         assert val("INNER") == 'a"b'  # interior quotes survive
+        assert val("HASHED") == "a # b"  # quoted hashes survive
         assert val("MISSING") == ""
 
 

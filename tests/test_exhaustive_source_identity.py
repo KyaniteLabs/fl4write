@@ -184,6 +184,19 @@ def test_boundary_spanning_quote_drops_instead_of_killing_round():
     assert kept[0]['line'] == 3
 
 
+def test_boundary_drop_is_logged_for_sensitivity_audits(caplog):
+    """Review round 2: edge-straddling drops must be observable."""
+    import logging
+
+    source = 'alpha\nbeta\ngamma\ndelta\n'
+    row = {'path': 'value.txt', 'line': 2, 'evidence': 'beta\ngamma\ndelta',
+           'severity': 'Minor', 'message': 'fixture'}
+    with caplog.at_level(logging.DEBUG, logger="fl4write.exhaustive"):
+        assert exhaustive._validated(
+            {'findings': [row]}, 'value.txt', 1, 2, source) == []
+    assert "recon boundary drop value.txt:2 (chunk 1-2)" in caplog.text
+
+
 def test_fabricated_quote_still_kills_round():
     """Content absent from the source remains fatal — the boundary
     leniency only covers verbatim-nearby quotes."""

@@ -6,6 +6,7 @@ import argparse
 from contextlib import ExitStack
 import hashlib
 import json
+import logging
 import os
 import re
 import shlex
@@ -27,6 +28,8 @@ from .exhaustive_adjudication import AdjudicationError, apply_decision, verified
 from .model_proxy import ProxyError
 from .forges import ForgeAdapter, adapter_for
 from .state import CycleLock, CycleLockHeld
+
+log = logging.getLogger("fl4write.exhaustive")
 
 VERSION, GREEN_REQUIRED, DEFAULT_CHUNK_CHARS = 4, 3, 48_000
 
@@ -406,6 +409,10 @@ def _validated(value: Any, path: str, start: int, end: int, source: str):
             # artifact, not a hallucination. Drop the row (the defect's
             # own chunk pass can still surface it) instead of killing
             # the round. Content absent from source stays fatal below.
+            # Review round 2: debug-log the drop so sensitivity loss
+            # from edge-straddling quotes stays observable.
+            log.debug("recon boundary drop %s:%s (chunk %s-%s)",
+                      path, line, start, end)
             continue
         if grounded_line is None:
             from .scrub import redact_credentials
