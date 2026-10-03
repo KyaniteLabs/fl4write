@@ -226,6 +226,21 @@ class TestRecallMetrics:
         }, "empty.json")
         assert row["recall_any"] == "0/0"
         assert row["severity_precision"] is None
+        assert row["worst_severity_precision"] is None
+
+    def test_trend_row_exposes_worst_severity(self):
+        row = rel.trend_row({
+            "route": {"model": "t", "endpoint": "e"},
+            "determinism": {"mean_agreement": 1.0, "min_agreement": 1.0},
+            "recall": {"per_class": {}},
+            "false_positives": {"actionable_fp_rate": 0.0, "noise_fp_rate": 0.0},
+            "calibration": {"table": {
+                "Critical": {"n": 1, "tp": 1, "fp": 0},
+                "Nit": {"n": 10, "tp": 0, "fp": 10},
+            }},
+        }, "skew.json")
+        assert row["severity_precision"] == round(1 / 11, 4)
+        assert row["worst_severity_precision"] == 0.0
 
     def test_trend_row_clamps_corrupt_counts(self):
         row = rel.trend_row({

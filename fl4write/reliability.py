@@ -318,6 +318,9 @@ def trend_row(report: dict, report_path: str = "") -> dict:
     tbl = report.get("calibration", {}).get("table", {})
     tp = sum(v.get("tp", 0) for v in tbl.values())
     fpn = sum(v.get("fp", 0) for v in tbl.values())
+    precisions = [v["tp"] / (v["tp"] + v["fp"]) for v in tbl.values()
+                  if isinstance(v.get("tp"), int) and isinstance(v.get("fp"), int)
+                  and v.get("tp", 0) + v.get("fp", 0) > 0]
     route = report.get("route", {})
     return {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -329,6 +332,9 @@ def trend_row(report: dict, report_path: str = "") -> dict:
         "actionable_fp": fp.get("actionable_fp_rate", 0.0),
         "noise_fp": fp.get("noise_fp_rate", 0.0),
         "severity_precision": round(tp / (tp + fpn), 4) if tp + fpn else None,
+        # Cycle-5: the aggregate above can hide a per-severity inversion
+        # (Critical 1/1 + Nit 0/10 reads ~0.09); the worst bar rides along.
+        "worst_severity_precision": round(min(precisions), 4) if precisions else None,
         "report": report_path,
     }
 
