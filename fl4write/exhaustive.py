@@ -85,9 +85,16 @@ class NonGreen(RuntimeError):
         self.evidence = evidence or {}
 
 
-def _run(argv: list[str], cwd: Path, timeout: int, env: dict[str, str]):
+def _run(argv: list[str], cwd: Path, timeout: int, env: dict[str, str],
+         new_session: bool = False):
+    # Cycle-5: single subprocess implementation lives in executor —
+    # delegate so process-group containment applies here too instead of
+    # forking a second runner. OSError/TimeoutExpired still become
+    # Deferred per this module's contract.
+    from .executor import _run as _exec_run
     try:
-        return subprocess.run(argv, cwd=cwd, env=env, text=True, capture_output=True, timeout=timeout)
+        return _exec_run(argv, cwd=cwd, timeout=timeout, env=env,
+                         new_session=new_session)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Deferred(f"process unavailable: {exc}") from exc
 

@@ -217,7 +217,7 @@ def test_mixed_namespace_junit_stays_ambiguous(tmp_path: Path):
 
 
 def _green_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    def fake_run(argv, tree, timeout, env):
+    def fake_run(argv, tree, timeout, env, new_session=False):
         (tmp_path / "suite.xml").write_text(
             '<testsuite tests="1"><testcase classname="t" name="t"/></testsuite>')
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")

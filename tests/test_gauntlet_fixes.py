@@ -466,7 +466,7 @@ class TestADVP4TestGaming:
         from fl4write.executor import verify_diff_tests
         import subprocess
 
-        def fake_run(cmd, cwd=None, timeout=120, env=None):
+        def fake_run(cmd, cwd=None, timeout=120, env=None, new_session=False):
             if "git" in cmd:
                 out = "a" * 40 if "rev-parse" in cmd else ""
                 return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
@@ -2303,7 +2303,7 @@ class TestMECERound6SolPins:
 
         captured: list = []
 
-        def fake_run(argv, cwd, timeout, env):
+        def fake_run(argv, cwd, timeout, env, new_session=False):
             captured.append(list(argv))
             return CompletedProcess(argv, 0, stdout=b"", stderr=b"")
 
@@ -3660,7 +3660,7 @@ class TestMECERound10Exec:
 
         bash_calls = []
 
-        def fake_run(cmd, cwd=None, timeout=120, env=None):
+        def fake_run(cmd, cwd=None, timeout=120, env=None, new_session=False):
             if cmd[0] == "bash":
                 bash_calls.append(cmd)
                 # a FAILING whole-suite chain (unrelated baseline red)
@@ -4048,7 +4048,7 @@ class TestMECERound11Exec:
 
         seen = {}
 
-        def fake_run(cmd, cwd=None, timeout=120, env=None):
+        def fake_run(cmd, cwd=None, timeout=120, env=None, new_session=False):
             seen["argv"] = list(cmd)
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         monkeypatch.setattr(ex, "_run", fake_run)
@@ -4122,7 +4122,7 @@ class TestMECERound11Exec:
         import subprocess
         from fl4write.executor import verify_diff_tests
 
-        def fake_run(cmd, cwd=None, timeout=120, env=None):
+        def fake_run(cmd, cwd=None, timeout=120, env=None, new_session=False):
             if cmd[0] == "python3":
                 junit = cmd[cmd.index("--junitxml") + 1]
                 Path(junit).parent.mkdir(parents=True, exist_ok=True)
