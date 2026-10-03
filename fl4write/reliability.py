@@ -316,8 +316,18 @@ def trend_row(report: dict, report_path: str = "") -> dict:
     caught = sum(c for _, c, _ in totals)
     caught_a = sum(a for _, _, a in totals)
     tbl = report.get("calibration", {}).get("table", {})
-    tp = sum(v.get("tp", 0) for v in tbl.values())
-    fpn = sum(v.get("fp", 0) for v in tbl.values())
+
+    def _count(row: dict, key: str) -> int:
+        # Cycle-5 review: one coercion for both the aggregate and the
+        # per-severity list (exact int; bools and junk read as 0).
+        value = row.get(key, 0) if isinstance(row, dict) else 0
+        return value if type(value) is int else 0
+
+    tp = sum(_count(v, "tp") for v in tbl.values())
+    fpn = sum(_count(v, "fp") for v in tbl.values())
+    precisions = [_count(v, "tp") / (_count(v, "tp") + _count(v, "fp"))
+                  for v in tbl.values()
+                  if _count(v, "tp") + _count(v, "fp") > 0]
     route = report.get("route", {})
     return {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -329,6 +339,9 @@ def trend_row(report: dict, report_path: str = "") -> dict:
         "actionable_fp": fp.get("actionable_fp_rate", 0.0),
         "noise_fp": fp.get("noise_fp_rate", 0.0),
         "severity_precision": round(tp / (tp + fpn), 4) if tp + fpn else None,
+        # Cycle-5: the aggregate above can hide a per-severity inversion
+        # (Critical 1/1 + Nit 0/10 reads ~0.09); the worst bar rides along.
+        "worst_severity_precision": round(min(precisions), 4) if precisions else None,
         "report": report_path,
     }
 

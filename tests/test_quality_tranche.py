@@ -20,6 +20,9 @@ Architect required. Each pins a live-caught failure class:
 from __future__ import annotations
 
 import json
+import time
+
+import pytest
 from pathlib import Path
 
 from fl4write import config as cfg
@@ -106,6 +109,24 @@ class TestExecutorPatchPrompt:
 
 
 class TestFixTelemetryAndFreshness:
+    def test_run_new_session_kills_backgrounded_daemon(self, tmp_path):
+        from fl4write import executor as ex
+        marker = tmp_path / "daemon-wrote"
+        # Detached stdio so communicate() returns at parent exit while the
+        # daemon outlives it (a bare & would hold the pipes instead).
+        rc = ex._run(["bash", "-c", f"(sleep 2; touch {marker}) >/dev/null 2>&1 &"],
+                     cwd=tmp_path, timeout=30, new_session=True)
+        assert rc.returncode == 0
+        time.sleep(4)  # daemon would write at ~2s if it survived
+        assert not marker.exists()
+
+    def test_run_timeout_keeps_contract(self, tmp_path):
+        import subprocess
+
+        from fl4write import executor as ex
+        with pytest.raises(subprocess.TimeoutExpired):
+            ex._run(["bash", "-c", "sleep 30"], cwd=tmp_path, timeout=1,
+                    new_session=True)
     def _forge(self):
         class F(ForgeAdapter):
             name = "github"
@@ -550,7 +571,7 @@ class TestVerifyDiffTests:
             def __init__(self, code, out):
                 self.returncode, self.stdout, self.stderr = code, out, ""
 
-        def fake_run(cmd, cwd=None, timeout=120, env=None):
+        def fake_run(cmd, cwd=None, timeout=120, env=None, new_session=False):
             if cmd[:2] == ["git", "init"]:
                 return R(0, "")
             if cmd[0] == "git":

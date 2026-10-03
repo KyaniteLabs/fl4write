@@ -466,7 +466,7 @@ class TestADVP4TestGaming:
         from fl4write.executor import verify_diff_tests
         import subprocess
 
-        def fake_run(cmd, cwd=None, timeout=120, env=None):
+        def fake_run(cmd, cwd=None, timeout=120, env=None, new_session=False):
             if "git" in cmd:
                 out = "a" * 40 if "rev-parse" in cmd else ""
                 return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
@@ -2303,7 +2303,7 @@ class TestMECERound6SolPins:
 
         captured: list = []
 
-        def fake_run(argv, cwd, timeout, env):
+        def fake_run(argv, cwd, timeout, env, new_session=False):
             captured.append(list(argv))
             return CompletedProcess(argv, 0, stdout=b"", stderr=b"")
 
@@ -2993,6 +2993,26 @@ class TestMECERound7BE:
         assert ex.check_and_merge_own_prs(c, "fl4write[bot]",
                                           deadline=time.monotonic() - 1) == []
 
+    def test_commit_green_returns_none_past_deadline(self, monkeypatch):
+        import time
+
+        from fl4write import executor as ex
+
+        def fail_api(*a, **k):
+            pytest.fail("no API reads past an expired deadline")
+
+        monkeypatch.setattr(ex, "_gh_api", fail_api)
+        import fl4write.config as cfg_mod
+        c = cfg_mod.RepoConfig.model_validate({
+            "repo": "o/r",
+            "forges": {"github": {"role": "primary", "api_base": "https://api.github.com",
+                                  "token_env": "GHT"}},
+            "model": {"endpoint": "http://m/v1", "model": "t", "key_env": "K"},
+            "fix": {"enabled": True, "merge_own_prs": True},
+        })
+        assert ex._commit_ci_green(c, "a" * 40, 3,
+                                   deadline=time.monotonic() - 1) is None
+
     def test_issues_watermark_normalized_at_lane_boundary(self, monkeypatch):
         import fl4write.issues as issues_mod
 
@@ -3089,6 +3109,10 @@ class TestMECERound7BE:
         assert val("INNER") == 'a"b'  # interior quotes survive
         assert val("HASHED") == "a # b"  # quoted hashes survive
         assert val("MISSING") == ""
+
+    def test_runner_fails_fast_on_invalid_gh_token(self):
+        rc = (REPO_ROOT / "run-cycle.sh").read_text()
+        assert "gh auth status --hostname github.com" in rc
 
 
 class TestMECERound8Pins:
@@ -3257,7 +3281,7 @@ class TestMECERound8SolB:
     def test_merge_gate_source_laws(self):
         src = (REPO_ROOT / "fl4write/executor.py").read_text()
         assert '"sha": pr_data["head"]["sha"]' in src  # F8-004 precondition
-        assert "/status" in src and "combined_state" in src  # F8-005
+        assert "/status" in src and "_combined_status" in src  # F8-005
         assert "fl4write-fix-test-" in src  # F8-002 isolation copy
         assert "compact = \"\".join(data[\"content\"].split())" in src  # F8-001
         # F8-006/F10-B001/E002: arity is modeled explicitly and anything
@@ -3656,7 +3680,7 @@ class TestMECERound10Exec:
 
         bash_calls = []
 
-        def fake_run(cmd, cwd=None, timeout=120, env=None):
+        def fake_run(cmd, cwd=None, timeout=120, env=None, new_session=False):
             if cmd[0] == "bash":
                 bash_calls.append(cmd)
                 # a FAILING whole-suite chain (unrelated baseline red)
@@ -4044,7 +4068,7 @@ class TestMECERound11Exec:
 
         seen = {}
 
-        def fake_run(cmd, cwd=None, timeout=120, env=None):
+        def fake_run(cmd, cwd=None, timeout=120, env=None, new_session=False):
             seen["argv"] = list(cmd)
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         monkeypatch.setattr(ex, "_run", fake_run)
@@ -4118,7 +4142,7 @@ class TestMECERound11Exec:
         import subprocess
         from fl4write.executor import verify_diff_tests
 
-        def fake_run(cmd, cwd=None, timeout=120, env=None):
+        def fake_run(cmd, cwd=None, timeout=120, env=None, new_session=False):
             if cmd[0] == "python3":
                 junit = cmd[cmd.index("--junitxml") + 1]
                 Path(junit).parent.mkdir(parents=True, exist_ok=True)
@@ -4912,6 +4936,64 @@ class TestMECERound13Pins:
         monkeypatch.setattr(ex, "_gh_api", fake_gh)
         merged = ex.check_and_merge_own_prs(_sol_config(), "fl4write[bot]")
         assert merged == []  # B7: unproven merge never reported merged
+
+    def test_status_flip_between_scan_and_put_defers_merge(self, monkeypatch):
+        from fl4write import executor as ex
+
+        calls = []
+
+        def fake_gh(method, path, data=None):
+            calls.append((method, path))
+            if method == "GET" and "pulls?state=open" in path:
+                return [{"number": 3, "head": {"ref": "fl4write/fix-1",
+                                              "sha": "a" * 40},
+                         "user": {"login": "fl4write[bot]"}}]
+            if method == "GET" and "check-runs" in path:
+                return {"check_runs": [{"status": "completed",
+                                        "conclusion": "success"}]}
+            if method == "GET" and path.endswith("/status"):
+                # First read (scan) green, re-probe before PUT red.
+                return {"state": "success"} if len(
+                    [c for c in calls if c[0] == "GET" and c[1].endswith("/status")]) == 1 \
+                    else {"state": "failure"}
+            return {"merged": True, "sha": "b" * 40}
+
+        monkeypatch.setattr(ex, "_gh_api", fake_gh)
+        merged = ex.check_and_merge_own_prs(
+            _sol_config(fix={"enabled": True, "merge_own_prs": True}),
+            "fl4write[bot]")
+        assert merged == []
+        assert not any(m == "PUT" for m, _ in calls)
+
+    def test_checkruns_flip_between_scan_and_put_defers_merge(self, monkeypatch):
+        from fl4write import executor as ex
+
+        calls = []
+
+        def fake_gh(method, path, data=None):
+            calls.append((method, path))
+            if method == "GET" and "pulls?state=open" in path:
+                return [{"number": 3, "head": {"ref": "fl4write/fix-1",
+                                              "sha": "a" * 40},
+                         "user": {"login": "fl4write[bot]"}}]
+            if method == "GET" and "check-runs" in path:
+                # First read (scan) green, full re-probe before PUT red.
+                done = [c for c in calls if "check-runs" in c[1]]
+                if len(done) == 1:
+                    return {"check_runs": [{"status": "completed",
+                                            "conclusion": "success"}]}
+                return {"check_runs": [{"status": "completed",
+                                        "conclusion": "failure"}]}
+            if method == "GET" and path.endswith("/status"):
+                return {"state": "success"}
+            return {"merged": True, "sha": "b" * 40}
+
+        monkeypatch.setattr(ex, "_gh_api", fake_gh)
+        merged = ex.check_and_merge_own_prs(
+            _sol_config(fix={"enabled": True, "merge_own_prs": True}),
+            "fl4write[bot]")
+        assert merged == []
+        assert not any(m == "PUT" for m, _ in calls)
 
 
 def _fb_make_pr(**over):

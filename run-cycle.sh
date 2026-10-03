@@ -36,6 +36,12 @@ if [ -z "$CODESITTER_GITHUB_TOKEN" ]; then
     echo "$(date -Iseconds) ERROR: no gh token available" >> "$LOG"
     exit 1
 fi
+# Cycle-5: fail fast on a revoked/expired token instead of burning a full
+# cycle that dies on its first authenticated call.
+if ! gh auth status --hostname github.com >/dev/null 2>&1; then
+    echo "$(date -Iseconds) ERROR: gh token invalid (gh auth status failed) — cycle ABORTED" >> "$LOG"
+    exit 1
+fi
 
 # MECE round-6 (sol F6-E05): a failed cd silently ran the cycle from an
 # unintended directory (or 'check-dirty clean' certified a MISSING checkout)

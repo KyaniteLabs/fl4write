@@ -38,6 +38,7 @@ import re
 import os
 import shutil
 import shlex
+import signal
 import stat
 import subprocess
 import tempfile
@@ -75,17 +76,61 @@ _SECRET_ENV_KEYS = ("GITHUB_TOKEN", "CODESITTER", "MINIMAX", "ANTHROPIC", "OPENA
 
 
 def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 120,
-         env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    """Run a fixed-argv subprocess (no shell) with optional timeout and env."""
-    return subprocess.run(  # fixed argv, no shell
+         env: dict[str, str] | None = None, new_session: bool = False) -> subprocess.CompletedProcess[str]:
+    """Run a fixed-argv subprocess (no shell) with optional timeout and env.
 
-        cmd,
-        cwd=str(cwd) if cwd else None,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env=env,
-    )
+    Cycle-5: new_session=True starts the child as a process-group leader
+    and kills the whole group on return — a test that backgrounds a
+    daemon (setsid writer outliving the suite) can no longer rewrite
+    evidence or the workdir after the verdict was read. Timeout keeps the
+    subprocess.TimeoutExpired contract. Git plumbing callers keep False.
+    """
+    if not new_session:
+        return subprocess.run(  # fixed argv, no shell
+
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    proc = subprocess.Popen(
+        cmd, cwd=str(cwd) if cwd else None,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, env=env, start_new_session=True)
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        pgid = None
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Cycle-5 review: the second communicate() must also be bounded —
+        # a pipe-holding survivor past SIGKILL would wedge the cycle here.
+        _kill_group(pgid)
+        try:
+            out, err = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, err = proc.communicate(timeout=10)
+        raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
+    _kill_group(pgid)
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
+def _kill_group(pgid: int | None) -> None:
+    """Best-effort SIGKILL of the whole process group (straggler daemons).
+
+    The pgid is captured before communicate() — looking it up after the
+    leader is reaped misses the surviving group (observed live).
+    """
+    if pgid is None:
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
 
 
 def _sandbox_home() -> str:
@@ -290,7 +335,8 @@ def _pytest_evidence(argv: list[str], cwd: Path, timeout: int,
     except ValueError:
         sep = len(xml_argv)
     xml_argv = xml_argv[:sep] + ["--junitxml", str(junit_path)] + xml_argv[sep:]
-    result = _run(xml_argv, cwd=cwd, timeout=timeout, env=env)
+    result = _run(xml_argv, cwd=cwd, timeout=timeout, env=env,
+                   new_session=True)
     if result.returncode != 0:
         return False, result
     try:
@@ -913,7 +959,8 @@ def verify_diff_tests(pr: PullRequest, config: RepoConfig, test_files: list[str]
             # chained or non-pytest runner: no host-controlled evidence yet —
             # rc is the only signal; a zero-exit with NO output is treated as
             # UNPROVEN (never a clean claim, never a false "did not run")
-            result = _run(argv, cwd=workdir, timeout=config.test_timeout, env=env)
+            result = _run(argv, cwd=workdir, timeout=config.test_timeout, env=env,
+                          new_session=True)
             green = result.returncode == 0
             if green and not f"{result.stdout}\n{result.stderr}".strip():
                 green = False
@@ -982,6 +1029,57 @@ def open_issue(repo: str, title: str, body: str) -> int:
     return _gh_api("POST", f"/repos/{repo}/issues", {"title": title, "body": body})["number"]
 
 
+def _commit_ci_green(config: RepoConfig, sha: str, number: int,
+                     deadline: float | None = None) -> bool | None:
+    """Full green evaluation for one head SHA: paginated check-runs plus
+    legacy combined commit status. False on any red/pending/vacuous/capped
+    evidence — callers treat False as do-not-merge. None on deadline
+    expiry (fail-safe: callers defer rather than merge blind). _gh_api
+    failures propagate to the row-level containment belt (skip)."""
+    import time as _time
+
+    page = 1
+    check_runs: list[dict] = []
+    while True:
+        if deadline is not None and _time.monotonic() >= deadline:
+            log.warning("check-runs scan on %s#%s: deadline reached — deferring",
+                        config.repo, number)
+            return None
+        if page > 20:
+            # F11-B008/F12-B004: capped evidence is INCOMPLETE — never merges.
+            log.warning("check-runs scan on %s#%s: >20 full pages — capped "
+                        "(ci_green forced false)", config.repo, number)
+            return False
+        checks = _gh_api(
+            "GET",
+            f"/repos/{config.repo}/commits/{sha}/check-runs"
+            f"?per_page=100&page={page}")
+        batch = checks.get("check_runs") or []
+        check_runs += batch
+        if len(batch) < 100:
+            break
+        page += 1
+    runs = [c for c in check_runs if c.get("status") == "completed"]
+    pending = [c for c in check_runs if c.get("status") != "completed"]
+    # Non-vacuous gate: no checks at all is NOT green; pending runs
+    # are NOT green (all([]) used to bless both).
+    if not (bool(runs) and not pending
+            and all(c.get("conclusion") == "success" for c in runs)):
+        return False
+    # F8-005: legacy commit STATUSES also gate.
+    return _combined_status(config, sha) == "success"
+
+
+def _combined_status(config: RepoConfig, sha: str) -> str | None:
+    """Combined commit-status state for one SHA, or None when unqueryable
+    (probe failure reads as not-green at every call site)."""
+    try:
+        combined = _gh_api("GET", f"/repos/{config.repo}/commits/{sha}/status")
+    except Exception:  # noqa: BLE001 - status probe failure = not green
+        return None
+    return (combined or {}).get("state") if isinstance(combined, dict) else None
+
+
 def check_and_merge_own_prs(config: RepoConfig, bot_identity: str,
                                deadline: float | None = None) -> list[dict]:
     """Check our own open fix PRs; merge those with ALL checks completed green.
@@ -1048,51 +1146,26 @@ def check_and_merge_own_prs(config: RepoConfig, bot_identity: str,
             author = (pr_data.get("user") or {}).get("login", "")
             # MECE round-1 (luna F1-05): check-runs must be PAGINATED — the
             # default page (~100) hid failing runs on CI-heavy repos, which
-            # would let the merge gate bless a red PR as green
-            page = 1
-            check_runs: list[dict] = []
-            checks_capped = False
-            while True:
+            # would let the merge gate bless a red PR as green.
+            ci_green = _commit_ci_green(config, pr_data["head"]["sha"], number,
+                                        deadline=deadline)
+            if ci_green is None:
+                return merged  # scan hit the deadline: defer the remainder
+            # Cycle-5 review: re-evaluate IMMEDIATELY before the PUT — the
+            # scan above can be minutes old on CI-heavy repos. Same full
+            # predicate (check-runs + statuses), so a flip in either lane
+            # defers. Narrows, not closes: no atomic primitive exists.
+            if ci_green:
                 if _expired():
-                    log.warning("check-runs scan on %s#%s: deadline reached — "
-                                "deferring remainder", config.repo, number)
+                    log.warning("merge of %s#%s deferred: deadline reached "
+                                "before final re-probe", config.repo, number)
                     return merged
-                if page > 20:
-                    # F11-B008: liveness bound — CI-heavy repos must not block
-                    # the whole cycle on an endless check-run stream.
-                    # F12-B004: capped evidence is INCOMPLETE — a pending or
-                    # failing run past the cap must never merge (ci_green is
-                    # forced False below)
-                    log.warning("check-runs scan on %s#%s: >20 full pages — capped "
-                                "(ci_green forced false)", config.repo, number)
-                    checks_capped = True
-                    break
-                checks = _gh_api(
-                    "GET",
-                    f"/repos/{config.repo}/commits/{pr_data['head']['sha']}/check-runs"
-                    f"?per_page=100&page={page}")
-                batch = checks.get("check_runs") or []
-                check_runs += batch
-                if len(batch) < 100:
-                    break
-                page += 1
-            runs = [c for c in check_runs if c.get("status") == "completed"]
-            pending = [c for c in check_runs if c.get("status") != "completed"]
-            # Non-vacuous gate: no checks at all is NOT green; pending runs
-            # are NOT green (all([]) used to bless both).
-            ci_green = bool(runs) and not pending and all(c.get("conclusion") == "success" for c in runs)
-            if checks_capped:
-                ci_green = False  # F12-B004: partial evidence never merges
-            # F8-005: legacy commit STATUSES also gate — check-runs green with
-            # a failing commit status must never authorize a merge
-            try:
-                combined = _gh_api("GET",
-                                   f"/repos/{config.repo}/commits/{pr_data['head']['sha']}/status")
-            except Exception:  # noqa: BLE001 - status probe failure = not green
-                combined = {}
-            combined_state = (combined or {}).get("state") if isinstance(combined, dict) else None
-            if combined_state != "success":
-                ci_green = False
+                fresh = _commit_ci_green(config, pr_data["head"]["sha"], number,
+                                         deadline=deadline)
+                if not fresh:
+                    log.warning("merge of %s#%s deferred: CI flipped since scan",
+                                config.repo, number)
+                    ci_green = False
             # The gate re-verifies authorship + CI IN CODE. is_own_identity
             # accepts the current + legacy bot slugs across renames.
             merge_own_pr(author=author, bot_identity=bot_identity, ci_green=ci_green, config=config)
