@@ -227,6 +227,21 @@ class TestRecallMetrics:
         assert row["recall_any"] == "0/0"
         assert row["severity_precision"] is None
 
+    def test_trend_row_clamps_corrupt_counts(self):
+        row = rel.trend_row({
+            "route": {"model": "t", "endpoint": "e"},
+            "determinism": {"mean_agreement": 1.0, "min_agreement": 1.0},
+            "recall": {"per_class": {
+                "inflated": {"cases": 2, "caught_any_cases": 3,
+                             "caught_actionable_cases": 9},
+                "sizeless": {"caught_any": True, "caught_actionable": True},
+            }},
+            "false_positives": {"actionable_fp_rate": 0.0, "noise_fp_rate": 0.0},
+            "calibration": {"table": {}},
+        }, "rot.json")
+        assert row["recall_any"] == "2/2"
+        assert row["recall_actionable"] == "2/2"
+
     def test_format_summary_renders_legacy_boolean_reports(self):
         text = rel.format_summary({
             "route": {"model": "t", "endpoint": "e", "temperature": 0.0,
@@ -248,6 +263,8 @@ class TestRecallMetrics:
         script = (Path(__file__).resolve().parents[1] / "tools/reliability-cadence.sh").read_text()
         assert "from fl4write.reliability import trend_row" in script
         assert "caught_any_cases" not in script
+        assert "fcntl.flock" in script
+        assert "MIN_DET=0.80" in script
 
     def test_missed_case_is_not_hidden_by_same_class_hit(self):
         recs = [
@@ -504,6 +521,19 @@ class TestRunnerOffline:
         assert report["recall"]["recall_any"] == 0.0
         budget = report["call_budget"]
         assert budget["failed_calls"] == budget["real_calls"] > 0
+
+    def test_stale_determinism_id_fails_closed(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(rel, "_guarded_run",
+                            lambda case, config: _rec(case["id"], "", SIG_C,
+                                                      "clean", False, {}))
+        report = rel.run_measurement(_offline_config(), runs=2,
+                                     determinism_ids=["no-such-case"],
+                                     cache_dir=tmp_path / "c", out_dir=tmp_path / "o")
+        det = report["determinism"]
+        assert det["errors"] == 2
+        assert det["mean_agreement"] == 0.0
+        rec = report["records"]["determinism"][0]
+        assert rec["flag"] == "error" and "no-such-case" in rec["error"]
 
 
 # ---------------------------------------------------------------------------
