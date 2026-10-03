@@ -1190,6 +1190,33 @@ class TestMECERound3SolPins:
         finally:
             iss._call_model = orig
 
+    def test_triage_prompt_redacts_credentials(self):
+        import json as _json
+        from fl4write import config as cfg
+        raw = {"repo": "o/r",
+               "forges": {"github": {"role": "primary", "api_base": "http://x", "token_env": "T"}},
+               "model": {"endpoint": "http://m/v1", "model": "t", "key_env": "K"},
+               "review": {"secrets": "x"}, "severity_vocab": ["Critical","Major","Minor","Nit"]}
+        c = cfg.RepoConfig.model_validate(raw)
+        import fl4write.issues as iss
+        seen = {}
+        orig = iss._call_model
+        try:
+            def fake(route, prompt, system=None, **kw):
+                seen["prompt"] = prompt
+                return _json.dumps(
+                    {"labels": [], "is_duplicate": False, "is_regression": False,
+                     "duplicate_hint": None, "draft_reply": "ok", "urgency": "low"})
+            iss._call_model = fake
+            triage = iss.triage_issue(
+                {"number": 1, "title": "login down",
+                 "body": "fails with https://admin:s3cr3t@example.invalid/ endpoint"}, c)
+            assert triage is not None
+            assert "s3cr3t" not in seen["prompt"]
+            assert "admin" in seen["prompt"]  # context kept, secret gone
+        finally:
+            iss._call_model = orig
+
     def test_triage_render_escapes_and_redacts(self):
         from fl4write import issues
         hostile = {"urgency": "high",
@@ -1430,7 +1457,7 @@ class TestMECERound4LunaPins:
             files={"tests/test_x.py"},
         )
 
-        def fake_fix(pr, finding, config):
+        def fake_fix(pr, finding, config, depth_used=0):
             forge.fix_attempts.append((pr, finding))
             return {"status": "pr_opened", "pr_number": 42}
 
@@ -1980,6 +2007,29 @@ class TestMECERound5SolPins:
         assert st["merged_since"] == "2026-09-01T00:00:00Z"
         assert st["retro_seen"] == {"1": True}
 
+    def test_reconcile_carries_validated_omni_identity(self, tmp_path):
+        from fl4write.state import load_state
+
+        p = tmp_path / "s.json"
+        # shape-wrong but parseable: omni identity survives, prs reset
+        p.write_text('{"version": 999, "prs": {"1": {}}, "omni_issue": 42, '
+                     '"omni_complete": true, "omni_findings": [{"id": 1}], '
+                     '"omni_head": "abc", "omni_issue_typo": "x"}', encoding="utf-8")
+        st = load_state(p)
+        assert st["prs"] == {}
+        assert st["omni_issue"] == 42 and st["omni_complete"] is True
+        assert st["omni_findings"] == [{"id": 1}] and st["omni_head"] == "abc"
+        assert "omni_issue_typo" not in st
+        # mistyped omni values are dropped, not carried
+        p.write_text('{"version": "v1", "omni_issue": "42", "omni_complete": 1}',
+                     encoding="utf-8")
+        st = load_state(p)
+        assert "omni_issue" not in st and "omni_complete" not in st
+        # truly unreadable bytes still reset fully
+        p.write_bytes(b"\xff\xfe{corrupt")
+        st = load_state(p)
+        assert st["prs"] == {} and "omni_issue" not in st
+
     # -- F5-010: bounded top-level lane belts ---------------------------------
 
     def test_prune_garbage_collects_top_level_belts(self, tmp_path):
@@ -2171,7 +2221,7 @@ class TestMECERound6M3Candidate:
         outcomes = iter([{"status": "error", "reason": "model unavailable"},
                          {"status": "pr_opened", "pr_number": 9}])
 
-        def fake_attempt(pr, finding, config):
+        def fake_attempt(pr, finding, config, depth_used=0):
             return next(outcomes)
 
         monkeypatch.setattr("fl4write.executor.attempt_fix", fake_attempt)
@@ -2186,6 +2236,23 @@ class TestMECERound6M3Candidate:
         _omni_fix_phase(c, forge, st, r2)
         assert r2.fix_prs_opened == 1
         assert st["omni_findings"][0].get("fix_attempted") is True
+
+    def test_omni_fix_drain_stops_at_deadline(self, tmp_path, monkeypatch):
+        from fl4write.engine import CycleReport, _omni_fix_phase
+
+        forge = _SolForge()
+        st = {"version": 1, "omni_head": "d" * 40, "omni_total": 1,
+              "omni_findings": [{"id": 1, "path": "a.py", "line": 1,
+                                 "rule": "secrets", "sev": "Major",
+                                 "msg": "m", "via": "t"}]}
+        monkeypatch.setattr("fl4write.executor.attempt_fix",
+                            lambda *a, **k: pytest.fail("attempt past deadline"))
+        c = _sol_config(omnisweep={"enabled": True, "fix": True,
+                                   "fix_min_severity": "Major"})
+        r = CycleReport(repo="o/r")
+        _omni_fix_phase(c, forge, st, r, deadline=time.monotonic() - 1)
+        assert r.fix_attempts == 0
+        assert any("deadline" in a for a in r.alerts)
 
 
 class TestMECERound6SolPins:
@@ -2905,6 +2972,26 @@ class TestMECERound7BE:
         })
         out = ex.check_and_merge_own_prs(c, "fl4write[bot]")
         assert out == []  # scan completed; malformed rows were skipped
+
+    def test_merge_scan_stops_at_deadline(self, monkeypatch):
+        import time
+
+        from fl4write import executor as ex
+
+        def fake_api(method, path, data=None):
+            pytest.fail("no API reads past an expired deadline")
+
+        monkeypatch.setattr(ex, "_gh_api", fake_api)
+        import fl4write.config as cfg_mod
+        c = cfg_mod.RepoConfig.model_validate({
+            "repo": "o/r",
+            "forges": {"github": {"role": "primary", "api_base": "https://api.github.com",
+                                  "token_env": "GHT"}},
+            "model": {"endpoint": "http://m/v1", "model": "t", "key_env": "K"},
+            "fix": {"enabled": True, "merge_own_prs": True},
+        })
+        assert ex.check_and_merge_own_prs(c, "fl4write[bot]",
+                                          deadline=time.monotonic() - 1) == []
 
     def test_issues_watermark_normalized_at_lane_boundary(self, monkeypatch):
         import fl4write.issues as issues_mod
@@ -4112,6 +4199,32 @@ class TestMECERound11Analyzer:
         # an indented reference definition (CommonMark allows up to 3 spaces)
         assert "evil" not in scrub("   [id]: https://evil.invalid/x\ntext")
 
+    def test_scrub_neutralizes_event_handlers(self):
+        from fl4write.scrub import scrub, assert_clean
+        out = scrub('<a href="https://x.invalid" onclick="steal()">click</a>')
+        assert "onclick=" not in out
+        assert_clean(out)
+        # prose mentioning handlers without a tag stays readable
+        assert "onclick" in scrub("the onclick handler fires twice")
+
+    def test_scrub_neutralizes_javascript_scheme_links(self):
+        from fl4write.scrub import scrub, assert_clean
+        out = scrub("[x](javascript:alert(1)) and <a href='javascript:alert(2)'>y</a>")
+        assert "javascript:" not in out
+        assert_clean(out)
+        # plain http links are legitimate prose and survive
+        kept = scrub("see [docs](https://example.invalid/guide)")
+        assert "https://example.invalid/guide" in kept
+        assert_clean(kept)
+
+    def test_redact_url_userinfo_password(self):
+        from fl4write.scrub import redact_credentials
+        out = redact_credentials("uses https://admin:s3cr3t@lan-host/ endpoint")
+        assert "s3cr3t" not in out and "admin" in out and "lan-host" in out
+        # passwordless userinfo is not a credential
+        assert redact_credentials("git clone https://user@host/x") == \
+            "git clone https://user@host/x"
+
     def test_clean_complete_sweep_scores_full_coverage(self):
         from fl4write.engine import _omni_readiness
         score, label = _omni_readiness([])
@@ -4591,6 +4704,7 @@ class TestMECERound13Pins:
         cfg_obj = make_config()
         diff = ("diff --git a/conf.py b/conf.py\n"
                 "index 000..111\n--- a/conf.py\n+++ b/conf.py\n"
+                "@@ -0,0 +1,2 @@\n"
                 "+password=aaaaaaaaaaaaaaaa\n+line2\n")
         # L1-B1 caps a BARE claim at Major (established law); the A1 fix is
         # the FLOOR: an anchored low-entropy assignment is never Nit, and the
@@ -4633,6 +4747,17 @@ class TestMECERound13Pins:
             try:
                 extract_json(hostile, envelope_key="findings")
                 raise AssertionError("nested draft certified clean")
+            except ValueError:
+                pass
+
+    def test_bom_and_quote_prefixes_dont_dodge_refusal(self):
+        from fl4write.analyzer import extract_json
+        for hostile in ('\ufeff{garbage {"findings":[]}',
+                        '> {garbage {"findings":[]}',
+                        '\ufeff> {garbage {"findings":[]}'):
+            try:
+                extract_json(hostile, envelope_key="findings")
+                raise AssertionError(f"prefixed draft certified: {hostile!r}")
             except ValueError:
                 pass
 

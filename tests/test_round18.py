@@ -27,7 +27,7 @@ def test_open_pr_new_file_is_checked_at_reviewed_revision(monkeypatch):
 
     finding = Finding(path="new.py", line=1, severity="Major", rule_id="general",
                       message="The new module raises on import.")
-    monkeypatch.setattr(executor, "attempt_fix", lambda *args:
+    monkeypatch.setattr(executor, "attempt_fix", lambda *args, **kw:
                         attempts.append(args) or {"status": "pr_opened"})
     monkeypatch.setattr(executor, "check_and_merge_own_prs", lambda *args: [])
     report = engine.CycleReport(repo=pr.repo)
@@ -76,7 +76,7 @@ def test_owned_fix_ci_is_revisited_without_new_source_review(tmp_path, monkeypat
     forge = _R4Forge(open_prs=[pr])
     polls = []
 
-    def poll(config, identity):
+    def poll(config, identity, deadline=None):
         polls.append(identity)
         return [] if len(polls) == 1 else [7]
 
@@ -114,7 +114,7 @@ def test_post_merge_fix_keeps_current_default_branch_freshness(tmp_path, monkeyp
         return ReviewDoc(pr=pr, findings=[finding])
 
     monkeypatch.setattr(analyzer, "analyze", analyze)
-    monkeypatch.setattr(executor, "attempt_fix", lambda *args:
+    monkeypatch.setattr(executor, "attempt_fix", lambda *args, **kw:
                         attempts.append(args) or {"status": "nofix"})
     monkeypatch.setattr(metrics, "acceptance_snapshot", lambda *args: None)
     state_path = tmp_path / "state.json"
@@ -133,7 +133,7 @@ def test_forgejo_cycle_never_calls_github_merge_executor(tmp_path, monkeypatch):
         name = "forgejo"
 
     calls = []
-    monkeypatch.setattr(executor, "check_and_merge_own_prs", lambda *args:
+    monkeypatch.setattr(executor, "check_and_merge_own_prs", lambda *args, **kw:
                         calls.append(args) or [])
     monkeypatch.setattr(metrics, "acceptance_snapshot", lambda *args: None)
     path = tmp_path / "state.json"

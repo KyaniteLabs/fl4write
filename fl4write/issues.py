@@ -104,8 +104,11 @@ def triage_issue(issue: dict[str, Any], config: RepoConfig) -> dict[str, Any] | 
     # lane's error boundary, aborting the whole cycle's issues intake
     _title = issue.get("title") if isinstance(issue.get("title"), str) else ""
     _body = issue.get("body") if isinstance(issue.get("body"), str) else ""
-    title = scrub.scrub(_title)
-    body = scrub.scrub(_body[:4000])
+    # Cycle-3: issue text rides a model prompt that may terminate at a
+    # third-party endpoint — credential-shape strings are redacted here
+    # (triage needs the shape of the report, never the literal secret).
+    title = scrub.redact_credentials(scrub.scrub(_title))
+    body = scrub.redact_credentials(scrub.scrub(_body[:4000]))
 
     prompt = (
         f"REPO LAW:\n{json.dumps(config.review, indent=1)}\nISSUE TITLE: {title}\nISSUE BODY:\n{body}\nJSON triage:"

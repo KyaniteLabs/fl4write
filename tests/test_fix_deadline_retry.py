@@ -20,7 +20,7 @@ def lane(monkeypatch):
     monkeypatch.setattr(engine.fixlane, "fix_allowed", lambda *a: None)
     monkeypatch.setattr(engine, "_fix_freshness_gate", lambda *a: True)
     monkeypatch.setattr("fl4write.executor.attempt_fix",
-                        lambda p, f, c: calls.append(f.line) or {"status": "nofix"})
+                        lambda p, f, c, depth_used=0: calls.append(f.line) or {"status": "nofix"})
     return pr, config, forge, st, clock, calls, findings
 
 
@@ -59,7 +59,7 @@ def test_deadline_checks_preserve_only_unattempted_suffix(lane, monkeypatch, sta
             return True
         monkeypatch.setattr(engine, "_fix_freshness_gate", fresh)
     else:
-        def attempt(p, f, c):
+        def attempt(p, f, c, depth_used=0):
             calls.append(f.line)
             clock[0] = 100
             return {"status": "nofix"}
@@ -89,6 +89,36 @@ def test_no_deadline_preserves_existing_fix_behavior(lane):
     assert "pending_fixes" not in st["prs"]["1"]
 
 
+def test_crashing_attempt_keeps_pending_entry(lane, monkeypatch):
+    pr, config, forge, st, clock, calls, findings = lane
+    def boom(p, f, c, depth_used=0):
+        calls.append(f.line)
+        raise RuntimeError("git exploded")
+    monkeypatch.setattr("fl4write.executor.attempt_fix", boom)
+    report = engine.CycleReport(repo=config.repo)
+    # Pre-fix this raised out of the lane mid-loop (entries already popped
+    # and lost); now the lane completes with both attempted and counted.
+    engine._fix_lane(pr, findings, config, forge, st, report)
+    assert calls == [1, 2]
+    assert report.fix_failures == 2
+    assert sum("entry kept" in a for a in report.alerts) == 2
+
+
+def test_diverged_rail_escalates_instead_of_crashing(lane, monkeypatch):
+    from fl4write import fixlane
+    pr, config, forge, st, clock, calls, findings = lane
+
+    def diverged(pr_, config_, depth):
+        raise fixlane.FixLaneBlocked("fork_policy must be comment-only")
+
+    monkeypatch.setattr(engine.fixlane, "fix_allowed", diverged)
+    report = engine.CycleReport(repo=config.repo)
+    engine._fix_lane(pr, findings, config, forge, st, report)
+    assert calls == []
+    assert report.fix_escalations == 2
+    assert "pending_fixes" not in st["prs"]["1"]
+
+
 @pytest.mark.parametrize("post_merge", [False, True])
 def test_real_cycle_resumes_without_another_review(lane, monkeypatch, tmp_path, post_merge):
     pr, config, forge, st, clock, calls, findings = lane
@@ -97,7 +127,7 @@ def test_real_cycle_resumes_without_another_review(lane, monkeypatch, tmp_path, 
     forge.prs = [] if post_merge else [pr]
     forge.list_merged_prs = lambda *a: [pr]
     monkeypatch.setattr(engine, "adapter_for", lambda *a: forge)
-    monkeypatch.setattr(engine, "_poll_fix_merges", lambda *a: None)
+    monkeypatch.setattr(engine, "_poll_fix_merges", lambda *a, **k: None)
     modeled = []
     def analyze(*a):
         modeled.append(1)

@@ -364,9 +364,15 @@ def _run_tests(cwd: Path, config: RepoConfig) -> bool:
     return False
 
 
-def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[str, Any]:
+def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig,
+                depth_used: int = 0) -> dict[str, Any]:
     """One fix attempt: rails → fetch file at PR head → model patch →
-    worktree at PR head → sandboxed tests → PR. Returns a result dict."""
+    worktree at PR head → sandboxed tests → PR. Returns a result dict.
+
+    depth_used feeds the max_fix_depth rail — callers with a tracked depth
+    MUST pass it (the fix lane does); one-shot synth callers without one
+    pass the explicit default and stay bounded by their own caps.
+    """
     from . import telemetry as _tel
 
     _t0 = __import__("time").time()
@@ -386,7 +392,12 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
         out.update(extra)
         return out
 
-    blocked_reason = fix_allowed(pr, config, 0)
+    try:
+        blocked_reason = fix_allowed(pr, config, depth_used)
+    except Exception as exc:  # noqa: BLE001 — rail checks must not escape
+        # (the fork_policy assert fires before any belt); fail as an error
+        # result so the engine keeps the pending entry for retry.
+        return _finish("error", f"fix rail crashed: {type(exc).__name__}")
     if blocked_reason:
         return _finish("blocked", blocked_reason,
                        escalation=escalate(pr, [finding], blocked_reason))
@@ -971,12 +982,20 @@ def open_issue(repo: str, title: str, body: str) -> int:
     return _gh_api("POST", f"/repos/{repo}/issues", {"title": title, "body": body})["number"]
 
 
-def check_and_merge_own_prs(config: RepoConfig, bot_identity: str) -> list[dict]:
+def check_and_merge_own_prs(config: RepoConfig, bot_identity: str,
+                               deadline: float | None = None) -> list[dict]:
     """Check our own open fix PRs; merge those with ALL checks completed green.
 
     Per-PR containment: a blocked/not-green PR skips; it never aborts the scan
     (the gate used to raise outside the try that was written to catch it).
+    Cycle-3: deadline-aware — each page and each PR rechecks, so a CI-heavy
+    repo cannot stall the cycle after the engine's one gate passed.
     """
+    import time as _time
+
+    def _expired() -> bool:
+        return deadline is not None and _time.monotonic() >= deadline
+
     merged: list[dict] = []
     owner = config.repo.split("/")[0]
     prs: list = []
@@ -984,6 +1003,10 @@ def check_and_merge_own_prs(config: RepoConfig, bot_identity: str) -> list[dict]
         page = 1
         while True:  # MECE round-3 (sol F3-007): paginate — fix PRs past the
             # first page were never evaluated or merged
+            if _expired():
+                log.warning("own-PR scan on %s: deadline reached — deferring remainder",
+                            config.repo)
+                return merged
             if page > 20:
                 # F11-B008: a liveness bound — a forge that keeps returning
                 # full pages must not block the cycle forever
@@ -1004,6 +1027,10 @@ def check_and_merge_own_prs(config: RepoConfig, bot_identity: str) -> list[dict]
         return merged
     for pr_data in prs:
         number = None  # F7-B001: excepts below must never NameError
+        if _expired():
+            log.warning("own-PR scan on %s: deadline reached — deferring remainder",
+                        config.repo)
+            return merged
         try:  # F7-B001: row-level containment starts BEFORE field access —
             # a malformed row must skip, never kill the scan for later PRs
             if not isinstance(pr_data, dict):
@@ -1026,6 +1053,10 @@ def check_and_merge_own_prs(config: RepoConfig, bot_identity: str) -> list[dict]
             check_runs: list[dict] = []
             checks_capped = False
             while True:
+                if _expired():
+                    log.warning("check-runs scan on %s#%s: deadline reached — "
+                                "deferring remainder", config.repo, number)
+                    return merged
                 if page > 20:
                     # F11-B008: liveness bound — CI-heavy repos must not block
                     # the whole cycle on an endless check-run stream.

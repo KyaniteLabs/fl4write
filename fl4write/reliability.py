@@ -190,7 +190,10 @@ def determinism_metrics(records: list[dict]) -> dict:
     differs from the modal one. Error records are EXCLUDED from agreement:
     N identical outages used to score 1.0 (empty signatures agree); a case
     with no successful runs now scores 0.0 fail-closed (errors are counted
-    separately and the CLI gate fails the run).
+    separately and the CLI gate fails the run). The mean is over successful
+    runs by design: partial-outage errors neither inflate agreement nor
+    count as flips — they ride the errors count and the gate, so a mixed
+    run reads 1.0 + N errors rather than a diluted fraction.
     """
     by_case: dict[str, list[dict]] = {}
     for r in records:
@@ -285,8 +288,13 @@ def _caught_counts(entry: dict) -> tuple[int, int, int]:
 
     def _one(count_key: str, flag_key: str) -> int:
         if count_key in entry:
-            return int(entry.get(count_key, 0))
-        return 1 if entry.get(flag_key) else 0
+            raw = int(entry.get(count_key, 0))
+        else:
+            raw = 1 if entry.get(flag_key) else 0
+        # Cycle-3: clamp to the class size — hand-edited rot like
+        # caught=3/cases=2 (or caught=1/cases=0) renders sanely instead
+        # of recall > 1 or "1/0".
+        return max(0, min(raw, total))
 
     return (total, _one("caught_any_cases", "caught_any"),
             _one("caught_actionable_cases", "caught_actionable"))
@@ -440,7 +448,18 @@ def run_measurement(config: RepoConfig, runs: int = 5,
     # --- determinism lane: bare calls, no wrapper installed at all ---
     det_records: list[dict] = []
     for cid in sample_ids:
-        case = corpus.case_by_id(cid)
+        try:
+            case = corpus.case_by_id(cid)
+        except KeyError:
+            # Cycle-3: a stale sample id must fail closed as error records,
+            # not crash the whole measurement out of _guarded_run's belt.
+            det_records.extend({
+                "case_id": cid, "defect_class": "", "kind": "clean",
+                "signature": [], "flag": "error", "actionable": False,
+                "severity_counts": {}, "findings": [],
+                "error": f"unknown determinism case id: {cid}",
+            } for _ in range(runs))
+            continue
         for _ in range(runs):
             det_records.append(_guarded_run(case, config))
     det = determinism_metrics(det_records)

@@ -197,7 +197,7 @@ returning success, preserving the report and reporting lane-specific counts.
 **Regression:** `TestConfigAndGates.test_cli_rejects_measurement_errors_despite_passing_metrics`
 reproduced false success in determinism, recall and clean lanes before the
 fix; all three now fail correctly, and an error-free control passes.
-**Status:** Locally repaired; independent review and delivery not verified.
+**Status:** Merged PR #38 (`f7b0c8a`), review REQUEST-CHANGES → all fixed → APPROVE, CI green.
 
 ## PM-20261003-REL-002: class coverage hides missed evaluation cases
 
@@ -217,7 +217,7 @@ Existing class booleans still denote coverage of at least one case.
 **Regression:** Metric probes cover hidden misses, unequal class sizes and
 repeat deduplication; CLI probe rejects 50% recall at a 75% bar; executing
 the actual cadence renderer produces an honest 1/2 trend receipt.
-**Status:** Locally repaired; independent review and delivery not verified.
+**Status:** Merged PR #38 (`f7b0c8a`), review REQUEST-CHANGES → all fixed → APPROVE, CI green.
 
 ## CYCLE1-001: truncated-diff grounding guard inert (wrong-verdict)
 
@@ -228,7 +228,7 @@ findings citing truncated-away hunks were accepted against evidence the
 model never saw. **Local fix:** both gates run against the truncated slice
 the model received. **Regression:**
 `tests/test_truncated_grounding.py` (3 probes; fails pre-fix, green post).
-**Status:** Fixed on `fix/autoloop-cycle1`; review/merge pending.
+**Status:** Merged PR #39 (`1524b56`), independently reviewed APPROVE, CI green.
 
 ## CYCLE1-002: outage runs scored perfect stability / clean sheets
 
@@ -240,7 +240,7 @@ and error clean-lane records counted as clean, so a dead route measured
 an explicit errors count; call budget breaks out failed_calls.
 **Regression:** outage/partial-outage probes in both metric suites; the
 error-lane CLI probe now errors first-runs only to keep metrics-vs-gate
-isolation. **Status:** Fixed on `fix/autoloop-cycle1`; review/merge pending.
+isolation. **Status:** Merged PR #39 (`1524b56`), independently reviewed APPROVE, CI green.
 
 ## CYCLE1-003: namespaced JUnit evidence unwinnable; token form rigid
 
@@ -252,7 +252,7 @@ fatal (unprefixed children inherit the default ns — uniform is a dialect,
 two vocabs are ambiguity); embedded `{junit}` allowed but must resolve
 exactly once. **Regression:** green/red namespaced, mixed-ns, embedded,
 missing and doubled-token probes; the old ambiguity pin re-pointed at a
-truly mixed document. **Status:** Fixed; review/merge pending.
+truly mixed document. **Status:** Merged PR #39 (`1524b56`), independently reviewed APPROVE, CI green.
 
 ## CYCLE1-004: env-controlled telemetry path unguarded (hardening)
 
@@ -260,8 +260,8 @@ truly mixed document. **Status:** Fixed; review/merge pending.
 **Mechanism:** `FL4WRITE_TELEMETRY` could redirect appends anywhere,
 including a repo `.git` hook path. **Local fix:** non-log suffixes and
 `.git`-containing paths fall back to the default stream. **Regression:**
-hook/non-log refusal + legit acceptance probes. **Status:** Fixed;
-review/merge pending. (Poisoning requires operator-env control; the
+hook/non-log refusal + legit acceptance probes. **Status:** Merged PR
+#39 (`1524b56`), independently reviewed APPROVE, CI green. (Poisoning requires operator-env control; the
 sandbox already strips the variable from test env.)
 
 ## CYCLE1-005: CI blind on non-main PR bases, no time bounds
@@ -269,7 +269,7 @@ sandbox already strips the variable from test env.)
 **File:** `.github/workflows/ci.yml`.
 **Mechanism:** PR CI filtered to two base branches; no job/step timeouts.
 **Local fix:** all PR bases trigger; 30m job / 25m suite timeouts.
-**Status:** Fixed; review/merge pending.
+**Status:** Merged PR #39 (`1524b56`), independently reviewed APPROVE, CI green.
 
 ## CYCLE1 refutations (verified, no change)
 
@@ -303,7 +303,7 @@ gatekeeper, executor, recon). Moderate depths already refused cleanly.
 refusal. **Regression:** 25k-nesting probe fails pre-fix (escape),
 green post-fix. O(n^2) envelope-parse worry MEASURED non-issue: 180KB
 hostile input parses in 0.03s (model output is max_tokens-bounded).
-**Status:** Fixed on `fix/autoloop-cycle2`; review/merge pending.
+**Status:** Merged PR #40 (`8fe2cae`), independently reviewed APPROVE, CI green.
 
 ## CYCLE2-002: unbounded forge body reads (OOM risk)
 
@@ -312,13 +312,13 @@ hostile input parses in 0.03s (model output is max_tokens-bounded).
 model_proxy); oversize raises ForgeError, which all callers already
 degrade to None (unqueryable). **Regression:** overflow pins on both
 lanes + at-cap parsing; existing urlopen fakes take the size arg.
-**Status:** Fixed; review/merge pending.
+**Status:** Merged PR #40 (`8fe2cae`), independently reviewed APPROVE, CI green.
 
 ## CYCLE2-003: retry/throttle logic duplicated across call lanes
 
 **File:** `fl4write/forges.py`. Shared `_RETRYABLE_HTTP` +
 `_throttle_wait()`; identical semantics with Retry-After edge pins.
-Refactor, no behavior change. **Status:** Fixed; review/merge pending.
+Refactor, no behavior change. **Status:** Merged PR #40 (`8fe2cae`), independently reviewed APPROVE, CI green.
 
 ## CYCLE2-004: wide-slack reliance instrumented (no behavior change)
 
@@ -326,3 +326,101 @@ Refactor, no behavior change. **Status:** Fixed; review/merge pending.
 slack emit best-effort `slack_reliance` counts for the future
 tighten-or-keep decision. Regression pins emit-on-reliance and
 silence-on-tight-hit. **Status:** Landed; decision awaits live data.
+
+## CYCLE3-001: scrub/assert gaps — handlers, schemes, userinfo, triage (leak)
+
+**Files:** `fl4write/scrub.py`, `fl4write/issues.py`.
+**Mechanism:** Event handlers on allowed tags and inline `javascript:`
+destinations survived both scrub and assert_clean; URL userinfo passwords
+carried no assignment key and dodged run rules; issue titles/bodies rode
+model prompts scrubbed but never credential-redacted. Bare http links
+deliberately stay (tested legitimate-prose rule). **Local fix:**
+handler-attribute neutralization, scheme neutralization (both asserted),
+userinfo-password redaction keeping the username, triage-prompt
+redaction. **Regression:** handler/scheme/userinfo probes + prose
+preservation + triage-prompt capture. **Status:** Fixed on
+`fix/autoloop-cycle3`; review/merge pending.
+
+## CYCLE3-002: BOM/quote prefixes dodge envelope refusal (wrong-verdict)
+
+**File:** `fl4write/analyzer.py`. `lstrip()[:1]` missed BOMs and `>`
+markers, so prefixed malformed envelopes fell through to key-scan
+certification (all five probe shapes certified pre-fix). **Local fix:**
+judge the first real char. **Regression:** BOM/quote probes fail
+pre-fix, green post-fix. **Status:** Fixed; review/merge pending.
+
+## CYCLE3-003: ungroundable blocks accepted; spans unclipped (wrong-verdict)
+
+**File:** `fl4write/analyzer.py`. Binary/mode-change/deleted blocks have
+no new-file lines yet any line posted; span ends came from headers even
+when truncation cut the hunk, and truncated mode kept 60 slack past the
+cut. **Local fix:** zero-span blocks reject all lines (unknown paths
+keep old accept); ends clip to present added lines; truncated mode uses
+slack 10. One established fixture needed its missing `@@` header (real
+diffs always carry one). **Regression:** per-shape probes.
+**Status:** Fixed; review/merge pending.
+
+## CYCLE3-004: adjudication leak synonyms (wrong-verdict class)
+
+**File:** `fl4write/exhaustive_adjudication.py`. Message markers missed
+passwd/pwd/bearer/private-key/userinfo and substring-matched inside
+words. **Local fix:** extended set with word boundaries (+plurals);
+tokenizer-machinery prose still carves. Query-marker substring behavior
+kept (documented safe direction). **Status:** Fixed; review/merge pending.
+
+## CYCLE3-005: stale sample id crashes measurement (crash)
+
+**File:** `fl4write/reliability.py`. `case_by_id` outside the guarded
+belt. **Local fix:** fails closed as error records. **Regression:**
+stale-id probe. **Status:** Fixed; review/merge pending.
+
+## CYCLE3-006: unclamped legacy counts, unlocked trend, quick false-red
+
+**Files:** `fl4write/reliability.py`, `tools/reliability-cadence.sh`.
+Rot renders (3/2, 1/0) now clamp; trend append takes an exclusive lock;
+quick mode (runs=3) gets its own 0.80 determinism tripwire.
+Partial-outage mean semantics documented as designed. **Status:** Fixed;
+review/merge pending.
+
+## CYCLE3-007: fix-lane rails — depth, kept entries, -O, deadlines
+
+**Files:** `fl4write/engine.py`, `fl4write/executor.py`, `fl4write/fixlane.py`,
+`fl4write/state.py`. `attempt_fix` takes explicit depth (lane passes its
+tracked value; synth callers pass explicit 0 under their own caps);
+pending entries pop only after an attempt returns; fork-policy check is
+an explicit raise; omni drain + owned-PR scan recheck deadlines per
+finding/page; reconcile carries validated omni identity. **Regression:**
+crash-kept entries, -O-proof rail, stop-at-deadline on both drains,
+carry/drop/reset state probes. **Status:** Fixed; review/merge pending.
+
+## CYCLE3-008: appauth scoped-token self-DoS; ruff version float
+
+`get_repository_token` minted per call (verify+resolve+mint); now cached
+with TTL like installation tokens. Ruff `>=` floor floated CI off the
+verified version; pinned exact after green verification. **Status:**
+Fixed; review/merge pending.
+
+## CYCLE3 refutations (verified, no change)
+
+- Cache-key config evolution, empty-file recon, recon quote-fatal:
+  prior verdicts stand (prompt-hashed rules, vacuous truth, deliberate
+  anti-hallucination design).
+- Container-recovery container-delete: container test code cannot reach
+  the host-side record (only /evidence tmpfs is mounted); same-uid host
+  writers are the insider model. Regex also limits blast radius to
+  `fl4write-test-*` names.
+- Red-proof forgery residual: the pin requires real suite failure plus
+  structural XML binding (failures present, no errors/skips, baseline
+  superset) — fabrication past that point changes nothing material.
+- Publication hash hand-build: state files are host-trust-boundary;
+  no model-writable path reaches them.
+- Gitattributes clean-filter gap: BACKWARDS — the guards fail CLOSED
+  (raw-vs-staged mismatch raises); identity filters are a non-issue.
+- Tiers stale resurrection: already fixed (F8-C002 — closed records
+  excluded; open_ids fallback is a one-time migration).
+- Executor junit-argv visibility + askpass env token: fork-blocked lane
+  + same-uid insider model; documented accepted risk.
+- TOCTOU same-SHA merge + legacy bot logins: accepted residuals
+  (no atomic primitive; back-compat policy with re-verified authorship).
+- Long-lived token-env staleness: no long-lived consumer found in-tree
+  (per-process mint at startup); noted.

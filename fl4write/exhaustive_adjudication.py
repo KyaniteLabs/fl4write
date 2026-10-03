@@ -51,8 +51,19 @@ _CREDENTIAL_QUERY_MARKERS = (
     "auth", "credential", "cred", "signature", "bearer",
 )
 _CREDENTIAL_MESSAGE_MARKERS = (
-    "credential", "secret", "token", "password", "api key", "api-key", "apikey",
+    "credential", "secret", "token", "password", "passwd", "pwd",
+    "api key", "api-key", "apikey", "bearer", "private key", "private-key",
+    "privatekey", "userinfo",
 )
+
+
+def _message_asserts_leak(message: str) -> bool:
+    """Cycle-3: the old substring check missed leak synonyms (passwd, pwd,
+    bearer…) and would false-hit inside words. Word-boundary matching on
+    an extended marker set: a leak assertion still flags, always."""
+    low = message.lower()
+    return any(re.search(r"\b" + re.escape(m) + r"s?\b", low)
+               for m in _CREDENTIAL_MESSAGE_MARKERS)
 _NON_ROUTABLE_V4 = tuple(
     ipaddress.ip_network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
@@ -110,7 +121,7 @@ def accepted_lan_endpoint(finding: dict) -> bool:
     if any(_credential_query_key(part.split("=", 1)[0]) for part in query.split("&") if part):
         return False
     message = str(finding.get("message", "")).lower()
-    return not any(marker in message for marker in _CREDENTIAL_MESSAGE_MARKERS)
+    return not _message_asserts_leak(message)
 
 
 def apply_endpoint_carveout(findings: list[dict]) -> tuple[list[dict], list[dict]]:

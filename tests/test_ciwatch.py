@@ -108,7 +108,7 @@ def _run(tmp_path, forge, monkeypatch, fix_result=None, **cfg_over):
         lambda route, prompt, mode="pr": json.dumps({"findings": []}),
     )
     if fix_result is not None:
-        def fake_fix(pr, finding, config):
+        def fake_fix(pr, finding, config, depth_used=0):
             forge.fix_attempts.append((pr, finding))
             return fix_result
         monkeypatch.setattr("fl4write.executor.attempt_fix", fake_fix)

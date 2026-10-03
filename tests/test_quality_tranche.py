@@ -146,7 +146,7 @@ class TestFixTelemetryAndFreshness:
 
         calls = {"n": 0}
 
-        def flaky(pr, f, config):
+        def flaky(pr, f, config, depth_used=0):
             calls["n"] += 1
             return {"status": "testfail", "reason": "tests failed"} if calls["n"] == 1 else {"status": "nofix", "reason": "no fix"}
 
@@ -174,7 +174,7 @@ class TestFixTelemetryAndFreshness:
 
             return ReviewDoc(pr=pr, findings=[GOOD])
 
-        def must_not_attempt(pr, f, config):
+        def must_not_attempt(pr, f, config, depth_used=0):
             raise AssertionError("freshness gate must block the attempt")
 
         monkeypatch.setattr("fl4write.engine.adapter_for", lambda b: forge)
@@ -454,7 +454,7 @@ class TestOmniFixStale:
                                   "sev": "Major", "msg": "m", "via": "t", "fix_stale": True}]}
         state.save_state(sp, st)
 
-        def must_not_attempt(pr, f, config):
+        def must_not_attempt(pr, f, config, depth_used=0):
             raise AssertionError("fix_stale must short-circuit before any attempt")
 
         class FakeForge(ForgeAdapter):

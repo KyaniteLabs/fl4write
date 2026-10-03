@@ -31,7 +31,11 @@ def fix_allowed(pr: PullRequest, config: RepoConfig, depth_used: int) -> str | N
     if pr.is_fork:
         # fork_policy knob is comment-only by schema AND by code rail — the
         # knob exists so the policy is VISIBLE in config; the rail is here.
-        assert config.fix.fork_policy == "comment-only"
+        # Cycle-3: explicit raise, not assert — `python -O` strips asserts
+        # and would silently drop the config/code consistency check.
+        if config.fix.fork_policy != "comment-only":
+            raise FixLaneBlocked(
+                "fork_policy must be comment-only (code rail diverged from config)")
         return "fork PR — comment-only by code rail"
     if pr.is_bot_author:
         return "bot-authored (dependency) PR — read-only artifact by policy"
