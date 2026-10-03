@@ -33,6 +33,16 @@ def _path() -> Path:
             "FL4WRITE_TELEMETRY",
             Path.home() / ".fl4write" / "telemetry.jsonl",
         ))
+        # Cycle-1 fix: the stream path is env-controlled. Refuse values
+        # that could redirect appends into a repo's .git directory (e.g. a
+        # hook overwrite) or non-log destinations; fall back to default.
+        try:
+            ok_suffix = _STREAM.suffix in {".jsonl", ".log", ".ndjson"}
+            ok_parts = ".git" not in _STREAM.parts
+        except Exception:  # noqa: BLE001 — unparseable path is unsafe
+            ok_suffix, ok_parts = False, False
+        if not (ok_suffix and ok_parts):
+            _STREAM = Path.home() / ".fl4write" / "telemetry.jsonl"
         try:
             _STREAM.parent.mkdir(parents=True, exist_ok=True)
         except OSError:
