@@ -382,6 +382,41 @@ class TestRunnerOffline:
 # ---------------------------------------------------------------------------
 
 class TestConfigAndGates:
+    @pytest.mark.parametrize("failed_lane", ["determinism", "recall", "clean", None])
+    def test_cli_rejects_measurement_errors_despite_passing_metrics(
+            self, monkeypatch, tmp_path, capsys, failed_lane):
+        monkeypatch.setattr(rel, "build_config", lambda *a, **k: _offline_config())
+        calls = 0
+        det_calls = 2 * len(corpus.DETERMINISM_SAMPLE)
+
+        def sample(case, config):
+            nonlocal calls
+            calls += 1
+            cls = case.get("defect_class", "")
+            lane = "determinism" if calls <= det_calls else ("recall" if cls else "clean")
+            record = _rec(case["id"], cls, SIG_A if cls else SIG_C,
+                          "defect" if cls else "clean", bool(cls),
+                          {"Major": 1} if cls else {})
+            # All repeated determinism samples fail identically; one failed
+            # recall/clean case still leaves the configured numeric bars green.
+            if lane == failed_lane and (lane == "determinism" or calls == det_calls + 1
+                                        or calls == det_calls + len(corpus.DEFECT_CASES) + 1):
+                record.update(flag="error", actionable=False, signature=[],
+                              severity_counts={}, error="route unavailable")
+            return record
+
+        monkeypatch.setattr(rel, "_guarded_run", sample)
+        rc = rel.main(["--config", "unused.yaml", "--runs", "2",
+                       "--out", str(tmp_path), "--cache-dir", "none",
+                       "--min-determinism", "0.9", "--min-recall", "0.9",
+                       "--max-actionable-fp", "0.1"])
+        report = json.loads((tmp_path / "reliability-report.json").read_text())
+        assert report["determinism"]["mean_agreement"] >= 0.9
+        assert report["recall"]["recall_actionable"] >= 0.9
+        assert report["false_positives"]["actionable_fp_rate"] <= 0.1
+        assert rc == (1 if failed_lane else 0)
+        assert ("measurement errors" in capsys.readouterr().err) == bool(failed_lane)
+
     def test_build_config_route_overrides(self, tmp_path):
         base = tmp_path / "base.yaml"
         base.write_text(
@@ -412,6 +447,7 @@ class TestConfigAndGates:
                             "proxy": "severity", "labeling": "path-level",
                             "table": {}},
             "call_budget": {"real_calls": 0, "cache_hits": 0, "cache_misses": 0},
+            "records": {"determinism": [], "recall": [], "clean": []},
         })
         rc = rel.main(["--config", "x.yaml", "--min-determinism", "0.8"])
         assert rc == 1

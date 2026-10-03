@@ -449,6 +449,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\nreport: {out_dir / 'reliability-report.json'}")
 
     failed_gates = []
+    for lane, records in report["records"].items():
+        errors = sum(1 for record in records
+                     if record.get("error") or record.get("flag") == "error")
+        if errors:
+            failed_gates.append(f"{lane} measurement errors: {errors}/{len(records)}")
     if args.min_determinism is not None \
             and report["determinism"]["mean_agreement"] < args.min_determinism:
         failed_gates.append(f"determinism {report['determinism']['mean_agreement']:.1%} "
