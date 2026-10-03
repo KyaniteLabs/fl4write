@@ -57,6 +57,18 @@ _HIDDEN_TAG_RE = re.compile(
 # legitimately mentions them does not crash the render assert
 _HIDDEN_STYLE_RE = re.compile(
     r"(?:display|visibility)\s*:\s*(?:none|hidden)", re.IGNORECASE)
+# Cycle-3: inline event handlers (onclick= etc.) on ALLOWED tags survive
+# tag-stripping and assert_clean — neutralize the attribute name so no
+# posted tag carries live script; values are preserved (prose mentioning
+# "onclick" without a tag context is untouched).
+_EVENT_HANDLER_RE = re.compile(
+    r"(<[^>]*?)\s+on([a-zA-Z][a-zA-Z0-9]*)\s*=", re.IGNORECASE)
+# Cycle-3: javascript: link destinations are never legitimate (refdef
+# precedent strips them); inline [x](javascript:…) and href= forms are
+# neutralized at the scheme. Plain http(s) links stay (tested prose rule).
+_JS_SCHEME_MD_RE = re.compile(r"(\]\(\s*)javascript:", re.IGNORECASE)
+_JS_SCHEME_HREF_RE = re.compile(
+    r"(href\s*=\s*[\"']?\s*)javascript:", re.IGNORECASE)
 # Our persistent-comment marker must be minted only by the renderer.
 _MARKER_RE = re.compile(r"(?:fl4write|codesitter):v\d+:[0-9a-fA-F]+")
 
@@ -104,6 +116,9 @@ def scrub(text: str) -> str:
         s = s.split("<!--", 1)[0] + s.split("<!--", 1)[1].replace("<!--", "")
     s = _HIDDEN_TAG_RE.sub("", s)
     s = _HIDDEN_STYLE_RE.sub("hidden-style", s)
+    s = _EVENT_HANDLER_RE.sub(r"\1 data-fl4write-on-\2-removed=", s)
+    s = _JS_SCHEME_MD_RE.sub(r"\1[scrubbed-scheme]", s)
+    s = _JS_SCHEME_HREF_RE.sub(r"\1[scrubbed-scheme]", s)
     s = _MARKER_RE.sub("[scrubbed-marker]", s)
     return s
 
@@ -156,6 +171,11 @@ def redact_credentials(text: str) -> str:
         closing = tail if tail in ("'", '"') else ""
         return out[m.start():m.start(1)] + "[redacted]" + closing
     out = _re.sub(_ASSIGN_KEY, _assign_sub, out)
+
+    # Cycle-3: URL userinfo passwords (https://user:PASS@host/) carry no
+    # assignment key and short passwords dodge the run rules — redact the
+    # password segment, keeping the (low-sensitivity) username for context.
+    out = _re.sub(r"(://[^/\s:@]+:)[^/\s@]+@", r"\1[redacted]@", out)
 
     # D4: secrets split by '.' (JWT) or '/' (AWS secret key) defeat the 16+
     # contiguous-run rule and leak partial credential material. A JWT is
@@ -220,5 +240,7 @@ def assert_clean(text: str) -> None:
     low = text.lower()
     if "<!--" in low or re.search(r"<\s*/?\s*(style|script|template|iframe|svg|math|object|embed)", low) \
             or re.search(r"(?:display|visibility)\s*:\s*(?:none|hidden)", low) \
-            or re.search(r"<\s*[a-z]+[^>]*\bhidden\b", low):
+            or re.search(r"<\s*[a-z]+[^>]*\bhidden\b", low) \
+            or re.search(r"<[^>]*\son[a-z0-9]+\s*=", low) \
+            or re.search(r"\]\(\s*javascript:|href\s*=\s*[\"']?\s*javascript:", low):
         raise ValueError("unscrubbed html comment/hidden structure in output")

@@ -437,7 +437,12 @@ def _extract_json(content: str, envelope_key: str | None = None) -> dict:
                         f"'\"{envelope_key}\"': in one response — refusing "
                         "(possible injected duplicate)")
             return _whole
-        if scan_text.lstrip()[:1] in ("{", "["):
+        # Cycle-3: lstrip() leaves BOMs and quote markers ("> …"), so a
+        # "\ufeff{malformed… {"findings":[]}" response dodged this refuse
+        # path and fell through to key-scan certification of the inner
+        # draft. Judge the first REAL character instead.
+        _head = _re.sub(r"^(?:>\s*)+", "", scan_text.lstrip().lstrip("\ufeff"))
+        if _head[:1] in ("{", "["):
             # F13-A3: when the response OPENS with an object/array that does
             # not decode as a complete top-level value (raw_decode failed
             # above), an independently decodable inner object is a DRAFT —

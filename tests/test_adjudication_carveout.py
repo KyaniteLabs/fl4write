@@ -103,6 +103,25 @@ class TestEndpointCarveout:
         assert not accepted_lan_endpoint(_finding(
             "endpoint: http://192.168.1.5:9/v1", message="API key is sent to a private endpoint"))
 
+    @pytest.mark.parametrize("message", [
+        "sends passwd in cleartext to the endpoint",
+        "pwd is logged on each request",
+        "bearer token leaks in the LAN URL",
+        "private key material in the config block",
+        "exposes passwords in debug logs",
+    ])
+    def test_leak_synonym_messages_still_flag(self, message):
+        assert not accepted_lan_endpoint(_finding(
+            "endpoint: http://192.168.1.5:9/v1", message=message))
+
+    @pytest.mark.parametrize("message", [
+        "the tokenizer endpoint on the LAN host",
+        "monkey business in the retry path",
+    ])
+    def test_non_leak_prose_does_not_block_the_carveout(self, message):
+        assert accepted_lan_endpoint(_finding(
+            "endpoint: http://192.168.1.5:9/v1", message=message))
+
     def test_carveout_splits_round_findings(self):
         lan = _finding("endpoint: http://192.168.1.72:8908/v1/chat/completions")
         public = _finding("endpoint: http://8.8.8.8:8908/v1")

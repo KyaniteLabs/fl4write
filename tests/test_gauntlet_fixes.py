@@ -1190,6 +1190,33 @@ class TestMECERound3SolPins:
         finally:
             iss._call_model = orig
 
+    def test_triage_prompt_redacts_credentials(self):
+        import json as _json
+        from fl4write import config as cfg
+        raw = {"repo": "o/r",
+               "forges": {"github": {"role": "primary", "api_base": "http://x", "token_env": "T"}},
+               "model": {"endpoint": "http://m/v1", "model": "t", "key_env": "K"},
+               "review": {"secrets": "x"}, "severity_vocab": ["Critical","Major","Minor","Nit"]}
+        c = cfg.RepoConfig.model_validate(raw)
+        import fl4write.issues as iss
+        seen = {}
+        orig = iss._call_model
+        try:
+            def fake(route, prompt, system=None, **kw):
+                seen["prompt"] = prompt
+                return _json.dumps(
+                    {"labels": [], "is_duplicate": False, "is_regression": False,
+                     "duplicate_hint": None, "draft_reply": "ok", "urgency": "low"})
+            iss._call_model = fake
+            triage = iss.triage_issue(
+                {"number": 1, "title": "login down",
+                 "body": "fails with https://admin:s3cr3t@example.invalid/ endpoint"}, c)
+            assert triage is not None
+            assert "s3cr3t" not in seen["prompt"]
+            assert "admin" in seen["prompt"]  # context kept, secret gone
+        finally:
+            iss._call_model = orig
+
     def test_triage_render_escapes_and_redacts(self):
         from fl4write import issues
         hostile = {"urgency": "high",
@@ -4112,6 +4139,32 @@ class TestMECERound11Analyzer:
         # an indented reference definition (CommonMark allows up to 3 spaces)
         assert "evil" not in scrub("   [id]: https://evil.invalid/x\ntext")
 
+    def test_scrub_neutralizes_event_handlers(self):
+        from fl4write.scrub import scrub, assert_clean
+        out = scrub('<a href="https://x.invalid" onclick="steal()">click</a>')
+        assert "onclick=" not in out
+        assert_clean(out)
+        # prose mentioning handlers without a tag stays readable
+        assert "onclick" in scrub("the onclick handler fires twice")
+
+    def test_scrub_neutralizes_javascript_scheme_links(self):
+        from fl4write.scrub import scrub, assert_clean
+        out = scrub("[x](javascript:alert(1)) and <a href='javascript:alert(2)'>y</a>")
+        assert "javascript:" not in out
+        assert_clean(out)
+        # plain http links are legitimate prose and survive
+        kept = scrub("see [docs](https://example.invalid/guide)")
+        assert "https://example.invalid/guide" in kept
+        assert_clean(kept)
+
+    def test_redact_url_userinfo_password(self):
+        from fl4write.scrub import redact_credentials
+        out = redact_credentials("uses https://admin:s3cr3t@lan-host/ endpoint")
+        assert "s3cr3t" not in out and "admin" in out and "lan-host" in out
+        # passwordless userinfo is not a credential
+        assert redact_credentials("git clone https://user@host/x") == \
+            "git clone https://user@host/x"
+
     def test_clean_complete_sweep_scores_full_coverage(self):
         from fl4write.engine import _omni_readiness
         score, label = _omni_readiness([])
@@ -4633,6 +4686,17 @@ class TestMECERound13Pins:
             try:
                 extract_json(hostile, envelope_key="findings")
                 raise AssertionError("nested draft certified clean")
+            except ValueError:
+                pass
+
+    def test_bom_and_quote_prefixes_dont_dodge_refusal(self):
+        from fl4write.analyzer import extract_json
+        for hostile in ('\ufeff{garbage {"findings":[]}',
+                        '> {garbage {"findings":[]}',
+                        '\ufeff> {garbage {"findings":[]}'):
+            try:
+                extract_json(hostile, envelope_key="findings")
+                raise AssertionError(f"prefixed draft certified: {hostile!r}")
             except ValueError:
                 pass
 
