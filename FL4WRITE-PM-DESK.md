@@ -180,3 +180,13 @@ https://git.kyanitelabs.tech/KyaniteLabs/fl4write/pulls/38
 Final-stack evidence: default suite 1375 passed + 4 skipped, reliability
 37 passed + 1 live skip, Ruff/shell/diff-check clean. Merge, mirror/runner
 verify and release acceptance remain open.
+
+### Merge receipt — 2026-10-03 (PR #38 merged)
+
+Forgejo PR #38 merged into `main` as `f7b0c8a` (CI `ci / test
+(pull_request)` green on final head `051b1d4`). Stack: REL-001 error
+gates, REL-002 case-weighted recall + shared renderer, review follow-up
+(honest legacy bounds), lint rename, docs/receipts. Independent review:
+REQUEST-CHANGES -> all 6 fixed -> APPROVE, disposition posted on the PR.
+Remaining: GitHub mirror sync + runner pickup + bounded observation
+(rollback = revert-merge), live-route quality, security menu.
