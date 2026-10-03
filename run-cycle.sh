@@ -61,15 +61,27 @@ fi
 
 # Hosts without ~/.sinter/config.json read the model key from .bashrc.
 # Non-interactive shells never reach .bashrc exports, so pull it here.
-# (.bashrc wraps the value in literal quotes — strip them or auth 401s.)
+# Cycle-4: strip exactly one wrapping quote layer (single or double).
+# The old `tr -d '"'` deleted every INTERIOR quote and never touched
+# single quotes, so export K='"v"' and export K='v' both authed 401.
+# Review round 2: also tolerate trailing whitespace and trailing
+# `# comments` (comment stripping skips quote-led values so quoted
+# secrets containing ` #` survive; unbalanced quotes stay visibly broken).
+_bashrc_export() {  # $1 = VAR name; prints the unquoted value or nothing
+    grep -E "^[[:space:]]*export[[:space:]]+$1=" ~/.bashrc 2>/dev/null \
+        | head -1 | cut -d= -f2- \
+        | sed -e "/^[\"']/!s/[[:space:]][[:space:]]*#.*$//" \
+              -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+              -e 's/^"\([^"]*\)".*$/\1/' -e "s/^'\([^']*\)'.*$/\1/"
+}
 if [ -z "${CODESITTER_DEEPSEEK_KEY:-}" ]; then
-    export CODESITTER_DEEPSEEK_KEY=$(grep "^export CODESITTER_DEEPSEEK_KEY=" ~/.bashrc 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')
+    export CODESITTER_DEEPSEEK_KEY=$(_bashrc_export CODESITTER_DEEPSEEK_KEY)
 fi
 # Forgejo fleet (2026-09-01, CEO-approved): same .bashrc-invisible-to-cron
 # extraction for the Forgejo bot token — inert until the key exists (empty
 # export + zero active forgejo configs = never called).
 if [ -z "${CODESITTER_FORGEJO_TOKEN:-}" ]; then
-    export CODESITTER_FORGEJO_TOKEN=$(grep "^export CODESITTER_FORGEJO_TOKEN=" ~/.bashrc 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')
+    export CODESITTER_FORGEJO_TOKEN=$(_bashrc_export CODESITTER_FORGEJO_TOKEN)
 fi
 
 # Lever 3b (2026-09-27): the tracked fl4write config takes its LAN model

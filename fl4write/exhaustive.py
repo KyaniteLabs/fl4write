@@ -6,6 +6,7 @@ import argparse
 from contextlib import ExitStack
 import hashlib
 import json
+import logging
 import os
 import re
 import shlex
@@ -27,6 +28,8 @@ from .exhaustive_adjudication import AdjudicationError, apply_decision, verified
 from .model_proxy import ProxyError
 from .forges import ForgeAdapter, adapter_for
 from .state import CycleLock, CycleLockHeld
+
+log = logging.getLogger("fl4write.exhaustive")
 
 VERSION, GREEN_REQUIRED, DEFAULT_CHUNK_CHARS = 4, 3, 48_000
 
@@ -385,21 +388,32 @@ def _validated(value: Any, path: str, start: int, end: int, source: str):
         # self-corrected to the line that actually carries the quote. Fabricated
         # content still fails everywhere and stays fatal.
         ev = evidence.strip() if isinstance(evidence, str) else ""
-        grounded_line = None
-        if ev and (ev in lines[line - 1] or ev in lines[line - 1].strip()):
-            grounded_line = line
-        else:
-            for probe in range(max(start, line - 2), min(end, line + 3)):
+
+        def _ground(lo: int, hi: int) -> int | None:
+            if ev and (ev in lines[line - 1] or ev in lines[line - 1].strip()):
+                return line
+            for probe in range(max(lo, line - 2), min(hi, line + 3)):
                 if ev and (ev in lines[probe - 1] or ev in lines[probe - 1].strip()):
-                    grounded_line = probe
-                    break
-            if grounded_line is None:
-                for k in range(1, 4):
-                    hi = min(end, line + k)
-                    window = "\n".join(source_line.strip() for source_line in lines[line - 1:hi])
-                    if ev and ev in window:
-                        grounded_line = line
-                        break
+                    return probe
+            for k in range(1, 4):
+                top = min(hi, line + k)
+                window = "\n".join(source_line.strip() for source_line in lines[line - 1:top])
+                if ev and ev in window:
+                    return line
+            return None
+
+        grounded_line = _ground(start, end)
+        if grounded_line is None and _ground(1, len(lines)) is not None:
+            # Cycle-4: the quote is REAL (verbatim in source near the
+            # cited line) but straddles the chunk edge — a boundary
+            # artifact, not a hallucination. Drop the row (the defect's
+            # own chunk pass can still surface it) instead of killing
+            # the round. Content absent from source stays fatal below.
+            # Review round 2: debug-log the drop so sensitivity loss
+            # from edge-straddling quotes stays observable.
+            log.debug("recon boundary drop %s:%s (chunk %s-%s)",
+                      path, line, start, end)
+            continue
         if grounded_line is None:
             from .scrub import redact_credentials
             raise Deferred(
