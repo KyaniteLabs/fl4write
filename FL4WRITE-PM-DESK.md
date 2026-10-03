@@ -170,3 +170,13 @@ Prevention: keep case counts explicit rather than deriving recall from class
 booleans, and exercise uneven classes at the CLI and reporting seams. No
 architectural handoff is needed for this bounded metric correction. Live
 model quality, independent review and deployed delivery remain unverified.
+
+### Delivery — 2026-10-03 (branch + PR)
+
+Stack pushed to Forgejo origin as `fix/reliability-gates-recall` (4 atomic
+commits: REL-001 gate, REL-002 case-weighted recall + shared renderer,
+exhaustive lint rename, docs/receipts). PR #38 targets `main`:
+https://git.kyanitelabs.tech/KyaniteLabs/fl4write/pulls/38
+Final-stack evidence: default suite 1375 passed + 4 skipped, reliability
+37 passed + 1 live skip, Ruff/shell/diff-check clean. Merge, mirror/runner
+verify and release acceptance remain open.
