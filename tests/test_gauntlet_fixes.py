@@ -3058,6 +3058,36 @@ class TestMECERound7BE:
         rc = (REPO_ROOT / "run-cycle.sh").read_text()
         assert "mapfile -d ''" in rc and "end='\\0'" in rc
 
+    def test_bashrc_export_strips_one_wrapping_layer(self, tmp_path):
+        import re as _re
+        import subprocess as _sp
+
+        rc = (REPO_ROOT / "run-cycle.sh").read_text()
+        assert "_bashrc_export()" in rc and "| tr -d" not in rc
+        # Execute the REAL helper (extracted, never sourcing the runner).
+        m = _re.search(r"(?ms)^_bashrc_export\(\) \{.*?^\}", rc)
+        assert m, "helper body not found"
+        (tmp_path / ".bashrc").write_text(
+            "export CODESITTER_DEEPSEEK_KEY='sq'\n"
+            'export CODESITTER_FORGEJO_TOKEN="dq"\n'
+            "export PADDED=bare\n"
+            'export INNER=\'a"b\'\n')
+        helper = tmp_path / "helper.sh"
+        helper.write_text(m.group(0) + "\n_bashrc_export \"$1\"\n")
+        home = {"HOME": str(tmp_path)}
+
+        def val(var):
+            out = _sp.run(["bash", str(helper), var], capture_output=True,
+                          text=True, env={**os.environ, **home})
+            assert out.returncode == 0, out.stderr
+            return out.stdout.strip()
+
+        assert val("CODESITTER_DEEPSEEK_KEY") == "sq"
+        assert val("CODESITTER_FORGEJO_TOKEN") == "dq"
+        assert val("PADDED") == "bare"
+        assert val("INNER") == 'a"b'  # interior quotes survive
+        assert val("MISSING") == ""
+
 
 class TestMECERound8Pins:
     """Round-8 desk: cleaned envelope scan (F8-A01), weighted readiness
