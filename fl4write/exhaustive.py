@@ -626,9 +626,12 @@ def _junit(path: Path):
 
 def _test(command: list[str], tree: Path, evidence: Path, timeout: int, *, isolation="process", image=None,
           model_proxy=None):
-    argv = [str(evidence) if x == "{junit}" else x for x in command]
-    if str(evidence) not in argv:
-        raise NonGreen("test command requires standalone {junit}")
+    # Cycle-1: the evidence token may also ride embedded in an argument
+    # (e.g. --junit-xml={junit}.xml); it must still appear exactly once in
+    # the substituted argv so the runner knows where evidence lands.
+    argv = [x.replace("{junit}", str(evidence)) if "{junit}" in x else x for x in command]
+    if sum(a.count(str(evidence)) for a in argv) != 1:
+        raise NonGreen("test command requires {junit} exactly once")
     cleanup_note = ""
     if isolation == "docker":
         from .exhaustive_sandbox import SandboxCleanupPending, SandboxUnavailable, run_isolated
