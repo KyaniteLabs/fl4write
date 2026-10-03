@@ -344,3 +344,12 @@ verified work kept, one false commit message repaired by split.
 Cycle 5 CLOSED. Remaining: mini-seat reply, mirror/runner verify
 (mirror main diverged — see desk, do not touch), live quality,
 security menu.
+
+## Cycle 6 opened — 2026-10-04 (convergence sweep)
+
+User order stands (continue until perfect). Cycles 3-5 closed all
+verifiable tree defects with green reviews + CI. Cycle 6 is a
+convergence sweep: five scouts hunt ONLY what cycles 1-5 missed, with
+strict no-re-report lists. Two consecutive clean cycles (5 recens +
+this one if clean) closes the loop per its own rule; anything found
+gets the usual fix + review + CI treatment.
