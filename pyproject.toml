@@ -10,7 +10,9 @@ requires-python = ">=3.11"
 dependencies = ["pydantic>=2.5", "pyyaml>=6", "pyjwt[crypto]>=2.8"]  # RSA signing is the primary App auth path
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.16.5"]
+# Cycle-3: ruff pinned EXACT (was a >= floor floating to latest) — the
+# tree is verified green under this version; CI installs the same bits.
+dev = ["pytest>=8", "ruff==0.16.5"]
 
 [tool.ruff]
 line-length = 120
