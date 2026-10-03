@@ -162,17 +162,43 @@ def _diff_path_texts(diff_text: str) -> dict[str, str]:
 
 
 def _diff_line_spans(diff_text: str) -> dict[str, list[tuple[int, int]]]:
-    """New-file line spans per path from the hunk headers (@@ -a,b +c,d @@)."""
+    """New-file line spans per path from the hunk headers (@@ -a,b +c,d @@).
+
+    Cycle-3: two hardenings. Zero-length new sides (pure deletions,
+    `+0,0`) contribute no spans — there are no new-file lines to cite.
+    And a span never extends past the added lines actually present: a
+    truncated mid-hunk header claims lines the model never saw, so the
+    end clips to what is on the page. Complete diffs are unaffected
+    (present == claimed there).
+    """
     spans: dict[str, list[tuple[int, int]]] = {}
     for path, text in _diff_path_texts(diff_text).items():
         spans[path] = []
+        cur: dict | None = None
+
+        def _flush() -> None:
+            if cur is None:
+                return
+            claimed = cur["start"] + max(cur["count"] - 1, 0)
+            if cur["count"] == 0:
+                return  # pure deletion: no new-file lines exist
+            if 0 < cur["added"] < cur["count"]:
+                spans[path].append((cur["start"], cur["start"] + cur["added"] - 1))
+            else:
+                spans[path].append((cur["start"], claimed))
+
         for line in text.splitlines():
             if line.startswith("@@"):
+                _flush()
                 m = re.search(r"\+(\d+)(?:,(\d+))? @@", line)
                 if m:
-                    start = int(m.group(1))
-                    count = int(m.group(2) or "1")
-                    spans[path].append((start, start + max(count - 1, 0)))
+                    cur = {"start": int(m.group(1)), "count": int(m.group(2) or "1"),
+                           "added": 0}
+                else:
+                    cur = None
+            elif cur is not None and line.startswith("+") and not line.startswith("+++"):
+                cur["added"] += 1
+        _flush()
     return spans
 
 
@@ -514,11 +540,18 @@ def _extract_json(content: str, envelope_key: str | None = None) -> dict:
 def _line_outside_diff(path: str, line: int, diff_text: str, slack: int = 60) -> bool:
     """True when `line` is implausible for `path` in this diff: beyond every
     new-file hunk span plus slack. Unchanged files (no hunks) are not judged.
-    (MECE round-1, terra F1-03 — 999999-on-50-lines class.)"""
+    (MECE round-1, terra F1-03 — 999999-on-50-lines class.)
+
+    Cycle-3: a path WITH a diff block but zero new-file spans (binary
+    blobs, mode-change-only, pure deletions) has nothing to anchor —
+    every line is outside. Unknown paths keep the old accept.
+    """
     spans = _diff_line_spans(diff_text).get(path)
-    if not spans:
+    if spans:
+        return not any(s - slack <= line <= e + slack for s, e in spans)
+    if _diff_path_texts(diff_text).get(path) is None:
         return False
-    return not any(s - slack <= line <= e + slack for s, e in spans)
+    return True
 
 def _path_ignored(path: str, config: RepoConfig) -> bool:
     patterns = (config.path_filters or {}).get("ignore", [])
@@ -779,7 +812,10 @@ def analyze(
                 dropped.append(
                     f"line {f.line} beyond file length {_n_lines} {f.path} ({f.rule_id})")
                 continue
-        if _line_outside_diff(f.path, f.line, _seen_text):
+        # Cycle-3: truncated diffs get tight slack — spans already clip to
+        # visible lines, and anything beyond them cites code never sent.
+        if _line_outside_diff(f.path, f.line, _seen_text,
+                              slack=10 if _diff_truncated else 60):
             # MECE round-1 (terra F1-03): the anchor must plausibly exist in
             # the changed file (a probe posted line 999999 on a 50-line diff)
             dropped.append(f"line {f.line} beyond diff spans {f.path} ({f.rule_id})")
