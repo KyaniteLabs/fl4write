@@ -579,10 +579,19 @@ def _junit(path: Path):
     ids: set[str] = set()
 
     def _local(tag: str) -> str:
-        # Cycle-1 fix: namespaced documents parse as "{ns}testsuite",
-        # which the exact-match walk rejected — certification unwinnable.
-        # JUnit semantics live in the local name.
+        # Cycle-1 fix: uniformly-namespaced documents (surefire et al.)
+        # parse as "{ns}testsuite", which the exact-match walk rejected —
+        # certification unwinnable. JUnit semantics live in the local name,
+        # but MIXED namespaces stay fatal: elements from two vocabularies
+        # in one document are ambiguous evidence, not a dialect.
         return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+    def _ns(tag: str) -> str:
+        return tag.rsplit("}", 1)[0] + "}" if "}" in tag else ""
+
+    seen_ns = {_ns(el.tag) for el in root.iter()}
+    if len(seen_ns) > 1:
+        raise NonGreen("JUnit mixed namespaces across elements")
 
     def walk(node):
         if _local(node.tag) not in {"testsuites", "testsuite"}:

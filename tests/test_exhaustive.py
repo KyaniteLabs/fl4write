@@ -200,11 +200,20 @@ def test_namespaced_junit_evaluated_green(tmp_path: Path):
 def test_namespaced_junit_red_case_counts(tmp_path: Path):
     path = tmp_path / "junit.xml"
     path.write_text(
-        '<testsuites><testsuite xmlns="urn:junit" tests="1" failures="1">'
+        '<testsuites xmlns="urn:junit"><testsuite tests="1" failures="1">'
         '<testcase classname="t" name="test_one"><failure/></testcase>'
         "</testsuite></testsuites>")
     _, green, _ = exhaustive._junit(path)
     assert green is False
+
+
+def test_mixed_namespace_junit_stays_ambiguous(tmp_path: Path):
+    path = tmp_path / "junit.xml"
+    path.write_text(
+        '<testsuites xmlns:t="urn:other"><testsuite tests="1">'
+        '<t:testcase classname="t" name="test_one"/></testsuite></testsuites>')
+    with pytest.raises(exhaustive.NonGreen, match="namespace"):
+        exhaustive._junit(path)
 
 
 def _green_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
