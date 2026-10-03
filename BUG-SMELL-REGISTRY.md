@@ -424,3 +424,24 @@ Fixed; review/merge pending.
   (no atomic primitive; back-compat policy with re-verified authorship).
 - Long-lived token-env staleness: no long-lived consumer found in-tree
   (per-process mint at startup); noted.
+
+## CYCLE4-001: boundary-spanning recon quotes kill rounds (availability)
+
+**File:** `fl4write/exhaustive.py`, `_validated()`.
+**Mechanism:** Multi-line quotes straddling the chunk edge failed the
+chunk-clipped grounding window and raised fatal, though the content was
+verbatim in source. **Local fix:** second unclipped grounding pass —
+real-nearby content drops the row (exact-once preserved: rows still
+accepted in one chunk only; the defect's own chunk pass can surface
+it), content absent from source stays fatal. **Regression:**
+boundary-drop + fabrication-fatal probes (drop case fails pre-fix).
+**Status:** Fixed on `fix/autoloop-cycle4`; review/merge pending.
+
+## CYCLE4-002: runner key extraction mangles quoted values (ops)
+
+**File:** `run-cycle.sh`. `tr -d '"'` deleted interior quotes and never
+stripped single-quote wrapping — both authed 401. **Local fix:**
+helper strips one wrapping layer of either kind, preserves interior
+quotes, tolerates spaced `export`. **Regression:** executes the real
+helper against fixture .bashrc files. **Status:** Fixed; review/merge
+pending.

@@ -297,3 +297,12 @@ round docs-only block (stale stamp) → re-stamped → FULL local suite
 cycle. Registry CYCLE3 rows + refutations recorded. Cycle 3 CLOSED.
 Remaining: mini-seat reply, mirror/runner verify, live quality,
 security menu.
+
+### Cycle-4 receipt — 2026-10-03 (branch fix/autoloop-cycle4)
+
+Worked the deferred-but-actionable tail: recon boundary availability
+and runner key extraction. Full default suite 1431 passed + 4 skipped
+with only the count pin red; README re-stamped 1432+4; Ruff, shell,
+diff-check clean. Per git-hygiene preflight: branch clean, no staged
+work, identity configured, no operation in progress. Next: push, PR,
+independent review, babysit to merge.
