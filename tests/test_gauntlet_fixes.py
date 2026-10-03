@@ -4025,6 +4025,18 @@ class TestMECERound11Analyzer:
                            envelope_key="findings")
         assert out["findings"] == [{"real": 1}]
 
+    def test_deep_nesting_refuses_as_value_error(self):
+        from fl4write.analyzer import extract_json
+        # Cycle-2: extreme nesting exhausts the stdlib decoder's C stack
+        # and escapes as RecursionError past every ValueError-only caller
+        # (moderate depths already refuse cleanly; this pins the extreme).
+        hostile = '{"a":' * 25000 + '"findings": []' + '}' * 25000
+        try:
+            extract_json(hostile, envelope_key="findings")
+            raise AssertionError("deep nesting parsed instead of refusing")
+        except ValueError:
+            pass
+
     def test_negated_span_preserves_positive_conjunction(self):
         from fl4write.analyzer import _self_contradicting
         # a real defect clause after a negated one must survive the strip

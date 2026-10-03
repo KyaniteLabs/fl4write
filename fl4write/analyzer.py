@@ -313,6 +313,21 @@ def extract_json(content: str, envelope_key: str | None = None) -> dict:
     contain braces — the naive first-{ slice then spans garbage + JSON and
     dies; live-caught on the CEO's standing route, 2026-09-02). Strip think
     blocks first, then brace-slice; raise ValueError when unparseable."""
+    try:
+        return _extract_json(content, envelope_key=envelope_key)
+    except RecursionError as exc:
+        # Cycle-2: deeply-nested braces exhaust the stdlib decoder's C
+        # stack instead of failing cleanly. Callers refuse on ValueError
+        # only, so a hostile/degenerate response must arrive as one.
+        raise ValueError(f"JSON nesting too deep to parse safely: {exc}") from exc
+
+
+def _extract_json(content: str, envelope_key: str | None = None) -> dict:
+    """Parse the model's JSON object out of a response that may carry a
+    reasoning preamble (MiniMax-M3 emits <think>...</think> whose text can
+    contain braces — the naive first-{ slice then spans garbage + JSON and
+    dies; live-caught on the CEO's standing route, 2026-09-02). Strip think
+    blocks first, then brace-slice; raise ValueError when unparseable."""
     import json as _json
     import re as _re
 
