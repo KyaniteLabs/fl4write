@@ -169,7 +169,7 @@ class TestRecallMetrics:
         assert row["recall_any"] == "1/2"
         assert row["recall_actionable"] == "1/2"
 
-    def test_trend_row_reads_legacy_boolean_reports(self):
+    def test_trend_row_reads_legacy_boolean_reports_as_lower_bound(self):
         report = {
             "route": {"model": "test", "endpoint": "http://test.invalid"},
             "determinism": {"mean_agreement": 1.0, "min_agreement": 1.0},
@@ -180,8 +180,50 @@ class TestRecallMetrics:
             "calibration": {"table": {}},
         }
         row = rel.trend_row(report, "legacy.json")
-        assert row["recall_any"] == "2/2"
+        # boolean True only warrants "at least one caught", never the class
+        assert row["recall_any"] == "1/2"
         assert row["recall_actionable"] == "0/2"
+
+    def test_trend_row_falls_back_per_bar_for_partial_entries(self):
+        row = rel.trend_row({
+            "route": {"model": "t", "endpoint": "e"},
+            "determinism": {"mean_agreement": 1.0, "min_agreement": 1.0},
+            "recall": {"per_class": {
+                "cls": {"cases": 3, "caught_any_cases": 2, "caught_actionable": True},
+            }},
+            "false_positives": {"actionable_fp_rate": 0.0, "noise_fp_rate": 0.0},
+            "calibration": {"table": {}},
+        }, "partial.json")
+        assert row["recall_any"] == "2/3"
+        assert row["recall_actionable"] == "1/3"
+
+    def test_trend_row_handles_empty_recall(self):
+        row = rel.trend_row({
+            "route": {"model": "t", "endpoint": "e"},
+            "determinism": {"mean_agreement": 0.0, "min_agreement": 0.0},
+            "recall": {"per_class": {}},
+            "false_positives": {"actionable_fp_rate": 0.0, "noise_fp_rate": 0.0},
+            "calibration": {"table": {}},
+        }, "empty.json")
+        assert row["recall_any"] == "0/0"
+        assert row["severity_precision"] is None
+
+    def test_format_summary_renders_legacy_boolean_reports(self):
+        text = rel.format_summary({
+            "route": {"model": "t", "endpoint": "e", "temperature": 0.0,
+                      "seed": None, "max_tokens": 1},
+            "determinism": {"mean_agreement": 1.0, "min_agreement": 1.0,
+                            "total_runs": 2, "errors": 0, "per_case": {}},
+            "recall": {"recall_any": 0.5, "recall_actionable": 0.0,
+                       "per_class": {"cls": {"cases": 2, "caught_any": True,
+                                             "caught_actionable": False}}},
+            "false_positives": {"actionable_fp_rate": 0.0, "noise_fp_rate": 0.0,
+                                "clean_cases": 1, "flagged_case_ids": []},
+            "calibration": {"confidence_field_emitted": False, "proxy": "severity",
+                            "labeling": "path-level", "table": {}},
+            "call_budget": {},
+        })
+        assert "cls: any=1/2 actionable=0/2" in text
 
     def test_cadence_script_delegates_to_shared_trend_row(self):
         script = (Path(__file__).resolve().parents[1] / "tools/reliability-cadence.sh").read_text()

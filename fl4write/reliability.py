@@ -223,6 +223,10 @@ def recall_metrics(defect_records: list[dict]) -> dict:
     Each distinct case counts once and is caught at a bar when at least
     one run has any finding / any actionable finding on that case.
     Class booleans indicate coverage of at least one case, not every case.
+    Error records (``flag == "error"``) count as misses: fail-closed, so an
+    outage reads as 0/N rather than silently shrinking the denominator.
+    Trend rows are only appended from error-free runs (the CLI error gate
+    plus the cadence script's ``set -e`` stop a tainted run before render).
     """
     by_class: dict[str, list[dict]] = {}
     for r in defect_records:
@@ -252,18 +256,22 @@ def recall_metrics(defect_records: list[dict]) -> dict:
 def _caught_counts(entry: dict) -> tuple[int, int, int]:
     """Per-class (total, caught_any, caught_actionable) with backward compat.
 
-    Current reports carry explicit ``caught_*_cases`` counts; pre-REL-002
-    reports only have boolean ``caught_any``/``caught_actionable`` covering
-    the whole class. The fallback treats a true boolean as all cases
-    caught (the old aggregation's intent) so stale reports still render
-    instead of KeyErroring.
+    Current reports carry explicit ``caught_*_cases`` counts. Pre-REL-002
+    reports only have boolean ``caught_any``/``caught_actionable`` meaning
+    "at least one case in the class was caught", so a true boolean maps to
+    a lower bound of 1 (not the whole class) and a false/absent one to 0.
+    Each bar falls back independently, so partially migrated entries never
+    silently zero the other bar.
     """
     total = int(entry.get("cases", 0))
-    if "caught_any_cases" in entry or "caught_actionable_cases" in entry:
-        return (total, int(entry.get("caught_any_cases", 0)),
-                int(entry.get("caught_actionable_cases", 0)))
-    return (total, total if entry.get("caught_any") else 0,
-            total if entry.get("caught_actionable") else 0)
+
+    def _one(count_key: str, flag_key: str) -> int:
+        if count_key in entry:
+            return int(entry.get(count_key, 0))
+        return 1 if entry.get(flag_key) else 0
+
+    return (total, _one("caught_any_cases", "caught_any"),
+            _one("caught_actionable_cases", "caught_actionable"))
 
 
 def trend_row(report: dict, report_path: str = "") -> dict:
@@ -300,6 +308,8 @@ def trend_row(report: dict, report_path: str = "") -> dict:
 
 
 def fp_metrics(clean_records: list[dict]) -> dict:
+    """Fail-closed like recall: error records are non-findings here, and
+    tainted runs never reach the trend renderer (CLI gate + ``set -e``)."""
     by_case: dict[str, list[dict]] = {}
     for r in clean_records:
         by_case.setdefault(r["case_id"], []).append(r)
@@ -454,8 +464,9 @@ def format_summary(report: dict) -> str:
     lines.append(f"\n## Planted-defect recall\n- any-finding: {rc['recall_any']:.1%}  "
                  f"actionable (Crit/Major): {rc['recall_actionable']:.1%}")
     for cls, c in rc["per_class"].items():
-        lines.append(f"  - {cls}: any={c['caught_any_cases']}/{c['cases']} "
-                     f"actionable={c['caught_actionable_cases']}/{c['cases']}")
+        _, any_n, act_n = _caught_counts(c)
+        lines.append(f"  - {cls}: any={any_n}/{c.get('cases', 0)} "
+                     f"actionable={act_n}/{c.get('cases', 0)}")
     fp = report["false_positives"]
     lines.append(f"\n## False positives (clean diffs)\n- noise: {fp['noise_fp_rate']:.1%}  "
                  f"actionable: {fp['actionable_fp_rate']:.1%} "
