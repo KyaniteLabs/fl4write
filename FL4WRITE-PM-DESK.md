@@ -259,3 +259,11 @@ tighten decision later. Verification: full default suite 1398 passed +
 4 skipped with only the count pin red; README re-stamped 1399+4;
 Ruff/shell/diff-check clean. Next: push, PR, independent review,
 babysit to merge, then check the mini seat again.
+
+### Merge receipt — 2026-10-03 (PR #40 merged, cycle 2 closed)
+
+Forgejo PR #40 merged as `8fe2cae` (CI green on head `6f1b36c`).
+Independent review: APPROVE, zero blockers (plus one adopted suggestion:
+path/line in slack events). 4 fixes + 1 refactor shipped; envelope
+O(n^2) measured non-issue with data. Cycle 2 CLOSED. Remaining:
+mini-seat reply, mirror/runner verify, live quality, security menu.
