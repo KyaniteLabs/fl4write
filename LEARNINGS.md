@@ -848,3 +848,28 @@ the next calendar roll instead of after.
 - Temp-0.0 makes retries reproduce identical failures; deterministic lanes need temp>0.
 - Reasoning models on lanes need budget-bounded thinking + forced-answer message (CRACK and LFM lanes both).
 - Queue rulings: reliability_corpus.py planted API-key fixture is harness contract (RULED, not a defect); prism llama-server b10743 on the Dell crashes on code-heavy prompts (lane defect, reported to CS).
+
+## #65 — 2026-10-03 — failed measurements must not certify reliability
+
+Numeric quality gates cannot establish measurement completeness. Repeated
+errors have identical signatures, and failed clean-case reviews have no
+findings; both can produce favorable metrics without successful reviews.
+The CLI now rejects measurement errors in determinism, recall and clean
+lanes while retaining diagnostic reports. Regression probes exercised all
+three lanes through the real measurement/CLI path with synthetic samples;
+an error-free control guards against rejecting successful measurements.
+The reliability suite passed 31 tests with one live-route skip. This proves
+the local gate repair, not model quality or deployed reliability.
+
+## #66 — 2026-10-03 — class coverage is not case recall
+
+One successful example cannot stand in for every example in a defect class.
+The reliability harness and cadence trend renderer confused class coverage
+with case recall. A two-case reproduction returned 100% after one miss;
+changing only the class label returned the correct 50%. Count caught cases
+explicitly, deduplicate repeated runs per case, and use the same counts in
+gate decisions and trend receipts. Four regression cases cover metric
+weighting, CLI rejection and the actual trend renderer. Future corpus growth
+can now include multiple examples per class without hiding misses. The
+existing corpus still has one example per class; this repair does not expand
+that corpus or establish current live model quality.

@@ -102,3 +102,81 @@ CEO word: "try crack ornith (moe is faster than dense)." Floor state re-verified
 - NEW FLAG filed on that desk for the tree owner (merge session): merge/reliability-harness @131d1f0 resolved BUG-SMELL-REGISTRY.md to the harness F-series — the corrected D7-035 entry (present at e1f9ad5/origin main) is ABSENT from the merge tip (grep count 0). Not fixed here: tree is CEO-merge-owned.
 - Loop untouched, confirmed: STOP file intact (Sep 20), no harness files modified, working tree uncommitted delta (scrub.py/issues.py) left exactly as found, no branch/PR minted (repo-level debt already corrected in landed+pushed commits; a mid-merge PR would collide with the tree owner).
 - Mirror expectation: next hourly sweep (~19:01Z; last mirror 18:01:29Z) pulls the mini desk tail → OFF-MBA-MIRROR-fl4write-autoloop-desk.md should show the TRUTH-DEBT CORRECTION block headings (Flag 1 / Flag 2 / OPEN FLAG) at its tail, possibly dropping the oldest CYCLE-60 log lines from the window.
+
+## Successor PM intake — 2026-10-03
+
+User appointed this session as the next FL4WRITE PM. Initial intake covers
+the PM desk, historical PM-3 handoff, recovery report, audit ledger and README.
+
+Local checkout verified at `main@1963133`, initially clean. Recent history
+includes cascade, adjudication and concurrency integrations after the older
+desk receipts. Remote-tracking agreement is local evidence only; neither
+remote freshness nor production delivery was verified during this intake.
+
+First priority: reconcile current reliability evidence and acceptance gates
+against the current main revision, then identify the next bounded work item.
+Historical baseline numbers and open/closed gate labels do not establish
+current fitness. Current runner health, model quality, independent QA,
+security disposition and release acceptance remain to be verified.
+
+Intake changed no code, runner, model route or external tracker. No tests were
+run and no release certification is claimed. Graph-assisted reads were
+unavailable (`jcode`, `jdoc`, `codegraph` and graph MCP tools absent); targeted
+document reads were used. Restore graph access before substantial code work.
+
+### First successor repair — 2026-10-03
+
+User directed persistent work toward FL4WRITE reliability. Reproduced and
+locally repaired PM-20261003-REL-001: the reliability CLI returned success
+with measurement errors despite passing numeric metrics. The CLI now rejects
+errors in all three lanes and retains the report. Three failing regression
+probes became green; an error-free control also passes. Cluster check covered
+determinism, recall and clean-case errors rather than only repeated failures.
+
+Verification: reliability suite 31 passed / 1 live skip; default suite
+1369 passed / 4 live skips with the nested documentation guard; README count
+automatically stamped from that successful run; real documentation verifier
+then passed (including its nested full suite). Repository-wide Ruff passed
+after renaming an existing ambiguous variable in exhaustive quote grounding;
+the exhaustive suite passed 43 tests. Diff whitespace check passed.
+
+Delivery status: local edits only, no commit, push, deployment or independent
+review. These receipts establish the measurement-gate repair, not live model
+quality. Next: verify current live-route reliability and production receipts
+before claiming product fitness. Dispatch returned a lane outside the stated
+routing policy; no worker was started and no replacement model was selected.
+
+### Diagnosing-bugs pass — 2026-10-03
+
+Explicitly invoked skill applied to PM-20261003-REL-002. Minimal no-network
+probe: two cases in one class, one hit and one miss, reported recall 1.0
+instead of 0.5. The CLI also passed a 0.75 gate for those records. Ranked
+hypotheses and single-variable probes confirmed class aggregation as the
+cause; severity handling and repeat counting did not explain the hidden miss.
+
+Local repair counts distinct caught cases and uses the same counts in
+aggregate recall, human summaries and cadence trend output. Three pre-fix
+metric/CLI regressions failed on the wrong results and passed after the fix;
+a fourth executes the actual cadence renderer and verifies a 1/2 receipt.
+Original minimal probe now yields 0.5. Reliability tests: 35 passed / one
+live skip. Full default measurement: 1373 passed / four live skips; README
+automatically stamped from that successful run. Ruff, shell syntax and diff
+whitespace checks passed; no debug instrumentation or repository-local
+throwaway harness remains. Existing local changes preserved.
+The documentation verifier subsequently passed, including its nested full
+default-suite rerun.
+
+Prevention: keep case counts explicit rather than deriving recall from class
+booleans, and exercise uneven classes at the CLI and reporting seams. No
+architectural handoff is needed for this bounded metric correction. Live
+model quality, independent review and deployed delivery remain unverified.
+
+### Delivery — 2026-10-03 (branch + PR)
+
+Stack pushed to Forgejo origin as `fix/reliability-gates-recall` (4 atomic
+commits: REL-001 gate, REL-002 case-weighted recall + shared renderer,
+exhaustive lint rename, docs/receipts). PR #38 targets `main`:
+https://git.kyanitelabs.tech/KyaniteLabs/fl4write/pulls/38
+Final-stack evidence: default suite 1375 passed + 4 skipped, reliability
+37 passed + 1 live skip, Ruff/shell/diff-check clean. Merge, mirror/runner
+verify and release acceptance remain open.
