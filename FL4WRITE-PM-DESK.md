@@ -286,3 +286,14 @@ count pin red; README re-stamped 1427+4; Ruff (pinned exact), shell,
 diff-check clean. Next: push, PR, independent review, babysit to merge.
 Standing open (not tree defects): mini-seat reply, mirror/runner
 verify, live quality, security menu.
+
+### Merge receipt — 2026-10-03 (PR #41 merged, cycle 3 closed)
+
+Forgejo PR #41 merged as `2face4d` (CI green on head `2b8f180`).
+Independent review went two rounds: REQUEST-CHANGES (3 real findings
+incl. a span-clipping regression I introduced) → all fixed → second
+round docs-only block (stale stamp) → re-stamped → FULL local suite
+1429 passed + 4 skipped, zero failures. The loop's first fully-green
+cycle. Registry CYCLE3 rows + refutations recorded. Cycle 3 CLOSED.
+Remaining: mini-seat reply, mirror/runner verify, live quality,
+security menu.
