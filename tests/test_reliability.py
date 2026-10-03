@@ -154,6 +154,63 @@ class TestDeterminismMetrics:
 
 
 class TestRecallMetrics:
+    def test_trend_row_uses_case_counts(self):
+        report = {
+            "route": {"model": "test", "endpoint": "http://test.invalid"},
+            "determinism": {"mean_agreement": 1.0, "min_agreement": 1.0},
+            "recall": recall_metrics([
+                _rec("hit", "cls", SIG_A, "defect", True, {"Major": 1}),
+                _rec("miss", "cls", SIG_C, "clean", False, {}),
+            ]),
+            "false_positives": {"actionable_fp_rate": 0.0, "noise_fp_rate": 0.0},
+            "calibration": {"table": {}},
+        }
+        row = rel.trend_row(report, "report.json")
+        assert row["recall_any"] == "1/2"
+        assert row["recall_actionable"] == "1/2"
+
+    def test_trend_row_reads_legacy_boolean_reports(self):
+        report = {
+            "route": {"model": "test", "endpoint": "http://test.invalid"},
+            "determinism": {"mean_agreement": 1.0, "min_agreement": 1.0},
+            "recall": {"per_class": {
+                "cls": {"cases": 2, "caught_any": True, "caught_actionable": False},
+            }},
+            "false_positives": {"actionable_fp_rate": 0.0, "noise_fp_rate": 0.0},
+            "calibration": {"table": {}},
+        }
+        row = rel.trend_row(report, "legacy.json")
+        assert row["recall_any"] == "2/2"
+        assert row["recall_actionable"] == "0/2"
+
+    def test_cadence_script_delegates_to_shared_trend_row(self):
+        script = (Path(__file__).resolve().parents[1] / "tools/reliability-cadence.sh").read_text()
+        assert "from fl4write.reliability import trend_row" in script
+        assert "caught_any_cases" not in script
+
+    def test_missed_case_is_not_hidden_by_same_class_hit(self):
+        recs = [
+            _rec("hit", "cls", SIG_A, "defect", True, {"Major": 1}),
+            _rec("miss", "cls", SIG_C, "clean", False, {}),
+        ]
+        m = recall_metrics(recs)
+        assert m["recall_any"] == 0.5
+        assert m["recall_actionable"] == 0.5
+        assert m["per_class"]["cls"]["caught_any_cases"] == 1
+        assert m["per_class"]["cls"]["caught_actionable_cases"] == 1
+
+    def test_cases_have_equal_weight_despite_class_size_and_repeats(self):
+        recs = [
+            _rec("hit", "cls", SIG_A, "defect", True, {"Major": 1}),
+            _rec("hit", "cls", SIG_A, "defect", True, {"Major": 1}),
+            _rec("minor", "cls", SIG_B, "defect", False, {"Minor": 1}),
+            _rec("miss", "other", SIG_C, "clean", False, {}),
+        ]
+        m = recall_metrics(recs)
+        assert m["recall_any"] == pytest.approx(2 / 3)
+        assert m["recall_actionable"] == pytest.approx(1 / 3)
+        assert m["per_class"]["cls"]["cases"] == 2
+
     def test_per_class_catch_bars(self):
         recs = [
             _rec("c1", "sql-injection", SIG_A, "defect", True, {"Critical": 1}),
@@ -382,6 +439,24 @@ class TestRunnerOffline:
 # ---------------------------------------------------------------------------
 
 class TestConfigAndGates:
+    def test_cli_recall_gate_catches_miss_within_class(self, monkeypatch, tmp_path, capsys):
+        cases = [dict(case, defect_class="shared") for case in corpus.DEFECT_CASES[:2]]
+        monkeypatch.setattr(corpus, "DEFECT_CASES", cases)
+        monkeypatch.setattr(corpus, "DETERMINISM_SAMPLE", [cases[0]["id"]])
+        monkeypatch.setattr(rel, "build_config", lambda *a, **k: _offline_config())
+
+        def sample(case, config):
+            cls = case.get("defect_class", "")
+            caught = bool(cls) and case["id"] != cases[1]["id"]
+            return _rec(case["id"], cls, SIG_A if caught else SIG_C,
+                        "defect" if caught else "clean", caught, {"Major": 1} if caught else {})
+
+        monkeypatch.setattr(rel, "_guarded_run", sample)
+        rc = rel.main(["--config", "unused.yaml", "--runs", "2", "--out", str(tmp_path),
+                       "--cache-dir", "none", "--min-recall", "0.75"])
+        assert rc == 1
+        assert "recall 50.0% < 75.0%" in capsys.readouterr().err
+
     @pytest.mark.parametrize("failed_lane", ["determinism", "recall", "clean", None])
     def test_cli_rejects_measurement_errors_despite_passing_metrics(
             self, monkeypatch, tmp_path, capsys, failed_lane):

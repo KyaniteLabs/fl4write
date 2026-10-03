@@ -218,26 +218,84 @@ def determinism_metrics(records: list[dict]) -> dict:
 
 
 def recall_metrics(defect_records: list[dict]) -> dict:
-    """Catch rate per defect class; a case is caught at a bar when >=1 run
-    (for multi-run cases: modal verdict, single-run: that run) has any
-    finding / any actionable finding on the case."""
+    """Case-weighted recall, with counts summarized per defect class.
+
+    Each distinct case counts once and is caught at a bar when at least
+    one run has any finding / any actionable finding on that case.
+    Class booleans indicate coverage of at least one case, not every case.
+    """
     by_class: dict[str, list[dict]] = {}
     for r in defect_records:
         by_class.setdefault(r["defect_class"], []).append(r)
     per_class = {}
     for cls, runs in sorted(by_class.items()):
-        caught_any = any(r["flag"] == "defect" for r in runs)
-        caught_actionable = any(r["actionable"] for r in runs)
+        by_case: dict[str, list[dict]] = {}
+        for record in runs:
+            by_case.setdefault(record["case_id"], []).append(record)
+        caught_any = sum(any(r["flag"] == "defect" for r in samples) for samples in by_case.values())
+        caught_actionable = sum(any(r["actionable"] for r in samples) for samples in by_case.values())
         per_class[cls] = {
-            "cases": len({r["case_id"] for r in runs}),
-            "caught_any": caught_any,
-            "caught_actionable": caught_actionable,
+            "cases": len(by_case),
+            "caught_any": bool(caught_any),
+            "caught_actionable": bool(caught_actionable),
+            "caught_any_cases": caught_any,
+            "caught_actionable_cases": caught_actionable,
         }
-    n = len(per_class)
+    n = sum(c["cases"] for c in per_class.values())
     return {
         "per_class": per_class,
-        "recall_any": sum(c["caught_any"] for c in per_class.values()) / n if n else 0.0,
-        "recall_actionable": sum(c["caught_actionable"] for c in per_class.values()) / n if n else 0.0,
+        "recall_any": sum(c["caught_any_cases"] for c in per_class.values()) / n if n else 0.0,
+        "recall_actionable": sum(c["caught_actionable_cases"] for c in per_class.values()) / n if n else 0.0,
+    }
+
+
+def _caught_counts(entry: dict) -> tuple[int, int, int]:
+    """Per-class (total, caught_any, caught_actionable) with backward compat.
+
+    Current reports carry explicit ``caught_*_cases`` counts; pre-REL-002
+    reports only have boolean ``caught_any``/``caught_actionable`` covering
+    the whole class. The fallback treats a true boolean as all cases
+    caught (the old aggregation's intent) so stale reports still render
+    instead of KeyErroring.
+    """
+    total = int(entry.get("cases", 0))
+    if "caught_any_cases" in entry or "caught_actionable_cases" in entry:
+        return (total, int(entry.get("caught_any_cases", 0)),
+                int(entry.get("caught_actionable_cases", 0)))
+    return (total, total if entry.get("caught_any") else 0,
+            total if entry.get("caught_actionable") else 0)
+
+
+def trend_row(report: dict, report_path: str = "") -> dict:
+    """Single trend-row emitter shared by the cadence runner and tests.
+
+    Keeps recall math in one place so metric fixes never need parallel
+    edits in shell-embedded Python.
+    """
+    import time
+
+    det = report.get("determinism", {})
+    rec = report.get("recall", {})
+    fp = report.get("false_positives", {})
+    totals = [_caught_counts(v) for v in rec.get("per_class", {}).values()]
+    tot = sum(t for t, _, _ in totals)
+    caught = sum(c for _, c, _ in totals)
+    caught_a = sum(a for _, _, a in totals)
+    tbl = report.get("calibration", {}).get("table", {})
+    tp = sum(v.get("tp", 0) for v in tbl.values())
+    fpn = sum(v.get("fp", 0) for v in tbl.values())
+    route = report.get("route", {})
+    return {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "route": f'{route.get("model", "?")}@{route.get("endpoint", "?")}',
+        "determinism": round(float(det.get("mean_agreement", 0.0)), 4),
+        "det_min": det.get("min_agreement", 0.0),
+        "recall_any": f"{caught}/{tot}",
+        "recall_actionable": f"{caught_a}/{tot}",
+        "actionable_fp": fp.get("actionable_fp_rate", 0.0),
+        "noise_fp": fp.get("noise_fp_rate", 0.0),
+        "severity_precision": round(tp / (tp + fpn), 4) if tp + fpn else None,
+        "report": report_path,
     }
 
 
@@ -396,7 +454,8 @@ def format_summary(report: dict) -> str:
     lines.append(f"\n## Planted-defect recall\n- any-finding: {rc['recall_any']:.1%}  "
                  f"actionable (Crit/Major): {rc['recall_actionable']:.1%}")
     for cls, c in rc["per_class"].items():
-        lines.append(f"  - {cls}: any={c['caught_any']} actionable={c['caught_actionable']}")
+        lines.append(f"  - {cls}: any={c['caught_any_cases']}/{c['cases']} "
+                     f"actionable={c['caught_actionable_cases']}/{c['cases']}")
     fp = report["false_positives"]
     lines.append(f"\n## False positives (clean diffs)\n- noise: {fp['noise_fp_rate']:.1%}  "
                  f"actionable: {fp['actionable_fp_rate']:.1%} "
