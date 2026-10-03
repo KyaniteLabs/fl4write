@@ -112,7 +112,7 @@ def test_real_cycle_resumes_without_another_review(lane, monkeypatch, tmp_path, 
     forge.prs = [] if post_merge else [pr]
     forge.list_merged_prs = lambda *a: [pr]
     monkeypatch.setattr(engine, "adapter_for", lambda *a: forge)
-    monkeypatch.setattr(engine, "_poll_fix_merges", lambda *a: None)
+    monkeypatch.setattr(engine, "_poll_fix_merges", lambda *a, **k: None)
     modeled = []
     def analyze(*a):
         modeled.append(1)

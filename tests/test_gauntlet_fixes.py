@@ -4704,6 +4704,7 @@ class TestMECERound13Pins:
         cfg_obj = make_config()
         diff = ("diff --git a/conf.py b/conf.py\n"
                 "index 000..111\n--- a/conf.py\n+++ b/conf.py\n"
+                "@@ -0,0 +1,2 @@\n"
                 "+password=aaaaaaaaaaaaaaaa\n+line2\n")
         # L1-B1 caps a BARE claim at Major (established law); the A1 fix is
         # the FLOOR: an anchored low-entropy assignment is never Nit, and the
