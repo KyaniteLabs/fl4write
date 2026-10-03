@@ -60,6 +60,26 @@ def is_own_identity(author: str, bot_login: str) -> bool:
     return author == bot_login or author in LEGACY_BOT_LOGINS
 
 
+# Retryable HTTP statuses for idempotent GETs (POSTs never blind-retry:
+# double-post risk). Shared by _call/_call_text so throttle handling
+# cannot drift between the JSON and text lanes (cycle-2 deduplication).
+_RETRYABLE_HTTP = (403, 429, 500, 502, 503, 504)
+
+
+def _throttle_wait(exc: urllib.error.HTTPError) -> float:
+    """Seconds to sleep before one GET retry. Honors Retry-After up to
+    30s; missing header means retry-now, NaN/negative means bounded 1s
+    (never time.sleep(raw) crashes or instant-spin)."""
+    wait = 0.0
+    if exc.headers and exc.headers.get("Retry-After"):
+        try:
+            _raw = float(exc.headers["Retry-After"])
+        except ValueError:
+            _raw = float("nan")
+        wait = min(_raw, 30.0) if _raw >= 0 and _raw == _raw else 1.0
+    return wait
+
+
 class ForgeError(RuntimeError):
     pass
 
@@ -114,17 +134,8 @@ class ForgeAdapter:
                     # not leak JSONDecodeError past the boundaries
                     raise ForgeError(f"{self.name} {method} {path}: non-JSON response") from exc
         except urllib.error.HTTPError as exc:
-            if method == "GET" and _retry and exc.code in (403, 429, 500, 502, 503, 504):
-                wait = 0.0
-                if exc.headers and exc.headers.get("Retry-After"):
-                    try:
-                        _raw = float(exc.headers["Retry-After"])
-                    except ValueError:
-                        _raw = float("nan")
-                    # F6-307: NaN/negative Retry-After -> bounded 1s, never
-                    # time.sleep(raw) crashes or instant-spin
-                    wait = min(_raw, 30.0) if _raw >= 0 and _raw == _raw else 1.0
-                time.sleep(wait)
+            if method == "GET" and _retry and exc.code in _RETRYABLE_HTTP:
+                time.sleep(_throttle_wait(exc))
                 return self._call(method, path, payload, _retry=False)
             raise ForgeError(f"{self.name} {method} {path}: HTTP {exc.code}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
@@ -154,16 +165,8 @@ class ForgeAdapter:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return _bounded_read(resp, self.name, method, path).decode()
         except urllib.error.HTTPError as exc:
-            if method == "GET" and _retry and exc.code in (403, 429, 500, 502, 503, 504):
-                wait = 0.0
-                if exc.headers and exc.headers.get("Retry-After"):
-                    try:
-                        _raw = float(exc.headers["Retry-After"])
-                    except ValueError:
-                        _raw = float("nan")
-                    # F6-307: NaN/negative Retry-After -> bounded 1s
-                    wait = min(_raw, 30.0) if _raw >= 0 and _raw == _raw else 1.0
-                time.sleep(wait)
+            if method == "GET" and _retry and exc.code in _RETRYABLE_HTTP:
+                time.sleep(_throttle_wait(exc))
                 return self._call_text(method, path, _retry=False)
             raise ForgeError(f"{self.name} {method} {path}: HTTP {exc.code}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:

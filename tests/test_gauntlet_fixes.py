@@ -1586,6 +1586,21 @@ class TestMECERound4M3Pins:
                             lambda req, timeout=30: _Capped())
         assert ad._call("GET", "/x") == {"ok": True}
 
+    def test_throttle_wait_pins_retry_after_edges(self):
+        import urllib.error
+
+        import fl4write.forges as fmod
+
+        def exc_with(header):
+            headers = {"Retry-After": header} if header is not None else {}
+            return urllib.error.HTTPError("http://x", 429, "t", headers, None)
+
+        assert fmod._throttle_wait(exc_with(None)) == 0.0
+        assert fmod._throttle_wait(exc_with("5")) == 5.0
+        assert fmod._throttle_wait(exc_with("99")) == 30.0
+        assert fmod._throttle_wait(exc_with("junk")) == 1.0
+        assert fmod._throttle_wait(exc_with("-3")) == 1.0
+
     def test_tree_scan_quotes_slash_branch_names(self):
         for cls in (GitHubAdapter, ForgejoAdapter):
             ad = self._adapter(cls)
