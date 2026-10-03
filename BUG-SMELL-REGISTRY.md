@@ -326,3 +326,101 @@ Refactor, no behavior change. **Status:** Merged PR #40 (`8fe2cae`), independent
 slack emit best-effort `slack_reliance` counts for the future
 tighten-or-keep decision. Regression pins emit-on-reliance and
 silence-on-tight-hit. **Status:** Landed; decision awaits live data.
+
+## CYCLE3-001: scrub/assert gaps — handlers, schemes, userinfo, triage (leak)
+
+**Files:** `fl4write/scrub.py`, `fl4write/issues.py`.
+**Mechanism:** Event handlers on allowed tags and inline `javascript:`
+destinations survived both scrub and assert_clean; URL userinfo passwords
+carried no assignment key and dodged run rules; issue titles/bodies rode
+model prompts scrubbed but never credential-redacted. Bare http links
+deliberately stay (tested legitimate-prose rule). **Local fix:**
+handler-attribute neutralization, scheme neutralization (both asserted),
+userinfo-password redaction keeping the username, triage-prompt
+redaction. **Regression:** handler/scheme/userinfo probes + prose
+preservation + triage-prompt capture. **Status:** Fixed on
+`fix/autoloop-cycle3`; review/merge pending.
+
+## CYCLE3-002: BOM/quote prefixes dodge envelope refusal (wrong-verdict)
+
+**File:** `fl4write/analyzer.py`. `lstrip()[:1]` missed BOMs and `>`
+markers, so prefixed malformed envelopes fell through to key-scan
+certification (all five probe shapes certified pre-fix). **Local fix:**
+judge the first real char. **Regression:** BOM/quote probes fail
+pre-fix, green post-fix. **Status:** Fixed; review/merge pending.
+
+## CYCLE3-003: ungroundable blocks accepted; spans unclipped (wrong-verdict)
+
+**File:** `fl4write/analyzer.py`. Binary/mode-change/deleted blocks have
+no new-file lines yet any line posted; span ends came from headers even
+when truncation cut the hunk, and truncated mode kept 60 slack past the
+cut. **Local fix:** zero-span blocks reject all lines (unknown paths
+keep old accept); ends clip to present added lines; truncated mode uses
+slack 10. One established fixture needed its missing `@@` header (real
+diffs always carry one). **Regression:** per-shape probes.
+**Status:** Fixed; review/merge pending.
+
+## CYCLE3-004: adjudication leak synonyms (wrong-verdict class)
+
+**File:** `fl4write/exhaustive_adjudication.py`. Message markers missed
+passwd/pwd/bearer/private-key/userinfo and substring-matched inside
+words. **Local fix:** extended set with word boundaries (+plurals);
+tokenizer-machinery prose still carves. Query-marker substring behavior
+kept (documented safe direction). **Status:** Fixed; review/merge pending.
+
+## CYCLE3-005: stale sample id crashes measurement (crash)
+
+**File:** `fl4write/reliability.py`. `case_by_id` outside the guarded
+belt. **Local fix:** fails closed as error records. **Regression:**
+stale-id probe. **Status:** Fixed; review/merge pending.
+
+## CYCLE3-006: unclamped legacy counts, unlocked trend, quick false-red
+
+**Files:** `fl4write/reliability.py`, `tools/reliability-cadence.sh`.
+Rot renders (3/2, 1/0) now clamp; trend append takes an exclusive lock;
+quick mode (runs=3) gets its own 0.80 determinism tripwire.
+Partial-outage mean semantics documented as designed. **Status:** Fixed;
+review/merge pending.
+
+## CYCLE3-007: fix-lane rails — depth, kept entries, -O, deadlines
+
+**Files:** `fl4write/engine.py`, `fl4write/executor.py`, `fl4write/fixlane.py`,
+`fl4write/state.py`. `attempt_fix` takes explicit depth (lane passes its
+tracked value; synth callers pass explicit 0 under their own caps);
+pending entries pop only after an attempt returns; fork-policy check is
+an explicit raise; omni drain + owned-PR scan recheck deadlines per
+finding/page; reconcile carries validated omni identity. **Regression:**
+crash-kept entries, -O-proof rail, stop-at-deadline on both drains,
+carry/drop/reset state probes. **Status:** Fixed; review/merge pending.
+
+## CYCLE3-008: appauth scoped-token self-DoS; ruff version float
+
+`get_repository_token` minted per call (verify+resolve+mint); now cached
+with TTL like installation tokens. Ruff `>=` floor floated CI off the
+verified version; pinned exact after green verification. **Status:**
+Fixed; review/merge pending.
+
+## CYCLE3 refutations (verified, no change)
+
+- Cache-key config evolution, empty-file recon, recon quote-fatal:
+  prior verdicts stand (prompt-hashed rules, vacuous truth, deliberate
+  anti-hallucination design).
+- Container-recovery container-delete: container test code cannot reach
+  the host-side record (only /evidence tmpfs is mounted); same-uid host
+  writers are the insider model. Regex also limits blast radius to
+  `fl4write-test-*` names.
+- Red-proof forgery residual: the pin requires real suite failure plus
+  structural XML binding (failures present, no errors/skips, baseline
+  superset) — fabrication past that point changes nothing material.
+- Publication hash hand-build: state files are host-trust-boundary;
+  no model-writable path reaches them.
+- Gitattributes clean-filter gap: BACKWARDS — the guards fail CLOSED
+  (raw-vs-staged mismatch raises); identity filters are a non-issue.
+- Tiers stale resurrection: already fixed (F8-C002 — closed records
+  excluded; open_ids fallback is a one-time migration).
+- Executor junit-argv visibility + askpass env token: fork-blocked lane
+  + same-uid insider model; documented accepted risk.
+- TOCTOU same-SHA merge + legacy bot logins: accepted residuals
+  (no atomic primitive; back-compat policy with re-verified authorship).
+- Long-lived token-env staleness: no long-lived consumer found in-tree
+  (per-process mint at startup); noted.

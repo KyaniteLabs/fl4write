@@ -267,3 +267,22 @@ Independent review: APPROVE, zero blockers (plus one adopted suggestion:
 path/line in slack events). 4 fixes + 1 refactor shipped; envelope
 O(n^2) measured non-issue with data. Cycle 2 CLOSED. Remaining:
 mini-seat reply, mirror/runner verify, live quality, security menu.
+
+### Cycle-3 receipt — 2026-10-03 (branch fix/autoloop-cycle3)
+
+Five second-pass scouts returned ~45 findings against post-cycle-2 code.
+Triage with code-read verification: 8 fix commits (scrub/assert leaks +
+triage redaction + envelope-head hardening + adjudication markers;
+ungroundable-block rejection + span clipping + truncated slack 10;
+stale-id crash + count clamps + trend lock + quick gate; engine rails +
+deadlines + omni identity; appauth cache; ruff pin), 1 docs-status sync,
+each with pre-fix-failing or behavior-pinning regressions. Refuted 12
+(mostly prior-verdict stands + three backwards claims), accepted 6 as
+documented residuals with rationale, deferred 0 — every actionable item
+has a fix or a written verdict.
+
+Verification: full default suite 1426 passed + 4 skipped with only the
+count pin red; README re-stamped 1427+4; Ruff (pinned exact), shell,
+diff-check clean. Next: push, PR, independent review, babysit to merge.
+Standing open (not tree defects): mini-seat reply, mirror/runner
+verify, live quality, security menu.
