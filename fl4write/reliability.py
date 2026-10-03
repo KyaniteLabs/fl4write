@@ -463,7 +463,12 @@ def run_measurement(config: RepoConfig, runs: int = 5,
         "false_positives": fp_metrics(clean_records),
         "calibration": severity_calibration(
             [r for r in recall_records + clean_records if not r.get("error")]),
+        # Cycle-1: real_calls counts attempted model calls (failed attempts
+        # still cost sockets/time); failed_calls breaks out the error share
+        # so a dead route no longer reads as full-measure spend.
         "call_budget": {"real_calls": cache.real_calls + runs * len(sample_ids),
+                        "failed_calls": det["errors"] + sum(
+                            1 for r in recall_records + clean_records if r.get("error")),
                         "cache_hits": cache.hits, "cache_misses": cache.misses},
         "records": {"determinism": det_records, "recall": recall_records,
                     "clean": clean_records},

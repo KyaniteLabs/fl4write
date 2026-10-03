@@ -502,6 +502,8 @@ class TestRunnerOffline:
         assert det["errors"] == 2 and det["per_case"]["clean-pagination"]["runs"] == 2
         assert all(r["flag"] == "error" for r in report["records"]["recall"])
         assert report["recall"]["recall_any"] == 0.0
+        budget = report["call_budget"]
+        assert budget["failed_calls"] == budget["real_calls"] > 0
 
 
 # ---------------------------------------------------------------------------
