@@ -445,3 +445,44 @@ helper strips one wrapping layer of either kind, preserves interior
 quotes, tolerates spaced `export`. **Regression:** executes the real
 helper against fixture .bashrc files. **Status:** Fixed; review/merge
 pending.
+
+## CYCLE5-001: untrusted test runs escape process containment (escape)
+
+**Files:** `fl4write/executor.py`, `fl4write/exhaustive.py`.
+**Mechanism:** Test execution had no process-group boundary — a suite
+that backgrounds a daemon (setsid writer outliving the run) could
+rewrite evidence or the workdir after the verdict was read. Two local
+`_run` implementations also drifted. **Local fix:** new-session process
+groups with whole-group SIGKILL on return (pgid captured before
+reaping — post-reap lookup misses the surviving group, observed live);
+exhaustive delegates to the single implementation; TimeoutExpired
+contract preserved. **Regression:** daemon-killed + timeout-contract
+probes (both discriminate live); pre-PUT flip probe merges pre-fix,
+defers post-fix. **Status:** Fixed on `fix/autoloop-cycle5`.
+
+## CYCLE5-002: same-SHA red flip at merge instant (wrong-action)
+
+**File:** `fl4write/executor.py`. Combined status was read once per scan;
+checks flipping red before PUT still merged. **Local fix:** re-probe
+immediately before PUT (narrows, cannot close — no atomic primitive).
+**Status:** Fixed on `fix/autoloop-cycle5`.
+
+## CYCLE5-003: scoped-token self-DoS; runner auth/token hygiene; trend skew
+
+`get_repository_token` minted per call — now TTL-cached. Runner fails
+fast on invalid gh token; key extraction tolerates quotes/whitespace/
+comments. Trend rows carry worst-severity precision alongside the
+aggregate. Ruff pinned exact. **Status:** Fixed on `fix/autoloop-cycle5`.
+
+## Handoff audit — 2026-10-03 (fork session claims vs live state)
+
+A fork session reported: branch deleted, worktree on clean main @
+995759a, cycle-5 executor work stashed as `a0ef5c9` unverified.
+Live verification found: branch EXISTS with history intact (44b8e5d
+present); worktree held uncommitted cycle-5 work; main clean at
+995759a == origin/main. The stash (`a0ef5c9`, dropped after audit)
+contained a SUPERSEDED intermediate (post-reap getpgid race, no call
+sites) — the worktree already carried the verified pgid-capture
+version. Mechanics of the handoff were wrong; its caution was right
+and is honored by this audit. Tastecheck-repo remark: out of scope
+for this lane, no fl4write impact.

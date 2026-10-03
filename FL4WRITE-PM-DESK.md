@@ -315,3 +315,20 @@ more count drift mid-babysit (re-stamped 1433+4, full local suite green
 before merge). Final tree: 1433 passed + 4 skipped, zero failures.
 Cycle 4 CLOSED. Remaining: mini-seat reply, mirror/runner verify, live
 quality, security menu.
+
+### Coordination update — 2026-10-03 (parallel workstream on mirror)
+
+Read-only discovery: github main (`25c978f`) diverges from origin/main
+at `1963133` + a 3,124-line `tools/review-hardening/` toolkit (Oct 2);
+`pm-fl4write-hardening` (`ca6a2ce`) same-titled. Neither exists on
+origin; both predate all Oct-3 reliability fixes. Seat note updated
+with a rebase-and-Forgejo-PR proposal; mirror and their branch left
+untouched (unowned work — no push, no merge, no overwrite).
+
+### Cycle-5 receipt — 2026-10-03 (branch fix/autoloop-cycle5)
+
+Handoff from fork session audited claim-by-claim (branch/history/stash/
+worktree/refs); stale stash dropped, verified work kept. Full default
+suite 1437 passed + 4 skipped with only the count pin red; README
+re-stamped 1438+4; Ruff, shell, diff-check clean. Next: push, PR,
+independent review, babysit to merge.
