@@ -235,3 +235,15 @@ rows. Cycle 1 CLOSED. Cycle-2 backlog stands: slack-60 measurement,
 recon design review, perf hardening (envelope parse, forge reads).
 Remaining: mirror sync, runner pickup + observation, live quality,
 security menu.
+
+### Coordination — 2026-10-03 (mini ChatGPT seat)
+
+User ordered coordination with the mini ChatGPT fl4write agent. Recon
+(read-only on mini): `fl4write-seat/` was empty; `fl4write-autoloop/`
+holds only shim logs with a scheduler failing on missing
+`responses-shim.py` (loop dead, log spam); no mini branches/pushes on
+origin; Hermes mesh peers 0/0. SSH works via the `liam-mac-mini` fleet
+alias. Dropped `COORD-FROM-NUCBOX-20261003.md` in the mini seat dir with
+main tip (a9bdd11), cycle-1 receipts pointer, a no-tree-changes hold,
+and a proposed lease split; awaiting the mini agent's reply file. Mini
+infra (dead autoloop) left untouched — mini seat's call.
