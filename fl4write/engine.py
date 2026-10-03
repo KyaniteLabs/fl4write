@@ -428,14 +428,15 @@ def _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline, *, po
     return "attempted"
 
 
-def _poll_fix_merges(config: RepoConfig, primary: ForgeAdapter, report: CycleReport) -> None:
+def _poll_fix_merges(config: RepoConfig, primary: ForgeAdapter, report: CycleReport,
+                     deadline: float | None = None) -> None:
     """Revisit owned fix PRs even when no source PR needs another review."""
     from . import executor
 
     try:
         # bot_identity REQUIRED (post-merge build): the merge gate re-verifies
         # authorship against it — a missing identity fails every merge closed.
-        merged = executor.check_and_merge_own_prs(config, primary.bot_login)
+        merged = executor.check_and_merge_own_prs(config, primary.bot_login, deadline=deadline)
         report.fix_prs_merged += len(merged)  # Sol audit: was int += list
     except Exception as exc:  # merge scan must not kill the cycle
         log.warning("merge scan failed for %s: %s", config.repo, exc)
@@ -717,7 +718,8 @@ def _omni_report_body(config: RepoConfig, findings: list[dict], scanned: int, to
 
 
 def _omni_fix_phase(
-    config: RepoConfig, primary: ForgeAdapter, st: dict[str, Any], report: CycleReport
+    config: RepoConfig, primary: ForgeAdapter, st: dict[str, Any], report: CycleReport,
+    deadline: float | None = None,
 ) -> None:
     """Post-completion fix drain. SEPARATELY gated (omnisweep.fix) — cold-code
     findings lack the reviewed-diff premise the fix lane was built on.
@@ -741,6 +743,11 @@ def _omni_fix_phase(
     attempts = 0
     for f in st.get("omni_findings", []):
         if attempts >= _OMNI_FIX_ATTEMPTS_PER_CYCLE:
+            break
+        if deadline is not None and time.monotonic() >= deadline:
+            # Cycle-3: each fix runs model+clone+push past a possible kill —
+            # stop draining like every other lane does.
+            report.alerts.append("omnisweep fix drain deferred — cycle deadline reached")
             break
         sev = f.get("sev")
         if sev not in config.severity_vocab:
@@ -791,7 +798,8 @@ def _omni_fix_phase(
             report._fix_failure_notes.append(f"omni {f['path']}:{f['line']} unknown-status {status!r}")
 
 
-def _omni_completed_actions(config, primary, st, report, *, allow_fixes=True):
+def _omni_completed_actions(config, primary, st, report, *, allow_fixes=True,
+                              deadline: float | None = None):
     """Retry a completed report before draining fixes; False means retry pending."""
     if (not st.get("omni_published") or st.get("omni_report_version") != 2
             or (st.get("omni_issue") and not st.get("omni_findings")
@@ -807,7 +815,7 @@ def _omni_completed_actions(config, primary, st, report, *, allow_fixes=True):
             st["omni_published"] = True
             st["omni_report_version"] = 2
     if allow_fixes and config.omnisweep.fix and st.get("omni_findings"):
-        _omni_fix_phase(config, primary, st, report)
+        _omni_fix_phase(config, primary, st, report, deadline=deadline)
     return True
 
 
@@ -853,7 +861,8 @@ def _omnisweep_step(
         if st.get("omni_complete") and not st.get("omni_fp"):
             # Legacy reports may need their format/publication retry, but an
             # unknown old scope cannot be blessed with today's fingerprint.
-            if not _omni_completed_actions(config, primary, st, report, allow_fixes=False):
+            if not _omni_completed_actions(config, primary, st, report, allow_fixes=False,
+                                            deadline=deadline):
                 return
             st["omni_complete"] = False
             st["omni_scope_pending"] = True
@@ -986,7 +995,7 @@ def _omnisweep_step(
             report.alerts.append("omnisweep: tree CHANGED mid-sweep — restarting from scratch")
         st["omni_fp"] = fp
     if st.get("omni_complete"):
-        _omni_completed_actions(config, primary, st, report)
+        _omni_completed_actions(config, primary, st, report, deadline=deadline)
         return
     cursor = st.get("omni_cursor", "")
     pending = [p for p in scan if p > cursor][: config.omnisweep.max_files_per_cycle]
@@ -1014,7 +1023,7 @@ def _omnisweep_step(
             st["omni_report_version"] = 2
         report.alerts.append(f"omnisweep complete: {len(findings)} findings across {total} files")
         if config.omnisweep.fix and findings:
-            _omni_fix_phase(config, primary, st, report)
+            _omni_fix_phase(config, primary, st, report, deadline=deadline)
         return
 
     # anchor for the fix phase: HEAD moves mid-sweep → findings from an older
@@ -1129,7 +1138,7 @@ def _omnisweep_step(
             st["omni_published"] = True
             st["omni_report_version"] = 2
         if config.omnisweep.fix and st.get("omni_findings"):
-            _omni_fix_phase(config, primary, st, report)
+            _omni_fix_phase(config, primary, st, report, deadline=deadline)
     else:
         if config.shadow:
             return  # shadow sweeps never touch live progress belts
@@ -1965,7 +1974,7 @@ def run_cycle(
                 if deadline is not None and (deadline - time.monotonic()) < REVIEW_BUDGET_S:
                     report.alerts.append("cycle deadline reached — owned fix merges deferred")
                 else:
-                    _poll_fix_merges(config, primary, report)
+                    _poll_fix_merges(config, primary, report, deadline=deadline)
 
             if report.fix_failures:
                 # ONE summarizing alert per cycle (V2) — alert fatigue is a

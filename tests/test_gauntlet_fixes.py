@@ -2221,7 +2221,7 @@ class TestMECERound6M3Candidate:
         outcomes = iter([{"status": "error", "reason": "model unavailable"},
                          {"status": "pr_opened", "pr_number": 9}])
 
-        def fake_attempt(pr, finding, config):
+        def fake_attempt(pr, finding, config, depth_used=0):
             return next(outcomes)
 
         monkeypatch.setattr("fl4write.executor.attempt_fix", fake_attempt)
@@ -2236,6 +2236,23 @@ class TestMECERound6M3Candidate:
         _omni_fix_phase(c, forge, st, r2)
         assert r2.fix_prs_opened == 1
         assert st["omni_findings"][0].get("fix_attempted") is True
+
+    def test_omni_fix_drain_stops_at_deadline(self, tmp_path, monkeypatch):
+        from fl4write.engine import CycleReport, _omni_fix_phase
+
+        forge = _SolForge()
+        st = {"version": 1, "omni_head": "d" * 40, "omni_total": 1,
+              "omni_findings": [{"id": 1, "path": "a.py", "line": 1,
+                                 "rule": "secrets", "sev": "Major",
+                                 "msg": "m", "via": "t"}]}
+        monkeypatch.setattr("fl4write.executor.attempt_fix",
+                            lambda *a, **k: pytest.fail("attempt past deadline"))
+        c = _sol_config(omnisweep={"enabled": True, "fix": True,
+                                   "fix_min_severity": "Major"})
+        r = CycleReport(repo="o/r")
+        _omni_fix_phase(c, forge, st, r, deadline=time.monotonic() - 1)
+        assert r.fix_attempts == 0
+        assert any("deadline" in a for a in r.alerts)
 
 
 class TestMECERound6SolPins:
@@ -2955,6 +2972,26 @@ class TestMECERound7BE:
         })
         out = ex.check_and_merge_own_prs(c, "fl4write[bot]")
         assert out == []  # scan completed; malformed rows were skipped
+
+    def test_merge_scan_stops_at_deadline(self, monkeypatch):
+        import time
+
+        from fl4write import executor as ex
+
+        def fake_api(method, path, data=None):
+            pytest.fail("no API reads past an expired deadline")
+
+        monkeypatch.setattr(ex, "_gh_api", fake_api)
+        import fl4write.config as cfg_mod
+        c = cfg_mod.RepoConfig.model_validate({
+            "repo": "o/r",
+            "forges": {"github": {"role": "primary", "api_base": "https://api.github.com",
+                                  "token_env": "GHT"}},
+            "model": {"endpoint": "http://m/v1", "model": "t", "key_env": "K"},
+            "fix": {"enabled": True, "merge_own_prs": True},
+        })
+        assert ex.check_and_merge_own_prs(c, "fl4write[bot]",
+                                          deadline=time.monotonic() - 1) == []
 
     def test_issues_watermark_normalized_at_lane_boundary(self, monkeypatch):
         import fl4write.issues as issues_mod
