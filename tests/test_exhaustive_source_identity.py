@@ -169,6 +169,31 @@ def test_q10_multiline_quote_grounds():
     assert kept[0]['line'] == 2
 
 
+def test_boundary_spanning_quote_drops_instead_of_killing_round():
+    """Cycle-4: a verbatim quote straddling the chunk edge is a boundary
+    artifact, not a hallucination — the row drops and the round survives."""
+    source = 'alpha\nbeta\ngamma\ndelta\n'
+    row = {'path': 'value.txt', 'line': 2, 'evidence': 'beta\ngamma\ndelta',
+           'severity': 'Minor', 'message': 'fixture'}
+    assert exhaustive._validated(
+        {'findings': [row]}, 'value.txt', 1, 2, source) == []
+    # The in-chunk portion still grounds on its own chunk's pass.
+    kept = exhaustive._validated(
+        {'findings': [dict(row, line=3, evidence='gamma\ndelta')]},
+        'value.txt', 3, 4, source)
+    assert kept[0]['line'] == 3
+
+
+def test_fabricated_quote_still_kills_round():
+    """Content absent from the source remains fatal — the boundary
+    leniency only covers verbatim-nearby quotes."""
+    with pytest.raises(exhaustive.Deferred, match='not grounded'):
+        exhaustive._validated({'findings': [{
+            'path': 'value.txt', 'line': 2, 'evidence': 'beta\nZETA',
+            'severity': 'Minor', 'message': 'fixture',
+        }]}, 'value.txt', 1, 2, 'alpha\nbeta\ngamma\ndelta\n')
+
+
 def test_recon_projects_large_test_history_without_changing_evidence(tmp_path):
     from fl4write.model_proxy import MAX_REQUEST, _encode
 
