@@ -353,3 +353,13 @@ convergence sweep: five scouts hunt ONLY what cycles 1-5 missed, with
 strict no-re-report lists. Two consecutive clean cycles (5 recens +
 this one if clean) closes the loop per its own rule; anything found
 gets the usual fix + review + CI treatment.
+
+### Cycle-6 standing note — 2026-10-04
+
+Tree is verifiably GREEN at main@6acd302: full default suite 1440
+passed + 4 skipped, zero failures; registry statuses all carry merged
+PR attribution; nothing pending in the working tree. Scouts 2/4
+rate-limited; the two running report no new verified defects before
+cutoff. Cycle-6 extends the convergence bar: any new fix must beat the
+current all-green bar (green suite + a real defect fixed), not break
+it. No new code was added this cycle; 1440+4 stands.
