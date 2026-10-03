@@ -218,3 +218,77 @@ Existing class booleans still denote coverage of at least one case.
 repeat deduplication; CLI probe rejects 50% recall at a 75% bar; executing
 the actual cadence renderer produces an honest 1/2 trend receipt.
 **Status:** Locally repaired; independent review and delivery not verified.
+
+## CYCLE1-001: truncated-diff grounding guard inert (wrong-verdict)
+
+**File:** `fl4write/analyzer.py`, `analyze()`.
+**Mechanism:** The hunk-presence and line-span gates built their maps from
+the FULL diff while the model only received the first MAX_DIFF_CHARS, so
+findings citing truncated-away hunks were accepted against evidence the
+model never saw. **Local fix:** both gates run against the truncated slice
+the model received. **Regression:**
+`tests/test_truncated_grounding.py` (3 probes; fails pre-fix, green post).
+**Status:** Fixed on `fix/autoloop-cycle1`; review/merge pending.
+
+## CYCLE1-002: outage runs scored perfect stability / clean sheets
+
+**File:** `fl4write/reliability.py`, `determinism_metrics()` + `fp_metrics()`.
+**Mechanism:** Identical error records agreed 100% (empty signatures match)
+and error clean-lane records counted as clean, so a dead route measured
+1.0 determinism and 0.0 FP. **Local fix:** errors excluded from agreement
+(all-error case scores 0.0 fail-closed) and from the FP denominator with
+an explicit errors count; call budget breaks out failed_calls.
+**Regression:** outage/partial-outage probes in both metric suites; the
+error-lane CLI probe now errors first-runs only to keep metrics-vs-gate
+isolation. **Status:** Fixed on `fix/autoloop-cycle1`; review/merge pending.
+
+## CYCLE1-003: namespaced JUnit evidence unwinnable; token form rigid
+
+**File:** `fl4write/exhaustive.py`, `_junit()` + `_test()`.
+**Mechanism:** Exact tag matching rejected uniformly-namespaced suites
+(surefire style); the evidence token had to be a standalone argv entry.
+**Local fix:** local-name matching with genuinely-mixed namespaces still
+fatal (unprefixed children inherit the default ns — uniform is a dialect,
+two vocabs are ambiguity); embedded `{junit}` allowed but must resolve
+exactly once. **Regression:** green/red namespaced, mixed-ns, embedded,
+missing and doubled-token probes; the old ambiguity pin re-pointed at a
+truly mixed document. **Status:** Fixed; review/merge pending.
+
+## CYCLE1-004: env-controlled telemetry path unguarded (hardening)
+
+**File:** `fl4write/telemetry.py`, `_path()`.
+**Mechanism:** `FL4WRITE_TELEMETRY` could redirect appends anywhere,
+including a repo `.git` hook path. **Local fix:** non-log suffixes and
+`.git`-containing paths fall back to the default stream. **Regression:**
+hook/non-log refusal + legit acceptance probes. **Status:** Fixed;
+review/merge pending. (Poisoning requires operator-env control; the
+sandbox already strips the variable from test env.)
+
+## CYCLE1-005: CI blind on non-main PR bases, no time bounds
+
+**File:** `.github/workflows/ci.yml`.
+**Mechanism:** PR CI filtered to two base branches; no job/step timeouts.
+**Local fix:** all PR bases trigger; 30m job / 25m suite timeouts.
+**Status:** Fixed; review/merge pending.
+
+## CYCLE1 refutations (verified, no change)
+
+- Engine empty-diff certifies clean: REFUTED — `forges` contract requires
+  None (never fake-empty) on fetch failure; empty tuples are genuinely
+  empty PRs (`forges.py:237`, `engine.py:149-155` already defers None).
+- Gatekeeper demotion order: REFUTED — `RepoConfig` validator pins the
+  vocab to canonical order (`config.py:333-338`); reordering is
+  unreachable through validated configs.
+- `test_cmd` code exec via fork yaml: REFUTED as exploitable — the fix
+  lane is fork-blocked by code rail (`fixlane.py:31`); residual risk is
+  trusted-branch commits (insider model already includes code exec).
+- Reliability cache-key config evolution: REFUTED — review rules and
+  severity vocab ride in the hashed prompt (`analyzer.py:648-650`); rule
+  changes miss the cache by construction.
+- Adjudication IPv6 carve-out misparse: REFUTED — all malformed shapes
+  fail closed (ValueError → False); the cited trigger still flags via
+  the credential-query check.
+- Recon quote-fatal / empty-file green: DEFERRED by design — the fatal
+  gate is the deliberate anti-hallucination property (whitespace-tolerant
+  with ±2 and 4-line probes); empty files are vacuously clean.
+- 60-line grounding slack: DEFERRED pending measurement data.

@@ -190,3 +190,37 @@ gates, REL-002 case-weighted recall + shared renderer, review follow-up
 REQUEST-CHANGES -> all 6 fixed -> APPROVE, disposition posted on the PR.
 Remaining: GitHub mirror sync + runner pickup + bounded observation
 (rollback = revert-merge), live-route quality, security menu.
+
+## ULTRA-EXHAUSTIVE MECE AUTORESEARCH LOOP — opened 2026-10-03 (user order)
+
+Mission: flush out everything broken across MECE dimensions, then fix
+until nothing verifiable remains. Bounded: max 5 cycles, stop early on
+two consecutive clean cycles (zero actionable findings). Cycle = scout
+-> triage with reproduction -> atomic fix + tests -> full verify.
+Scope: tree only (no runner/model/CI-infra changes without a CEO word
+via the Product desk); receipts per cycle below.
+
+- Cycle 1 (open): 5 parallel read-only scouts — correctness, reliability
+  harness, security, quality/architecture, docs+test hygiene. Baseline at
+  c6ce158: tree clean, Ruff clean, diff-check clean.
+
+### Cycle-1 receipt — 2026-10-03 (autoloop, branch fix/autoloop-cycle1)
+
+Five read-only scouts returned ~50 findings. Triaged with code-read
+verification: 7 fixes landed in 8 atomic commits (analyzer truncated
+grounding; determinism/FP outage exclusion; call-budget failed_calls;
+namespaced + mixed-namespace JUnit; embedded {junit} token; CI triggers
++ timeouts; telemetry path guard), each with regression probes that fail
+pre-fix where applicable. 5 scout claims refuted against code contracts
+(empty-diff, gatekeeper order, test_cmd exploit, cache-key staleness,
+adjudication parse); 3 deferred by design with rationale (recon
+quote-fatal, empty-file vacuity, 60-line slack pending data); corpus and
+calibration notes accepted as documented limitations.
+
+Verification: full default suite 1392 passed + 4 skipped with only the
+doc-truth count pin failing; README re-stamped 1393+4 from the nested
+verifier figure; Ruff/shell/diff-check clean. Registry carries CYCLE1
+rows + refutations. Next: push branch, open PR, independent review,
+babysit to merge. Cycle-2 backlog: slack-60 measurement, recon design
+review, executor/test_cmd hardening depth, O(n^2) envelope parse +
+unbounded forge reads (perf hardening with benchmarks).
