@@ -224,3 +224,14 @@ rows + refutations. Next: push branch, open PR, independent review,
 babysit to merge. Cycle-2 backlog: slack-60 measurement, recon design
 review, executor/test_cmd hardening depth, O(n^2) envelope parse +
 unbounded forge reads (perf hardening with benchmarks).
+
+### Merge receipt — 2026-10-03 (PR #39 merged, cycle 1 closed)
+
+Forgejo PR #39 merged into `main` as `1524b56` (CI green on head
+`e0c7a51`). Independent review: APPROVE (133 passed + 1 skip on the
+four touched test files; no remaining findings). 7 fixes, 5
+refutations, 3 design-defers all recorded in BUG-SMELL-REGISTRY CYCLE1
+rows. Cycle 1 CLOSED. Cycle-2 backlog stands: slack-60 measurement,
+recon design review, perf hardening (envelope parse, forge reads).
+Remaining: mirror sync, runner pickup + observation, live quality,
+security menu.
