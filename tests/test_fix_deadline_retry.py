@@ -104,6 +104,21 @@ def test_crashing_attempt_keeps_pending_entry(lane, monkeypatch):
     assert sum("entry kept" in a for a in report.alerts) == 2
 
 
+def test_diverged_rail_escalates_instead_of_crashing(lane, monkeypatch):
+    from fl4write import fixlane
+    pr, config, forge, st, clock, calls, findings = lane
+
+    def diverged(pr_, config_, depth):
+        raise fixlane.FixLaneBlocked("fork_policy must be comment-only")
+
+    monkeypatch.setattr(engine.fixlane, "fix_allowed", diverged)
+    report = engine.CycleReport(repo=config.repo)
+    engine._fix_lane(pr, findings, config, forge, st, report)
+    assert calls == []
+    assert report.fix_escalations == 2
+    assert "pending_fixes" not in st["prs"]["1"]
+
+
 @pytest.mark.parametrize("post_merge", [False, True])
 def test_real_cycle_resumes_without_another_review(lane, monkeypatch, tmp_path, post_merge):
     pr, config, forge, st, clock, calls, findings = lane

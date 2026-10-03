@@ -353,7 +353,12 @@ def _fix_lane(
             report.alerts.append(f"#{pr.number}: fix work deferred — cycle deadline reached")
             return
         depth = int(pr_state.get("fix_depth", 0))
-        blocked = fixlane.fix_allowed(pr, config, depth)
+        try:
+            blocked = fixlane.fix_allowed(pr, config, depth)
+        except fixlane.FixLaneBlocked as exc:
+            # Cycle-3 review: the -O-proof rail raise must not escape the
+            # lane and kill the cycle — escalate exactly like a rail block.
+            blocked = f"fix rail diverged from config ({exc})"
         if blocked is not None:
             body = fixlane.escalate(pr, [f], blocked)
             primary.create_comment(config.repo, pr.number, body)

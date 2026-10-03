@@ -182,8 +182,10 @@ def _diff_line_spans(diff_text: str) -> dict[str, list[tuple[int, int]]]:
             claimed = cur["start"] + max(cur["count"] - 1, 0)
             if cur["count"] == 0:
                 return  # pure deletion: no new-file lines exist
-            if 0 < cur["added"] < cur["count"]:
-                spans[path].append((cur["start"], cur["start"] + cur["added"] - 1))
+            # New-file lines present = added (+) plus context (" ") lines;
+            # removed (-) lines and the "+++" header are not new-file lines.
+            if 0 < cur["present"] < cur["count"]:
+                spans[path].append((cur["start"], cur["start"] + cur["present"] - 1))
             else:
                 spans[path].append((cur["start"], claimed))
 
@@ -193,11 +195,16 @@ def _diff_line_spans(diff_text: str) -> dict[str, list[tuple[int, int]]]:
                 m = re.search(r"\+(\d+)(?:,(\d+))? @@", line)
                 if m:
                     cur = {"start": int(m.group(1)), "count": int(m.group(2) or "1"),
-                           "added": 0}
+                           "present": 0}
                 else:
                     cur = None
-            elif cur is not None and line.startswith("+") and not line.startswith("+++"):
-                cur["added"] += 1
+            elif cur is not None and (line[:1] in (" ", "+") or not line) \
+                    and line[:3] != "+++":
+                # New-file lines present on the page: added (+) and context
+                # (" ", including blank context lines). Removed (-) lines,
+                # the "+++" header and "\ No newline" markers are not
+                # new-file lines.
+                cur["present"] += 1
         _flush()
     return spans
 

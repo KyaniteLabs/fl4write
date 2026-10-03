@@ -69,6 +69,12 @@ class TestUngroundableBlocks:
     def test_deleted_file_has_no_spans(self):
         assert _diff_line_spans(DELETED)["gone.py"] == []
 
+    def test_mixed_context_hunk_keeps_full_span(self):
+        from fl4write.analyzer import _diff_line_spans as spans_of
+        diff = ("diff --git a/a.py b/a.py\n+++ b/a.py\n"
+                "@@ -1,5 +1,5 @@\n ctx1\n ctx2\n+added\n ctx3\n ctx4\n")
+        assert spans_of(diff)["a.py"] == [(1, 5)]
+
     def test_deleted_file_finding_dropped(self, monkeypatch):
         assert _analyze(monkeypatch, "gone.py", 2, DELETED).findings == []
 

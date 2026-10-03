@@ -121,9 +121,9 @@ _FRESH_STATE = {"version": STATE_VERSION, "prs": {}}
 _OMNI_CARRY: tuple[tuple[str, tuple], ...] = (
     ("omni_issue", (int,)), ("omni_published", (bool,)),
     ("omni_complete", (bool,)), ("omni_findings", (list,)),
-    ("omni_cursor", (str, int)), ("omni_head", (str,)),
+    ("omni_cursor", (str,)), ("omni_head", (str,)),
     ("omni_total", (int,)), ("omni_report_version", (int,)),
-    ("omni_pub_fail", (int,)), ("omni_scope_pending", (list,)),
+    ("omni_pub_fail", (int,)), ("omni_scope_pending", (bool,)),
     ("omni_scanned_total", (int,)),
 )
 
