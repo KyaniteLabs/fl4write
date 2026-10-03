@@ -3090,6 +3090,10 @@ class TestMECERound7BE:
         assert val("HASHED") == "a # b"  # quoted hashes survive
         assert val("MISSING") == ""
 
+    def test_runner_fails_fast_on_invalid_gh_token(self):
+        rc = (REPO_ROOT / "run-cycle.sh").read_text()
+        assert "gh auth status --hostname github.com" in rc
+
 
 class TestMECERound8Pins:
     """Round-8 desk: cleaned envelope scan (F8-A01), weighted readiness
