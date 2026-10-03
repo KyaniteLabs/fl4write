@@ -247,3 +247,15 @@ alias. Dropped `COORD-FROM-NUCBOX-20261003.md` in the mini seat dir with
 main tip (a9bdd11), cycle-1 receipts pointer, a no-tree-changes hold,
 and a proposed lease split; awaiting the mini agent's reply file. Mini
 infra (dead autoloop) left untouched — mini seat's call.
+
+### Cycle-2 receipt — 2026-10-03 (branch fix/autoloop-cycle2, mini silent)
+
+No reply file from the mini seat; origin quiet (no mini branches). Work
+continued on `fix/autoloop-cycle2` (collision-safe: mini holds nothing).
+Triage: envelope O(n^2) MEASURED non-issue (0.03s @ 180KB hostile) but
+exposed a real RecursionError escape (fixed); forge reads capped;
+retry logic deduplicated; slack reliance instrumented for a data-driven
+tighten decision later. Verification: full default suite 1398 passed +
+4 skipped with only the count pin red; README re-stamped 1399+4;
+Ruff/shell/diff-check clean. Next: push, PR, independent review,
+babysit to merge, then check the mini seat again.

@@ -313,6 +313,21 @@ def extract_json(content: str, envelope_key: str | None = None) -> dict:
     contain braces — the naive first-{ slice then spans garbage + JSON and
     dies; live-caught on the CEO's standing route, 2026-09-02). Strip think
     blocks first, then brace-slice; raise ValueError when unparseable."""
+    try:
+        return _extract_json(content, envelope_key=envelope_key)
+    except RecursionError as exc:
+        # Cycle-2: deeply-nested braces exhaust the stdlib decoder's C
+        # stack instead of failing cleanly. Callers refuse on ValueError
+        # only, so a hostile/degenerate response must arrive as one.
+        raise ValueError(f"JSON nesting too deep to parse safely: {exc}") from exc
+
+
+def _extract_json(content: str, envelope_key: str | None = None) -> dict:
+    """Parse the model's JSON object out of a response that may carry a
+    reasoning preamble (MiniMax-M3 emits <think>...</think> whose text can
+    contain braces — the naive first-{ slice then spans garbage + JSON and
+    dies; live-caught on the CEO's standing route, 2026-09-02). Strip think
+    blocks first, then brace-slice; raise ValueError when unparseable."""
     import json as _json
     import re as _re
 
@@ -491,14 +506,13 @@ def extract_json(content: str, envelope_key: str | None = None) -> dict:
 
 
 
-def _line_outside_diff(path: str, line: int, diff_text: str) -> bool:
+def _line_outside_diff(path: str, line: int, diff_text: str, slack: int = 60) -> bool:
     """True when `line` is implausible for `path` in this diff: beyond every
     new-file hunk span plus slack. Unchanged files (no hunks) are not judged.
     (MECE round-1, terra F1-03 — 999999-on-50-lines class.)"""
     spans = _diff_line_spans(diff_text).get(path)
     if not spans:
         return False
-    slack = 60
     return not any(s - slack <= line <= e + slack for s, e in spans)
 
 def _path_ignored(path: str, config: RepoConfig) -> bool:
@@ -765,6 +779,13 @@ def analyze(
             # the changed file (a probe posted line 999999 on a 50-line diff)
             dropped.append(f"line {f.line} beyond diff spans {f.path} ({f.rule_id})")
             continue
+        if _line_outside_diff(f.path, f.line, _seen_text, slack=10):
+            # Cycle-2 instrumentation (no behavior change): this finding
+            # survives only because of the wide 60-line slack. Counted for
+            # the future tighten-or-keep decision; nothing is dropped here.
+            from . import telemetry as _tel_gate
+            _tel_gate.emit("slack_reliance", rule_id=f.rule_id,
+                           path=f.path, line=f.line)
         # L1-B4 severity-integrity gate (2026-09-03 adjudication sample, council
         # consult CTO+CS): a finding whose own body concludes "passes / no issue /
         # no failure / no change needed" refutes itself and may not post at any

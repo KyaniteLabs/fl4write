@@ -1525,7 +1525,7 @@ class TestMECERound4M3Pins:
             def __exit__(self, *a):
                 return False
 
-            def read(self):
+            def read(self, n=-1):
                 return b"diff --git a/x b/x\n"
 
         def fake_open(req, timeout=30):
@@ -1542,6 +1542,64 @@ class TestMECERound4M3Pins:
         assert attempts["n"] == 2
         assert waits == [0.0], f"Retry-After ignored: waited {waits}"
         assert out.startswith("diff --git")
+
+    def test_oversize_bodies_degrade_as_forge_error(self, monkeypatch):
+        import fl4write.forges as fmod
+
+        for cls in (GitHubAdapter, ForgejoAdapter):
+            ad = self._adapter(cls)
+
+            class _Big:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+
+                def read(self, n=-1):
+                    return b"x" * (fmod.MAX_BODY + 1)
+
+            monkeypatch.setattr(fmod.urllib.request, "urlopen",
+                                lambda req, timeout=30: _Big())
+            with pytest.raises(ForgeError, match="exceeds"):
+                ad._call("GET", "/x")
+            with pytest.raises(ForgeError, match="exceeds"):
+                ad._call_text("GET", "/x")
+
+    def test_body_at_cap_still_parses(self, monkeypatch):
+        import fl4write.forges as fmod
+
+        ad = self._adapter(ForgejoAdapter)
+
+        class _Capped:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self, n=-1):
+                assert n == fmod.MAX_BODY + 1
+                return b'{"ok": true}'
+
+        monkeypatch.setattr(fmod.urllib.request, "urlopen",
+                            lambda req, timeout=30: _Capped())
+        assert ad._call("GET", "/x") == {"ok": True}
+
+    def test_throttle_wait_pins_retry_after_edges(self):
+        import urllib.error
+
+        import fl4write.forges as fmod
+
+        def exc_with(header):
+            headers = {"Retry-After": header} if header is not None else {}
+            return urllib.error.HTTPError("http://x", 429, "t", headers, None)
+
+        assert fmod._throttle_wait(exc_with(None)) == 0.0
+        assert fmod._throttle_wait(exc_with("5")) == 5.0
+        assert fmod._throttle_wait(exc_with("99")) == 30.0
+        assert fmod._throttle_wait(exc_with("junk")) == 1.0
+        assert fmod._throttle_wait(exc_with("-3")) == 1.0
 
     def test_tree_scan_quotes_slash_branch_names(self):
         for cls in (GitHubAdapter, ForgejoAdapter):
@@ -2478,7 +2536,7 @@ class TestMECERound6LunaMax2Pins:
             def __exit__(self, *a):
                 return False
 
-            def read(self):
+            def read(self, n=-1):
                 return b"diff --git a/x b/x\n"
 
         def fake_open(req, timeout=30):
@@ -3342,7 +3400,7 @@ class TestMECERound10Pins:
             def __exit__(self, *a):
                 return False
 
-            def read(self):
+            def read(self, n=-1):
                 return (b'{"choices": [{"message": {"content": 5}, "finish_reason": '
                         b'"stop"}], "usage": {}}')
 
@@ -3618,7 +3676,7 @@ class TestMECERound10ForgeDesk:
             def __exit__(self, *a):
                 return False
 
-            def read(self):
+            def read(self, n=-1):
                 return b'{"token": ""}'
 
         monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _Resp())
@@ -4024,6 +4082,18 @@ class TestMECERound11Analyzer:
         out = extract_json('{"draft":{"findings":[]},"findings":[{"real":1}]}',
                            envelope_key="findings")
         assert out["findings"] == [{"real": 1}]
+
+    def test_deep_nesting_refuses_as_value_error(self):
+        from fl4write.analyzer import extract_json
+        # Cycle-2: extreme nesting exhausts the stdlib decoder's C stack
+        # and escapes as RecursionError past every ValueError-only caller
+        # (moderate depths already refuse cleanly; this pins the extreme).
+        hostile = '{"a":' * 25000 + '"findings": []' + '}' * 25000
+        try:
+            extract_json(hostile, envelope_key="findings")
+            raise AssertionError("deep nesting parsed instead of refusing")
+        except ValueError:
+            pass
 
     def test_negated_span_preserves_positive_conjunction(self):
         from fl4write.analyzer import _self_contradicting

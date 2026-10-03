@@ -80,3 +80,33 @@ class TestTruncatedGrounding:
     def test_implausible_line_on_visible_path_dropped(self, monkeypatch):
         doc = _analyze(monkeypatch, "early.py", 999999, _big_diff())
         assert doc.findings == []
+
+    def test_wide_slack_reliance_is_counted_not_dropped(self, monkeypatch):
+        from fl4write import telemetry as tel
+        events: list[tuple] = []
+        monkeypatch.setattr(tel, "emit", lambda kind, **kw: events.append((kind, kw)))
+        diff = ("diff --git a/a.py b/a.py\n+++ b/a.py\n@@ -0,0 +1,10 @@\n"
+                + "".join(f"+code {i}\n" for i in range(10)))
+        item = _finding("a.py", 30)  # inside 60-slack, outside 10-slack
+        monkeypatch.setattr(
+            "fl4write.analyzer._call_model",
+            lambda route, prompt, mode="pr", system=None, **kw: json.dumps({"findings": [item]}),
+        )
+        doc = analyze(_pr(), {"a.py"}, diff, _config())
+        assert [f.path for f in doc.findings] == ["a.py"]
+        assert ("slack_reliance", {"rule_id": "general", "path": "a.py", "line": 30}) in events
+
+    def test_tight_slack_hit_emits_nothing(self, monkeypatch):
+        from fl4write import telemetry as tel
+        events: list[tuple] = []
+        monkeypatch.setattr(tel, "emit", lambda kind, **kw: events.append((kind, kw)))
+        diff = ("diff --git a/a.py b/a.py\n+++ b/a.py\n@@ -0,0 +1,10 @@\n"
+                + "".join(f"+code {i}\n" for i in range(10)))
+        item = _finding("a.py", 5)  # inside even the tight slack
+        monkeypatch.setattr(
+            "fl4write.analyzer._call_model",
+            lambda route, prompt, mode="pr", system=None, **kw: json.dumps({"findings": [item]}),
+        )
+        doc = analyze(_pr(), {"a.py"}, diff, _config())
+        assert [f.path for f in doc.findings] == ["a.py"]
+        assert not [e for e in events if e[0] == "slack_reliance"]

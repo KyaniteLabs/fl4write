@@ -292,3 +292,37 @@ sandbox already strips the variable from test env.)
   gate is the deliberate anti-hallucination property (whitespace-tolerant
   with ±2 and 4-line probes); empty files are vacuously clean.
 - 60-line grounding slack: DEFERRED pending measurement data.
+
+## CYCLE2-001: extreme JSON nesting escapes as RecursionError (availability)
+
+**File:** `fl4write/analyzer.py`, `extract_json()`.
+**Mechanism:** Beyond ~20k nesting the stdlib decoder exhausts the C stack;
+the RecursionError escaped every ValueError-only caller (analyzer,
+gatekeeper, executor, recon). Moderate depths already refused cleanly.
+**Local fix:** the public extractor converts the escape to a ValueError
+refusal. **Regression:** 25k-nesting probe fails pre-fix (escape),
+green post-fix. O(n^2) envelope-parse worry MEASURED non-issue: 180KB
+hostile input parses in 0.03s (model output is max_tokens-bounded).
+**Status:** Fixed on `fix/autoloop-cycle2`; review/merge pending.
+
+## CYCLE2-002: unbounded forge body reads (OOM risk)
+
+**File:** `fl4write/forges.py`, `_call()` + `_call_text()`.
+**Local fix:** 8MB cap via read(MAX+1) overflow shape (mirrors
+model_proxy); oversize raises ForgeError, which all callers already
+degrade to None (unqueryable). **Regression:** overflow pins on both
+lanes + at-cap parsing; existing urlopen fakes take the size arg.
+**Status:** Fixed; review/merge pending.
+
+## CYCLE2-003: retry/throttle logic duplicated across call lanes
+
+**File:** `fl4write/forges.py`. Shared `_RETRYABLE_HTTP` +
+`_throttle_wait()`; identical semantics with Retry-After edge pins.
+Refactor, no behavior change. **Status:** Fixed; review/merge pending.
+
+## CYCLE2-004: wide-slack reliance instrumented (no behavior change)
+
+**File:** `fl4write/analyzer.py`. Findings surviving only via the 60-line
+slack emit best-effort `slack_reliance` counts for the future
+tighten-or-keep decision. Regression pins emit-on-reliance and
+silence-on-tight-hit. **Status:** Landed; decision awaits live data.
