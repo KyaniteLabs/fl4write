@@ -306,3 +306,12 @@ with only the count pin red; README re-stamped 1432+4; Ruff, shell,
 diff-check clean. Per git-hygiene preflight: branch clean, no staged
 work, identity configured, no operation in progress. Next: push, PR,
 independent review, babysit to merge.
+
+### Merge receipt — 2026-10-03 (PR #42 merged, cycle 4 closed)
+
+Forgejo PR #42 merged as `51d806b` (CI green on head `34929b7`).
+Review went two rounds (3 findings, all fixed, APPROVE); CI caught one
+more count drift mid-babysit (re-stamped 1433+4, full local suite green
+before merge). Final tree: 1433 passed + 4 skipped, zero failures.
+Cycle 4 CLOSED. Remaining: mini-seat reply, mirror/runner verify, live
+quality, security menu.
