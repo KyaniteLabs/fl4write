@@ -184,3 +184,37 @@ AWS-secret-key minimum) while keeping the 24-char floor for dotted tokens
 **Status:** FIXED (2026-09-20, commit c3c0dcb — recovered from the interrupted-cycle stash after the 09-19 claim was found false; refined to pure-slash-only 16-char floor so file paths survive) — reproduced: `key=wJalrXUtnFEMI/K7MDENG`
 (16 chars) leaked; fix landed (per-separator floor) + regression test
 `tests/test_fl4write.py::test_redact_credentials_short_slash_secret`.
+
+## PM-20261003-REL-001: incomplete reliability measurements pass numeric gates
+
+**File:** `fl4write/reliability.py`, `main()`.
+**Mechanism:** Identical error records produce 100% signature agreement;
+failed clean-case reviews produce no false-positive findings. A recall error
+can also leave aggregate recall at its configured threshold. The CLI checked
+only numeric thresholds, allowing any of these incomplete runs to exit zero.
+**Local fix:** Reject error-bearing records in every measurement lane before
+returning success, preserving the report and reporting lane-specific counts.
+**Regression:** `TestConfigAndGates.test_cli_rejects_measurement_errors_despite_passing_metrics`
+reproduced false success in determinism, recall and clean lanes before the
+fix; all three now fail correctly, and an error-free control passes.
+**Status:** Locally repaired; independent review and delivery not verified.
+
+## PM-20261003-REL-002: class coverage hides missed evaluation cases
+
+**Mechanism:** Recall used an any-hit boolean per defect class as its
+numerator and the number of classes as its denominator. One detected case
+hid a missed sibling; uneven class sizes also distorted aggregate recall.
+The cadence renderer multiplied that boolean by the entire class size,
+repeating the overstatement in trend receipts.
+**Reproduction:** Two distinct cases in one class, one actionable detection
+and one miss, yielded recall 1.0 and passed a 0.75 CLI gate. Expected: 0.5.
+Changing only the missed case's class restored 0.5, confirming aggregation
+as the cause. Duplicate runs did not change the result; severity-bar probes
+isolated actionable classification from the aggregation error.
+**Local fix:** Count distinct caught cases, weight recall by cases, and use
+explicit caught-case counts in both summaries and cadence trend output.
+Existing class booleans still denote coverage of at least one case.
+**Regression:** Metric probes cover hidden misses, unequal class sizes and
+repeat deduplication; CLI probe rejects 50% recall at a 75% bar; executing
+the actual cadence renderer produces an honest 1/2 trend receipt.
+**Status:** Locally repaired; independent review and delivery not verified.
