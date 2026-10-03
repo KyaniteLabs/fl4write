@@ -187,23 +187,41 @@ def determinism_metrics(records: list[dict]) -> dict:
     agreement_rate = frequency of the MODAL signature (1.0 = every run
     identical). flag_flips = runs whose defect/clean verdict differs from
     the modal verdict. severity_flips = runs whose severity multiset
-    differs from the modal one.
+    differs from the modal one. Error records are EXCLUDED from agreement:
+    N identical outages used to score 1.0 (empty signatures agree); a case
+    with no successful runs now scores 0.0 fail-closed (errors are counted
+    separately and the CLI gate fails the run).
     """
     by_case: dict[str, list[dict]] = {}
     for r in records:
         by_case.setdefault(r["case_id"], []).append(r)
     per_case: dict[str, dict] = {}
     for case_id, runs in by_case.items():
-        sigs = [tuple(map(tuple, r["signature"])) for r in runs]
+        clean = [r for r in runs if not r.get("error")]
+        n_err = len(runs) - len(clean)
+        if not clean:
+            per_case[case_id] = {
+                "runs": len(runs),
+                "errors": n_err,
+                "distinct_signatures": 0,
+                "agreement_rate": 0.0,
+                "flag_flips": 0,
+                "severity_flips": 0,
+                "modal_signature": [],
+                "signatures_seen": [],
+            }
+            continue
+        sigs = [tuple(map(tuple, r["signature"])) for r in clean]
         modal_sig, modal_n = Counter(sigs).most_common(1)[0]
-        modal_flag = Counter(_flag_of(r) for r in runs).most_common(1)[0][0]
-        modal_sev = Counter(_sev_key(r) for r in runs).most_common(1)[0][0]
+        modal_flag = Counter(_flag_of(r) for r in clean).most_common(1)[0][0]
+        modal_sev = Counter(_sev_key(r) for r in clean).most_common(1)[0][0]
         per_case[case_id] = {
             "runs": len(runs),
+            "errors": n_err,
             "distinct_signatures": len(set(sigs)),
-            "agreement_rate": modal_n / len(runs),
-            "flag_flips": sum(1 for r in runs if _flag_of(r) != modal_flag),
-            "severity_flips": sum(1 for r in runs if _sev_key(r) != modal_sev),
+            "agreement_rate": modal_n / len(clean),
+            "flag_flips": sum(1 for r in clean if _flag_of(r) != modal_flag),
+            "severity_flips": sum(1 for r in clean if _sev_key(r) != modal_sev),
             "modal_signature": [list(t) for t in modal_sig],
             "signatures_seen": sorted({json.dumps([list(t) for t in s]) for s in sigs}),
         }
@@ -309,18 +327,29 @@ def trend_row(report: dict, report_path: str = "") -> dict:
 
 def fp_metrics(clean_records: list[dict]) -> dict:
     """Fail-closed like recall: error records are non-findings here, and
-    tainted runs never reach the trend renderer (CLI gate + ``set -e``)."""
+    tainted runs never reach the trend renderer (CLI gate + ``set -e``).
+
+    Error records are excluded from the denominator: an outage is missing
+    data, not a clean review, so dead-route clean lanes no longer score a
+    0.0 false-positive rate on reviews that never happened. The excluded
+    count is reported as ``errors``.
+    """
     by_case: dict[str, list[dict]] = {}
     for r in clean_records:
         by_case.setdefault(r["case_id"], []).append(r)
-    n = len(by_case)
-    noise = sum(any(r["flag"] == "defect" for r in runs) for runs in by_case.values())
-    actionable = sum(any(r["actionable"] for r in runs) for runs in by_case.values())
+    errors = sum(1 for runs in by_case.values() for r in runs if r.get("error"))
+    measured = {cid: [r for r in runs if not r.get("error")]
+                for cid, runs in by_case.items()}
+    measured = {cid: runs for cid, runs in measured.items() if runs}
+    n = len(measured)
+    noise = sum(any(r["flag"] == "defect" for r in runs) for runs in measured.values())
+    actionable = sum(any(r["actionable"] for r in runs) for runs in measured.values())
     return {
         "clean_cases": n,
+        "errors": errors,
         "noise_fp_rate": noise / n if n else 0.0,
         "actionable_fp_rate": actionable / n if n else 0.0,
-        "flagged_case_ids": sorted(cid for cid, runs in by_case.items()
+        "flagged_case_ids": sorted(cid for cid, runs in measured.items()
                                    if any(r["flag"] == "defect" for r in runs)),
     }
 
