@@ -332,3 +332,15 @@ worktree/refs); stale stash dropped, verified work kept. Full default
 suite 1437 passed + 4 skipped with only the count pin red; README
 re-stamped 1438+4; Ruff, shell, diff-check clean. Next: push, PR,
 independent review, babysit to merge.
+
+### Merge receipt — 2026-10-04 (PR #43 merged, cycle 5 closed)
+
+Forgejo PR #43 merged as `afdf487` (CI green on head `ddcbcf1`).
+Review went two rounds (4 findings + 1 residual, all fixed, APPROVE);
+CI caught a count drift and a source-law pin mid-babysit (both fixed,
+full local suite 1440+4 zero-failure before merge). A fork handoff
+received mid-cycle was audited claim-by-claim: stale stash dropped,
+verified work kept, one false commit message repaired by split.
+Cycle 5 CLOSED. Remaining: mini-seat reply, mirror/runner verify
+(mirror main diverged — see desk, do not touch), live quality,
+security menu.
