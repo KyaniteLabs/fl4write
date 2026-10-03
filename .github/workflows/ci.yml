@@ -1,10 +1,11 @@
 name: ci
 on:
   push: {branches: [main]}
-  pull_request: {branches: [main, feature/exhaustive-loop-draft]}
+  pull_request: {}
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     container:
       image: python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
     steps:
@@ -15,3 +16,4 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: python3 -m ruff check .
       - run: python3 -m pytest tests/ -q
+        timeout-minutes: 25
