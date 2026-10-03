@@ -4945,6 +4945,36 @@ class TestMECERound13Pins:
         assert merged == []
         assert not any(m == "PUT" for m, _ in calls)
 
+    def test_checkruns_flip_between_scan_and_put_defers_merge(self, monkeypatch):
+        from fl4write import executor as ex
+
+        calls = []
+
+        def fake_gh(method, path, data=None):
+            calls.append((method, path))
+            if method == "GET" and "pulls?state=open" in path:
+                return [{"number": 3, "head": {"ref": "fl4write/fix-1",
+                                              "sha": "a" * 40},
+                         "user": {"login": "fl4write[bot]"}}]
+            if method == "GET" and "check-runs" in path:
+                # First read (scan) green, full re-probe before PUT red.
+                done = [c for c in calls if "check-runs" in c[1]]
+                if len(done) == 1:
+                    return {"check_runs": [{"status": "completed",
+                                            "conclusion": "success"}]}
+                return {"check_runs": [{"status": "completed",
+                                        "conclusion": "failure"}]}
+            if method == "GET" and path.endswith("/status"):
+                return {"state": "success"}
+            return {"merged": True, "sha": "b" * 40}
+
+        monkeypatch.setattr(ex, "_gh_api", fake_gh)
+        merged = ex.check_and_merge_own_prs(
+            _sol_config(fix={"enabled": True, "merge_own_prs": True}),
+            "fl4write[bot]")
+        assert merged == []
+        assert not any(m == "PUT" for m, _ in calls)
+
 
 def _fb_make_pr(**over):
     from fl4write.models import PullRequest

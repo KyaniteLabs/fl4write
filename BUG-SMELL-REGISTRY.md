@@ -467,12 +467,14 @@ checks flipping red before PUT still merged. **Local fix:** re-probe
 immediately before PUT (narrows, cannot close — no atomic primitive).
 **Status:** Fixed on `fix/autoloop-cycle5`.
 
-## CYCLE5-003: scoped-token self-DoS; runner auth/token hygiene; trend skew
+## CYCLE5-003: scoped-token self-DoS; runner auth hygiene; trend skew
 
 `get_repository_token` minted per call — now TTL-cached. Runner fails
-fast on invalid gh token; key extraction tolerates quotes/whitespace/
-comments. Trend rows carry worst-severity precision alongside the
-aggregate. Ruff pinned exact. **Status:** Fixed on `fix/autoloop-cycle5`.
+fast on invalid gh token. Trend rows carry worst-severity precision
+alongside the aggregate. Ruff pinned exact. (Review correction: the
+scoped-token cache and quote-tolerant key extraction shipped in
+earlier cycles — this row keeps only cycle-5 items.) **Status:**
+Fixed on `fix/autoloop-cycle5`.
 
 ## Handoff audit — 2026-10-03 (fork session claims vs live state)
 

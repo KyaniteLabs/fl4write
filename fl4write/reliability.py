@@ -316,11 +316,18 @@ def trend_row(report: dict, report_path: str = "") -> dict:
     caught = sum(c for _, c, _ in totals)
     caught_a = sum(a for _, _, a in totals)
     tbl = report.get("calibration", {}).get("table", {})
-    tp = sum(v.get("tp", 0) for v in tbl.values())
-    fpn = sum(v.get("fp", 0) for v in tbl.values())
-    precisions = [v["tp"] / (v["tp"] + v["fp"]) for v in tbl.values()
-                  if isinstance(v.get("tp"), int) and isinstance(v.get("fp"), int)
-                  and v.get("tp", 0) + v.get("fp", 0) > 0]
+
+    def _count(row: dict, key: str) -> int:
+        # Cycle-5 review: one coercion for both the aggregate and the
+        # per-severity list (exact int; bools and junk read as 0).
+        value = row.get(key, 0) if isinstance(row, dict) else 0
+        return value if type(value) is int else 0
+
+    tp = sum(_count(v, "tp") for v in tbl.values())
+    fpn = sum(_count(v, "fp") for v in tbl.values())
+    precisions = [_count(v, "tp") / (_count(v, "tp") + _count(v, "fp"))
+                  for v in tbl.values()
+                  if _count(v, "tp") + _count(v, "fp") > 0]
     route = report.get("route", {})
     return {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
