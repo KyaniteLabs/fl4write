@@ -292,7 +292,7 @@ class TestFixPhaseLaws:
         forge = self._completed_state(tmp_path, monkeypatch, [F1], fix=True)
         calls = []
 
-        def fake_fix(pr, finding, config):
+        def fake_fix(pr, finding, config, depth_used=0):
             calls.append(pr)
             return {"status": "pr_opened", "pr_number": 9}
 

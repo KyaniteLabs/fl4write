@@ -327,6 +327,15 @@ class TestFixLane:
         assert fixlane.fix_allowed(make_pr(), c, 2) is not None  # blocked at cap
         assert "human action" in fixlane.fix_allowed(make_pr(), c, 2)
 
+    def test_fork_rail_survives_optimized_interpreter(self):
+        # Cycle-3: the fork-policy consistency check was an assert, which
+        # `python -O` strips — now an explicit raise that always fires.
+        c = make_config(fix={"enabled": True})
+        c = c.model_copy(update={"fix": c.fix.model_copy(update={"fork_policy": "anything"})})
+        with pytest.raises(fixlane.FixLaneBlocked):
+            fixlane.fix_allowed(make_pr(is_fork=True), c, 0)
+        assert "comment-only" in fixlane.fix_allowed(make_pr(is_fork=True), make_config(), 0)
+
     def test_merge_own_pr_asserts_authorship_in_code(self):
         """ULTRAQA: a config edit alone cannot enable merging others' PRs."""
         c = make_config(fix={"enabled": True, "merge_own_prs": True})

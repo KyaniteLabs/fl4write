@@ -366,9 +366,16 @@ def _fix_lane(
         if deadline is not None and time.monotonic() >= deadline:
             report.alerts.append(f"#{pr.number}: fix work deferred — cycle deadline reached")
             return
-        pr_state["pending_fixes"].pop(0)
         report.fix_attempts += 1
-        result = executor.attempt_fix(pr, f, config)
+        try:
+            result = executor.attempt_fix(pr, f, config, depth_used=depth)
+        except Exception as exc:  # noqa: BLE001 — unexpected escape past the
+            # containment belts must not lose the pending entry: it stays
+            # queued and is re-derived next cycle (entries rebuild per lane).
+            report.alerts.append(f"#{pr.number}: fix attempt crashed, entry kept: {type(exc).__name__}")
+            report.fix_failures += 1
+            continue
+        pr_state["pending_fixes"].pop(0)
         status = result.get("status")
         if status == "pr_opened":
             report.fix_prs_opened += 1
@@ -763,7 +770,9 @@ def _omni_fix_phase(
             rule_id=f["rule"], severity=f["sev"], path=f["path"], line=f["line"],
             category="omnisweep", message=f["msg"],
         )
-        result = executor.attempt_fix(synth, finding, config)
+        # Cycle-3: one-shot synth context — no tracked depth exists here;
+        # bounded instead by fix_attempted flags + the per-cycle cap.
+        result = executor.attempt_fix(synth, finding, config, depth_used=0)
         status = result.get("status")
         if status == "error":
             # MECE round-6 (M3 stream candidate, desk-verified): a transient
@@ -1691,8 +1700,15 @@ def _ci_watch_step(
         for f in findings[: config.ci_watch.max_annotations]:
             if not _fix_freshness_gate(primary, config, f):
                 continue
+            if deadline is not None and time.monotonic() >= deadline:
+                # Cycle-3: the deadline was checked once before this loop;
+                # each attempt runs minutes, so recheck per finding.
+                report.alerts.append("ci-watch fix work deferred — cycle deadline reached")
+                break
             report.fix_attempts += 1
-            result = executor.attempt_fix(synth, f, config)
+            # Cycle-3: one-shot synth context like omnisweep — bounded by
+            # max_annotations, not by a tracked depth.
+            result = executor.attempt_fix(synth, f, config, depth_used=0)
             status = result.get("status")
             if status == "pr_opened":
                 report.ci_fix_prs_opened += 1

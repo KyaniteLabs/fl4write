@@ -146,7 +146,7 @@ class TestFixTelemetryAndFreshness:
 
         calls = {"n": 0}
 
-        def flaky(pr, f, config):
+        def flaky(pr, f, config, depth_used=0):
             calls["n"] += 1
             return {"status": "testfail", "reason": "tests failed"} if calls["n"] == 1 else {"status": "nofix", "reason": "no fix"}
 

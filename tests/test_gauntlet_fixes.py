@@ -1457,7 +1457,7 @@ class TestMECERound4LunaPins:
             files={"tests/test_x.py"},
         )
 
-        def fake_fix(pr, finding, config):
+        def fake_fix(pr, finding, config, depth_used=0):
             forge.fix_attempts.append((pr, finding))
             return {"status": "pr_opened", "pr_number": 42}
 

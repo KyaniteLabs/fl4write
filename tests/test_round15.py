@@ -36,7 +36,7 @@ def test_restart_does_not_suppress_fix_with_malformed_flag(tmp_path, monkeypatch
     st = restart(tmp_path, **{flag: value})
     monkeypatch.setattr(engine, "_fix_freshness_gate", lambda *a: True)
     calls = []
-    monkeypatch.setattr(executor, "attempt_fix", lambda *a: calls.append(a) or
+    monkeypatch.setattr(executor, "attempt_fix", lambda *a, **k: calls.append(a) or
                         {"status": "pr_opened", "pr_number": 9})
     report = engine.CycleReport(repo="owner/project")
     engine._omni_fix_phase(config(), SimpleNamespace(name="github"), st, report)
@@ -56,7 +56,7 @@ def test_unknown_severity_already_skips_fix_without_crashing(tmp_path, monkeypat
     # Counterevidence to R15-002's claimed crash: the existing membership
     # guard precedes list.index. Keep this evidence executable.
     st = restart(tmp_path, sev="Severe")
-    monkeypatch.setattr(executor, "attempt_fix", lambda *a: pytest.fail("invalid severity fixed"))
+    monkeypatch.setattr(executor, "attempt_fix", lambda *a, **k: pytest.fail("invalid severity fixed"))
     report = engine.CycleReport(repo="owner/project")
     engine._omni_fix_phase(config(), SimpleNamespace(name="github"), st, report)
     assert report.fix_attempts == 0

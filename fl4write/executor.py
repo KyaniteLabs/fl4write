@@ -364,9 +364,15 @@ def _run_tests(cwd: Path, config: RepoConfig) -> bool:
     return False
 
 
-def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[str, Any]:
+def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig,
+                depth_used: int = 0) -> dict[str, Any]:
     """One fix attempt: rails → fetch file at PR head → model patch →
-    worktree at PR head → sandboxed tests → PR. Returns a result dict."""
+    worktree at PR head → sandboxed tests → PR. Returns a result dict.
+
+    depth_used feeds the max_fix_depth rail — callers with a tracked depth
+    MUST pass it (the fix lane does); one-shot synth callers without one
+    pass the explicit default and stay bounded by their own caps.
+    """
     from . import telemetry as _tel
 
     _t0 = __import__("time").time()
@@ -386,7 +392,12 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
         out.update(extra)
         return out
 
-    blocked_reason = fix_allowed(pr, config, 0)
+    try:
+        blocked_reason = fix_allowed(pr, config, depth_used)
+    except Exception as exc:  # noqa: BLE001 — rail checks must not escape
+        # (the fork_policy assert fires before any belt); fail as an error
+        # result so the engine keeps the pending entry for retry.
+        return _finish("error", f"fix rail crashed: {type(exc).__name__}")
     if blocked_reason:
         return _finish("blocked", blocked_reason,
                        escalation=escalate(pr, [finding], blocked_reason))
