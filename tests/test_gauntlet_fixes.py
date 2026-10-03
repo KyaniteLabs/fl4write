@@ -2993,6 +2993,26 @@ class TestMECERound7BE:
         assert ex.check_and_merge_own_prs(c, "fl4write[bot]",
                                           deadline=time.monotonic() - 1) == []
 
+    def test_commit_green_returns_none_past_deadline(self, monkeypatch):
+        import time
+
+        from fl4write import executor as ex
+
+        def fail_api(*a, **k):
+            pytest.fail("no API reads past an expired deadline")
+
+        monkeypatch.setattr(ex, "_gh_api", fail_api)
+        import fl4write.config as cfg_mod
+        c = cfg_mod.RepoConfig.model_validate({
+            "repo": "o/r",
+            "forges": {"github": {"role": "primary", "api_base": "https://api.github.com",
+                                  "token_env": "GHT"}},
+            "model": {"endpoint": "http://m/v1", "model": "t", "key_env": "K"},
+            "fix": {"enabled": True, "merge_own_prs": True},
+        })
+        assert ex._commit_ci_green(c, "a" * 40, 3,
+                                   deadline=time.monotonic() - 1) is None
+
     def test_issues_watermark_normalized_at_lane_boundary(self, monkeypatch):
         import fl4write.issues as issues_mod
 

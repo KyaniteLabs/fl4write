@@ -1029,14 +1029,22 @@ def open_issue(repo: str, title: str, body: str) -> int:
     return _gh_api("POST", f"/repos/{repo}/issues", {"title": title, "body": body})["number"]
 
 
-def _commit_ci_green(config: RepoConfig, sha: str, number: int) -> bool:
+def _commit_ci_green(config: RepoConfig, sha: str, number: int,
+                     deadline: float | None = None) -> bool | None:
     """Full green evaluation for one head SHA: paginated check-runs plus
     legacy combined commit status. False on any red/pending/vacuous/capped
-    evidence — callers treat False as do-not-merge. _gh_api failures
-    propagate to the row-level containment belt (skip, never merge)."""
+    evidence — callers treat False as do-not-merge. None on deadline
+    expiry (fail-safe: callers defer rather than merge blind). _gh_api
+    failures propagate to the row-level containment belt (skip)."""
+    import time as _time
+
     page = 1
     check_runs: list[dict] = []
     while True:
+        if deadline is not None and _time.monotonic() >= deadline:
+            log.warning("check-runs scan on %s#%s: deadline reached — deferring",
+                        config.repo, number)
+            return None
         if page > 20:
             # F11-B008/F12-B004: capped evidence is INCOMPLETE — never merges.
             log.warning("check-runs scan on %s#%s: >20 full pages — capped "
@@ -1139,7 +1147,10 @@ def check_and_merge_own_prs(config: RepoConfig, bot_identity: str,
             # MECE round-1 (luna F1-05): check-runs must be PAGINATED — the
             # default page (~100) hid failing runs on CI-heavy repos, which
             # would let the merge gate bless a red PR as green.
-            ci_green = _commit_ci_green(config, pr_data["head"]["sha"], number)
+            ci_green = _commit_ci_green(config, pr_data["head"]["sha"], number,
+                                        deadline=deadline)
+            if ci_green is None:
+                return merged  # scan hit the deadline: defer the remainder
             # Cycle-5 review: re-evaluate IMMEDIATELY before the PUT — the
             # scan above can be minutes old on CI-heavy repos. Same full
             # predicate (check-runs + statuses), so a flip in either lane
@@ -1149,7 +1160,9 @@ def check_and_merge_own_prs(config: RepoConfig, bot_identity: str,
                     log.warning("merge of %s#%s deferred: deadline reached "
                                 "before final re-probe", config.repo, number)
                     return merged
-                if not _commit_ci_green(config, pr_data["head"]["sha"], number):
+                fresh = _commit_ci_green(config, pr_data["head"]["sha"], number,
+                                         deadline=deadline)
+                if not fresh:
                     log.warning("merge of %s#%s deferred: CI flipped since scan",
                                 config.repo, number)
                     ci_green = False
