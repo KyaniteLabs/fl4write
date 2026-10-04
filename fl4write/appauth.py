@@ -44,10 +44,36 @@ def _bounded_json_body(resp: Any, what: str) -> Any:
     return json.loads(raw.decode())
 
 
-# installation_id -> (token, minted_at). Tokens last 1h; 50min refresh margin.
-# Scoped single-repo tokens share the cache under ("scoped", id, repo, bot) keys.
+# installation_id -> (token, minted_at, key_fingerprint). Tokens last 1h;
+# 50min refresh margin. Scoped single-repo tokens share the cache under
+# ("scoped", id, repo, bot) keys. The fingerprint binds entries to the
+# signing key on disk (review follow-up): a key rotation or same-slug
+# App swap inside the TTL window invalidates instead of serving stale.
 _TOKEN_CACHE: dict = {}
 _TOKEN_TTL = 50 * 60
+
+
+def _key_fingerprint() -> str:
+    """sha256 of the signing key, "" when unreadable (fail-open to mint:
+    a missing key fails loudly at _make_jwt, never serves foreign cache)."""
+    import hashlib
+
+    try:
+        return hashlib.sha256(KEY_PATH.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _cache_hit(key: object) -> str | None:
+    entry = _TOKEN_CACHE.get(key)
+    if not entry or len(entry) != 3:
+        return None
+    token, minted, fingerprint = entry
+    if time.time() - minted >= _TOKEN_TTL:
+        return None
+    if fingerprint != _key_fingerprint():
+        return None
+    return token
 
 
 def _make_jwt() -> str:
@@ -108,9 +134,9 @@ def get_installation_token(repo: str | None = None) -> str:
     Without `repo`, falls back to the org installation (legacy behavior).
     """
     installation_id = resolve_installation_id(repo) if repo else DEFAULT_INSTALLATION_ID
-    cached = _TOKEN_CACHE.get(installation_id)
-    if cached and time.time() - cached[1] < _TOKEN_TTL:
-        return cached[0]
+    hit = _cache_hit(installation_id)
+    if hit is not None:
+        return hit
     jwt_token = _make_jwt()
     req = urllib.request.Request(
 
@@ -138,7 +164,7 @@ def get_installation_token(repo: str | None = None) -> str:
     if not isinstance(token, str) or not token or token != token.strip() \
             or any(ord(c) < 0x20 for c in token):
         raise RuntimeError("app token response: unusable token — refusing to cache/export")
-    _TOKEN_CACHE[installation_id] = (token, time.time())
+    _TOKEN_CACHE[installation_id] = (token, time.time(), _key_fingerprint())
     return token
 
 
@@ -176,9 +202,9 @@ def get_repository_token(repo: str, bot_login: str) -> str:
         raise RuntimeError("invalid repository for scoped GitHub App token")
     installation_id = resolve_installation_id(repo)
     cache_key = ("scoped", installation_id, repo, bot_login)
-    cached = _TOKEN_CACHE.get(cache_key)
-    if cached and time.time() - cached[1] < _TOKEN_TTL:
-        return cached[0]
+    hit = _cache_hit(cache_key)
+    if hit is not None:
+        return hit
     # Zero-findings review: verify AFTER the cache hit, not before — the
     # cached token was verified at mint, and bot_login joins the cache
     # key so cross-bot confusion still re-verifies. Saves 2 HTTPS calls
@@ -205,7 +231,10 @@ def get_repository_token(repo: str, bot_login: str) -> str:
             or data.get("permissions") != permissions):
         # Cycle-6: EXACT grant match, not subset — a server returning extra
         # grants (e.g. administration:write) previously passed and widened
-        # the token past least privilege without a word.
-        raise RuntimeError("GitHub App token scope could not be verified")
-    _TOKEN_CACHE[cache_key] = (token, time.time())
+        # the token past least privilege without a word. The received set
+        # rides the error for fast triage (review follow-up).
+        raise RuntimeError(
+            "GitHub App token scope could not be verified: "
+            f"got {data.get('permissions')!r}, want {permissions!r}")
+    _TOKEN_CACHE[cache_key] = (token, time.time(), _key_fingerprint())
     return token

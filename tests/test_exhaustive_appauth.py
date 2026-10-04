@@ -137,3 +137,37 @@ def test_superset_token_grants_refused(monkeypatch):
     with pytest.raises(RuntimeError, match="scope"):
         _appauth.get_repository_token("acme/widget", "fl4write[bot]")
     _appauth._TOKEN_CACHE.clear()
+
+
+def test_key_rotation_invalidates_cache(monkeypatch):
+    """Review follow-up: a rotated signing key inside the TTL window
+    must re-mint, not serve the stale token."""
+    import json as _json
+
+    from fl4write import appauth as _appauth
+
+    _appauth._TOKEN_CACHE.clear()
+    monkeypatch.setattr(_appauth, "verified_app_login", lambda: "fl4write[bot]")
+    monkeypatch.setattr(_appauth, "resolve_installation_id", lambda repo: 7)
+    monkeypatch.setattr(_appauth, "_make_jwt", lambda: "synthetic-jwt")
+    grants = {"contents": "write", "pull_requests": "write", "issues": "write",
+              "actions": "read", "statuses": "read"}
+    mints = {"n": 0}
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self, n=-1):
+            mints["n"] += 1
+            return _json.dumps({"token": f"t{mints['n']}",
+                                "repositories": [{"full_name": "acme/widget"}],
+                                "permissions": grants}).encode()
+
+    monkeypatch.setattr(_appauth.urllib.request, "urlopen",
+                        lambda req, timeout: Response())
+    assert _appauth.get_repository_token("acme/widget", "fl4write[bot]") == "t1"
+    assert _appauth.get_repository_token("acme/widget", "fl4write[bot]") == "t1"
+    monkeypatch.setattr(_appauth, "_key_fingerprint", lambda: "rotated")
+    assert _appauth.get_repository_token("acme/widget", "fl4write[bot]") == "t2"
+    assert mints["n"] == 2
+    _appauth._TOKEN_CACHE.clear()
