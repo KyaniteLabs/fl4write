@@ -198,8 +198,13 @@ def _concurrent_pass(sources, request, route, screen_route, ledger, progress, ca
     failing chunk in that order surfaces the same Deferred as the serial loop.
     With a screen route each window is two-phase — every chunk's cheap screen
     leg dispatches first, then flagged chunks' deep legs join the same pool in
-    coverage order — so both legs keep the charge-before-dispatch contract and
-    the fake-fixture ordinals stay deterministic."""
+    coverage order — so both legs keep the charge-before-dispatch contract.
+    Fake-fixture ordinals are deterministic within a fixed (concurrency,
+    screened) configuration only: screened concurrent dispatch assigns all
+    screen legs before deep legs, unlike serial chunk-major order, so the
+    same fixture queue plays differently across settings. Cross-setting
+    replay is rejected by checkpoint identity — fixtures are a same-setting
+    instrument, never portable evidence."""
     from concurrent.futures import ThreadPoolExecutor
 
     from .exhaustive import Deferred, _RECON_SYSTEM, _SCREEN_SYSTEM, _recon_prompts, _validated

@@ -86,3 +86,28 @@ def test_evidence_is_content_addressed_and_rechecked(tmp_path):
     paths["full-suite.xml"].chmod(0o400)
     with pytest.raises(EvidenceError, match="digest"):
         verify_bundle(reference)
+
+
+def _sealable_source(base, extra):
+    import hashlib as _hl
+    import json as _j
+    base.mkdir()
+    (base / "head.tar").write_bytes(b"reviewed archive")
+    (base / "manifest.json").write_text(_j.dumps({
+        "head": "a" * 40,
+        "archive_sha256": _hl.sha256(b"reviewed archive").hexdigest()}))
+    extra(base)
+    return base
+
+
+def test_top_level_tree_file_seals_while_tree_dir_skipped(tmp_path):
+    """Cycle-6: a regular file literally named "tree" is evidence and
+    must seal; the archived-tree directory stays out of scope."""
+    from fl4write.exhaustive_evidence import seal_bundle, verify_bundle
+    src_file = _sealable_source(
+        tmp_path / "r1", lambda b: (b / "tree").write_text("evidence file"))
+    assert "tree" in verify_bundle(seal_bundle(src_file, tmp_path / "b1"))
+    src_dir = _sealable_source(tmp_path / "r2", lambda b: (
+        b / "tree").mkdir() or (b / "tree" / "x").write_text("x"))
+    sealed = verify_bundle(seal_bundle(src_dir, tmp_path / "b2"))
+    assert "tree" not in sealed and "tree/x" not in sealed

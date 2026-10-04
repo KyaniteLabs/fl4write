@@ -830,7 +830,11 @@ class ForgejoAdapter(ForgeAdapter):
             if not isinstance(b, str) or not b:
                 b = "main"
             h = self._call("GET", f"/repos/{repo}/commits/{quote(b, safe='')}")
-            return h.get("sha") if isinstance(h, dict) and h.get("sha") else None
+            # Zero-findings review: non-string SHAs (int/bool from a
+            # shape-drifted forge) flowed into sweep anchors and URLs via
+            # f-string — the GitHub lane type-checks; so does this one now.
+            sha = h.get("sha") if isinstance(h, dict) else None
+            return sha if isinstance(sha, str) and sha else None
         except ForgeError:
             return None
 

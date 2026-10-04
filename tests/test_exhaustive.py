@@ -445,6 +445,16 @@ class _Forge:
         return {"number": 13, "body": self.body, "user": {"login": self.author}}
 
 
+def test_repo_identity_ignores_forge_casing():
+    """Cycle-6: forge login casing is not stable — Owner/Repo must match
+    the canonical owner/repo instead of refusing a legitimate ledger."""
+    from fl4write.exhaustive_publication import _same_repo
+    assert _same_repo("Owner/Repo", "owner/repo") is True
+    assert _same_repo("owner/repo", "owner/repo") is True
+    assert _same_repo("other/repo", "owner/repo") is False
+    assert _same_repo(None, "owner/repo") is False
+
+
 def test_unowned_publication_never_writes_or_advances_counter(tmp_path: Path):
     repo = _repo(tmp_path)
     state_dir = tmp_path / "state"

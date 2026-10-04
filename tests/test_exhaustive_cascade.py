@@ -110,6 +110,41 @@ def test_cascade_deep_findings_match_single_model_evidence_shape(tmp_path):
     assert cascade_result['coverage'] == single_result['coverage']
 
 
+@pytest.mark.parametrize("concurrency", [None, 3])
+def test_screened_fixture_order_deterministic_per_configuration(tmp_path, concurrency):
+    """Cycle-6 doc correction pin: fake-fixture ordinals are deterministic
+    within a fixed (concurrency, screened) configuration — the same run
+    twice consumes fixtures identically. Serial screened consumes
+    screen,deep per chunk; concurrent screened consumes all screens
+    first: the SAME queue cannot serve both, by design."""
+    import json as _j
+
+    def _deep(line, evidence):
+        return {"findings": [{"path": "value.txt", "line": line, "evidence": evidence,
+                              "severity": "Major", "message": "m"}]}
+
+    def _run_once(tag):
+        base = tmp_path / tag
+        req = _fixture(base, screen=True, max_calls=12)
+        payload = _j.loads(req.read_bytes())
+        screens = [{"flag": True}, {"flag": True}, {"flag": True}]
+        deeps = [_deep(1, "alpha"), _deep(2, "beta"), _deep(3, "gamma")]
+        if concurrency is None:
+            queue = [x for pair in zip(screens, deeps) for x in pair]
+        else:
+            queue = screens + deeps
+        fq = base / "fakes.json"
+        fq.write_text(_j.dumps(queue))
+        payload["fake_responses"] = str(fq)
+        if concurrency is not None:
+            payload["concurrency"] = concurrency
+        req.write_text(_j.dumps(payload))
+        assert exhaustive._worker(req, None) == 0
+        return (base / "result.json").read_bytes()
+
+    assert _run_once("a") == _run_once("b")
+
+
 def test_screen_calls_consume_the_shared_call_budget(tmp_path):
     req = _fixture(tmp_path, screen=True, max_calls=3)
     model = _cascade_model({s: True for s in _EVIDENCE}, {1: _finding(1)})

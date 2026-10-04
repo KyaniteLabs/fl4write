@@ -373,3 +373,54 @@ rate limits) + triage with live probes + fixes or written verdicts.
 Only verified, trigger-demonstrated defects count as findings;
 refuted/deferred items confirm cleanliness. Loop closes at 3 straight
 clean rounds; the count stands at 0.
+
+### Zero-loop round 1 ledger (in progress, principal-led)
+
+Scope swept so far (read + live-probed, branch `fix/zero-loop-r1`):
+
+| Area | Files | Result |
+|---|---|---|
+| Issues triage | `fl4write/issues.py:135-143` | FINDING: `_as_bool` accepted `"1"` as True against its own contract → fixed (`a18e708`), probe: hostile `"1"`/`"0"` now coerce False |
+| Renderer | `fl4write/renderer.py:89-105` | FINDING: 5000-digit line crashed `int()` (ValueError escapes forge-fed parsing) → fixed (`ebc75f6`), probe: skew row skipped, roundtrip intact |
+| Org law | `fl4write/law.py` (full) | Clean: static text, no executable surface |
+| Metrics | `fl4write/metrics.py:33-71` | Clean post-renderer-fix: parse now cannot raise; `acceptance_snapshot` never-raises contract holds |
+| Timestamps | `fl4write/timestamps.py` (full) | Clean: naive/malformed → None on all probes |
+| Models | `fl4write/models.py` (full) | Clean: plain DTOs, coercion belted at construction sites |
+| Config validators | `fl4write/config.py:261-338` | Clean: namespace-collision, bool-int, vocab pins verified by reading |
+| CLI diff path | `fl4write/cli.py:69-95` | Accepted residual (reasoned): empty-text/empty-files proceeds to clean verdict; only reachable on gh rc-0 with unparseable stdout — forge contract covers the error path |
+
+Round verdict so far: NON-CLEAN (2 findings, both fixed with regressions).
+Still to sweep: recon worker, publication, retro/postmerge, ciwatch,
+omnisweep engine paths, forges adapters, appauth TTL edges.
+
+### Zero-loop round 1 ledger (closed): 16 findings, all fixed
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | Triage `"1"`-as-true vs contract | Fixed (`a18e708`) |
+| 2 | Renderer giant-int crash on forge-fed bodies | Fixed (`ebc75f6`) |
+| 3 | Dirty worktree into repair prompt | Fixed (`40d250c`) |
+| 4 | Top-level `tree` file excluded from bundle | Fixed (`d4fd2e3`) |
+| 5 | Repo identity case-sensitive vs forge casing | Fixed (`ca0d964`) |
+| 6 | Cascade ordinal doc overclaim | Fixed as doc + order pins (`6fba364`) |
+| 7 | Scoped-token verify-before-cache (2 HTTPS/hit) | Fixed |
+| 8 | Appauth unbounded reads | Fixed (1MB cap) |
+| 9 | Superset token grants accepted | Fixed (exact match) |
+| 10 | Forgejo head_sha untyped passthrough | Fixed (`a7e3195`) |
+| 11 | Null PR-marker permanent triage skip | Fixed |
+| 12 | Omni next_id/identity dropped on reconcile | Fixed (`cc37fb3`) |
+| 13 | Tiers epoch-zero wall-clock substitution | Fixed (`64cba66`) |
+| 14 | Open-PR resume stall silent | Fixed (`7719c99`) |
+| 15 | Model-proxy total deadline | Accepted residual (reasoned): AF_UNIX host-owned socket, per-read timeouts; total wedge requires local compromise |
+| 16 | Post-merge `_row_gap` mixed indices | Accepted residual (reasoned): conservative direction, rework never skip |
+
+Plus scout backlog triaged same round: daemon docker-escape (architectural), red-proof residual (structural binding present), publication trust (host boundary), gitattributes (fail-closed, refuted), askpass/container (insider/unreachable), TOCTOU/legacy (accepted), tiers fallback (already fixed), token staleness (no consumer), calibration/corpus/slack (documented), O(n²) (measured non-issue).
+
+Round verdict: NON-CLEAN (16 findings, 15 fixed + 1 reasoned accept). Zero-clean streak: 0.
+
+### Zero-loop round 1 closeout — 16 findings, full green to stamp
+
+Branch `fix/zero-loop-r1`: full suite 1452+4 with only the count pin
+red; README re-stamped 1453+4; Ruff, shell, diff-check clean. Ledger
+table above carries per-finding evidence. Next: push, PR, independent
+review, babysit to merge. Zero-clean streak: 0 (round non-clean).

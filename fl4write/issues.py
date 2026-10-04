@@ -92,7 +92,10 @@ def collect_new_issues(forge: ForgeAdapter, repo: str, last_number: int,
                   and i["number"] > 0]
     fresh = [i for i in valid_rows
              if (i["number"] > last_number or i["number"] in retry)
-             and "pull_request" not in i]
+             # Zero-findings review: test key TRUTHINESS, not presence — a
+             # null pull_request marker (forge drift) skipped the issue as
+             # complete while the watermark advanced past it, permanently.
+             and not i.get("pull_request")]
     return _IssueList(sorted(fresh, key=lambda i: i.get("number", 0)),
                       complete=len(valid_rows) == len(all_issues))
 
@@ -135,10 +138,12 @@ def triage_issue(issue: dict[str, Any], config: RepoConfig) -> dict[str, Any] | 
         def _as_bool(v) -> bool:
             # MECE round-3 (sol F3-004): Python truthiness turned the STRING
             # "false" into True — only real booleans and "true"/"false"
-            # literals are accepted; anything else defaults False
+            # literals are accepted; anything else defaults False.
+            # Zero-findings review: "1" also coerced True despite the
+            # contract above — now rejected like every other non-literal.
             if isinstance(v, bool):
                 return v
-            if isinstance(v, str) and v.strip().lower() in ("true", "1"):
+            if isinstance(v, str) and v.strip().lower() == "true":
                 return True
             return False
         raw["is_duplicate"] = _as_bool(raw.get("is_duplicate"))

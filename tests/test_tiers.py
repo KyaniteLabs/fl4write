@@ -100,6 +100,17 @@ class TestDueList:
         )
         assert 1 <= cold_count <= 2  # staggered: exactly once per day (never zero — Sol#5's test gap)
 
+    def test_epoch_zero_is_not_wall_clock(self, state_dir):
+        """Zero-findings review: now=0 (epoch, used in tests/backfill)
+        must not silently substitute the wall clock. With pushed pinned
+        at epoch, now=0 and now=100 compute the same stagger; pre-fix,
+        now=0 read the wall clock (decades past cadence) and diverged."""
+        (state_dir / "o__r.state.json").write_text('{"version": 1, "prs": {}}')
+        pushed = {"o/r": 0}
+        a = tiers.due([("r.yaml", "o/r", True)], now=0, pushed_map=pushed)
+        b = tiers.due([("r.yaml", "o/r", True)], now=100, pushed_map=pushed)
+        assert a == b
+
     def test_unknown_state_alerts_in_output(self, state_dir, capsys):
         (state_dir / "o__corrupt.state.json").write_text("{torn")
         tiers.due([("corrupt.yaml", "o/corrupt", True)], now=NOW, pushed_map={})

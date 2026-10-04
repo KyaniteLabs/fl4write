@@ -321,3 +321,28 @@ def test_recon_worker_rejects_duplicate_or_ambiguous_fenced_envelopes(tmp_path, 
     with pytest.raises(exhaustive.Deferred, match='unusable output'):
         exhaustive._worker(request, caller=lambda *_: response)
     assert not result.exists()
+
+
+def test_dirty_finding_source_fails_closed(tmp_path):
+    """Cycle-6: uncommitted edits in a finding file at the reviewed HEAD
+    must not flow into the repair prompt while proofs run on clean bytes."""
+    import subprocess
+
+    from fl4write import exhaustive_fix
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@invalid"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+    (repo / "v.py").write_text("VALUE = 1\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "init"], check=True)
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    (repo / "v.py").write_text("VALUE = 999\n")  # uncommitted edit
+    with pytest.raises(exhaustive_fix.FixError, match="uncommitted changes"):
+        exhaustive_fix._model_patch(
+            _config(), head,
+            [{"path": "v.py", "line": 1, "evidence": "VALUE = 1"}],
+            repo)

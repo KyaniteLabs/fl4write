@@ -248,6 +248,16 @@ def _gitea():
 
 
 class TestForgejoDiff:
+    def test_head_sha_rejects_non_string(self):
+        """Zero-findings review: int/bool SHAs from a shape-drifted forge
+        flowed into sweep anchors and URLs — now None like the GitHub lane."""
+        g = _gitea()
+        for sha, expected in ((12345, None), (True, None), ("", None),
+                              (None, None), ("a" * 40, "a" * 40)):
+            g._call = lambda m, p, _retry=True, s=sha: (
+                {"default_branch": "main"} if "commits" not in p else {"sha": s})
+            assert g.head_sha("o/r") == expected, sha
+
     def test_parses_unified_diff(self):
         g = _gitea()
         g._call_text = lambda m, p, _retry=True: (

@@ -563,6 +563,19 @@ class TestSolAudit3Pins:
         out = issues.collect_new_issues(F(), "o/r", 1)
         assert [i["number"] for i in out] == [2]
 
+    def test_null_pull_request_marker_is_not_a_pr(self):
+        from fl4write import issues
+
+        class F:
+            def _paginated(self, path, page_size, max_pages=10):
+                return [{"number": 5, "title": "x", "pull_request": None},
+                        {"number": 6, "title": "y",
+                         "pull_request": {"url": "http://x"}}]
+            def _call(self, method, path): return []
+
+        out = issues.collect_new_issues(F(), "o/r", 1)
+        assert [i["number"] for i in out] == [5]
+
 
 class TestADVR4FinalE2E:
     """Round-4 closing e2e: a hostile repo (prompt-injection diff, malicious
@@ -1183,6 +1196,26 @@ class TestMECERound3SolPins:
         try:
             iss._call_model = lambda *a, **k: _json.dumps(
                 {"labels": ["ok"], "is_duplicate": "false", "is_regression": "false",
+                 "duplicate_hint": None, "draft_reply": "fine", "urgency": "low"})
+            triage = iss.triage_issue({"number": 1, "title": "t", "body": "b"}, c)
+            assert triage is not None
+            assert triage["is_duplicate"] is False and triage["is_regression"] is False
+        finally:
+            iss._call_model = orig
+
+    def test_triage_bool_coercion_rejects_numeric_strings(self):
+        import json as _json
+        from fl4write import config as cfg
+        raw = {"repo": "o/r",
+               "forges": {"github": {"role": "primary", "api_base": "http://x", "token_env": "T"}},
+               "model": {"endpoint": "http://m/v1", "model": "t", "key_env": "K"},
+               "review": {"secrets": "x"}, "severity_vocab": ["Critical","Major","Minor","Nit"]}
+        c = cfg.RepoConfig.model_validate(raw)
+        import fl4write.issues as iss
+        orig = iss._call_model  # issues binds its own reference at import
+        try:
+            iss._call_model = lambda *a, **k: _json.dumps(
+                {"labels": [], "is_duplicate": "1", "is_regression": "0",
                  "duplicate_hint": None, "draft_reply": "fine", "urgency": "low"})
             triage = iss.triage_issue({"number": 1, "title": "t", "body": "b"}, c)
             assert triage is not None
@@ -2029,6 +2062,17 @@ class TestMECERound5SolPins:
         p.write_bytes(b"\xff\xfe{corrupt")
         st = load_state(p)
         assert st["prs"] == {} and "omni_issue" not in st
+        # sweep progress keys ride along with exact types
+        p.write_text('{"version": 999, "omni_next_id": 7, "omni_fp": "ab12", '
+                     '"omni_file_fails": {"a.py": 2}, "omni_unscannable": ["b.py"], '
+                     '"omni_unfetchable": ["c.py"], "omni_truncated_seen": true, '
+                     '"omni_cursor": 9}', encoding="utf-8")
+        st = load_state(p)
+        assert st["omni_next_id"] == 7 and st["omni_fp"] == "ab12"
+        assert st["omni_file_fails"] == {"a.py": 2}
+        assert st["omni_unscannable"] == ["b.py"] and st["omni_unfetchable"] == ["c.py"]
+        assert st["omni_truncated_seen"] is True
+        assert "omni_cursor" not in st  # int cursor would crash string compares
 
     # -- F5-010: bounded top-level lane belts ---------------------------------
 
@@ -2763,6 +2807,15 @@ class TestMECERound7LunaPins:
         parsed = parse_finding_lines(hostile)
         assert not any(r == "injected" for _sev, _p, _l, r in parsed)
         assert FINDING_LINE_RE.search("### 🔴 Critical — `x.py:3` — `a\nb`") is None
+
+    def test_absurd_line_magnitude_skips_row(self):
+        from fl4write.renderer import parse_finding_lines
+
+        # Zero-findings review: 5000-digit line numbers (CPython refuses
+        # the int conversion) must skip the row, not crash parsing —
+        # bodies come back from the forge.
+        hostile = "### 🔴 Critical — `x.py:" + "9" * 5000 + "` — `secrets`"
+        assert parse_finding_lines(hostile) == []
 
     def test_rule_key_with_newline_refused_at_load(self, tmp_path):
         from fl4write.config import load_config

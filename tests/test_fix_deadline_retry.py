@@ -104,6 +104,29 @@ def test_crashing_attempt_keeps_pending_entry(lane, monkeypatch):
     assert sum("entry kept" in a for a in report.alerts) == 2
 
 
+def test_open_pr_resume_stall_alerts_like_post_merge(lane, monkeypatch, tmp_path):
+    """Zero-findings review: attempted-but-deferred open-PR fixes were
+    silent while post-merge stalls alerted — both now signal."""
+    pr, config, forge, st, clock, calls, findings = lane
+    forge.prs = [pr]
+    monkeypatch.setattr(engine, "adapter_for", lambda *a: forge)
+    monkeypatch.setattr(engine, "_poll_fix_merges", lambda *a, **k: None)
+    state.mark_reviewed(st, pr.number, pr.head_sha, "test")
+    st["prs"]["1"]["pending_fixes"] = [findings[0].model_dump()]
+    st["prs"]["1"]["pending_fix_sha"] = pr.head_sha
+    path = tmp_path / "state.json"
+    state.save_state(path, st)
+    # Cycle gate sees time 0 (passes); the fix drain sees far-future
+    # (expired): resume runs, attempts nothing, entries stay pending.
+    ticks = [0.0] + [10.0 ** 9] * 10
+    monkeypatch.setattr(engine.time, "monotonic", lambda: ticks.pop(0))
+    report = engine.run_cycle(config, path, get_diff=lambda p: ({"x.py"}, "diff"),
+                              run_fixes=True, deadline=10 ** 6)
+    assert report.reviewed == 0
+    assert calls == []
+    assert any("stalled" in a and "await resume" in a for a in report.alerts)
+
+
 def test_diverged_rail_escalates_instead_of_crashing(lane, monkeypatch):
     from fl4write import fixlane
     pr, config, forge, st, clock, calls, findings = lane

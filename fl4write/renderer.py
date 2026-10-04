@@ -101,7 +101,14 @@ def parse_finding_lines(body: str) -> list[tuple[str, str, int, str]]:
                 continue
             if not rule or any(ord(ch) < 0x20 or ch.isspace() for ch in rule):
                 continue
-        findings.append((match.group("sev"), match.group("path"), int(match.group("line")), rule))
+        try:
+            lineno = int(match.group("line"))
+        except (ValueError, OverflowError):
+            # Zero-findings review: absurd line magnitudes (e.g. 5000-digit
+            # integers, which CPython refuses to convert) must skip the row,
+            # not crash comment parsing — bodies come back from the forge.
+            continue
+        findings.append((match.group("sev"), match.group("path"), lineno, rule))
     return findings
 
 

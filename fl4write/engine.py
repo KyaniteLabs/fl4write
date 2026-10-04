@@ -1860,7 +1860,17 @@ def run_cycle(
                     continue
                 if not state.needs_review(st, pr.number, pr.head_sha):
                     report.already_done += 1  # poll-invariant no-op: counted, never silent
-                    _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline)
+                    resume = _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline)
+                    if resume == "attempted":
+                        # Zero-findings review: mirror the post-merge stall
+                        # alert — attempted-but-deferred fixes here were
+                        # equally silent while the watermark moved on.
+                        pending = st.get("prs", {}).get(str(pr.number), {}).get("pending_fixes") or []
+                        if pending:
+                            report.alerts.append(
+                                f"#{pr.number}: open-PR sweep stalled — "
+                                f"{len(pending)} pending fixes await resume"
+                            )
                     state.save_state(state_path, st)
                     continue
                 try:
