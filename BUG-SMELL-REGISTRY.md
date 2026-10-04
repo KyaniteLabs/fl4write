@@ -508,25 +508,14 @@ substituted standalone `{junit}` while `_test` allowed embedded forms.
 **Local fix:** is_symlink refusal; embedded parity with exactly-once
 rule. **Status:** Fixed; review/merge pending.
 
-## CYCLE6-003: empty archives seal; ordinal doc overclaim
+## CYCLE6-003: empty archives seal vacuity
 
-Empty head.tar sealed and verified vacuity — non-empty floor added.
-Cascade fixture ordinals differ per (concurrency, screened) config
-while the docstring claimed blanket determinism — corrected and pinned
-per-configuration. **Status:** Fixed; review/merge pending.
+Empty head.tar sealed and verified — a non-empty floor was added.
+**Status:** Fixed on `fix/zero-loop-r2`; review/merge pending.
 
-## CYCLE6-004: appauth verify/cache/reads/scope gaps
-
-Verify + resolve ran before the cache check (docstring overclaimed
-savings); unbounded body reads; subset grant check accepted supersets;
-key rotation served stale within TTL. **Local fix:** verify after hit
-with bot-bound keys, 1MB read caps, exact grant match with delta in
-the error, fingerprint-bound cache. **Status:** Fixed; review/merge
-pending.
-
-## CYCLE6-005: engine/resume/tiers/state correctness batch
-
-Stalled open-PR resume silent (alerts added mirroring post-merge);
-epoch-zero wall-clock substitution; partial omni identity on
-reconcile (next_id, fp, failure maps, flags). **Status:** Fixed;
-review/merge pending.
+CORRECTION (2026-10-04): this row first also claimed the cascade
+ordinal doc fix, and two further rows (appauth gaps, engine batch)
+claimed round-1 work as round-2 — a context bleed across sessions;
+all of that shipped in round 1 (PR #44). The extra rows are removed
+(struck, not preserved: the branch diff is the authority for what
+round 2 changed, and it holds only CYCLE6-001/002/003).

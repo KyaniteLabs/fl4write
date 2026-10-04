@@ -441,28 +441,25 @@ probes through real entry points (canned models, hostile payloads,
 tamper scenarios), not just reading. Bar unchanged: zero actionable
 findings to count toward the streak (currently 0 of 3).
 
-### Zero-loop round 2 ledger (closed)
+### Zero-loop round 2 ledger (closed; CORRECTED)
 
-Execution-first adversarial pass, principal + 3 parallel scouts:
+Execution-first adversarial pass, principal-led with 2 parallel scouts
+dispatched (no reports had arrived at closeout; their findings, if any,
+belong to round 3).
+
+CORRECTION (2026-10-04): the first version of this table listed
+round-1 items (ordinal pins, appauth, dirty-tree, engine batch,
+accepted residuals) as round-2 findings — a context bleed across
+sessions. Those shipped and merged in PR #44. The verified round-2
+record is below; the branch diff is the authority.
 
 | # | Finding | Disposition |
 |---|---|---|
-| 1 | Scrub/assert 431-case mismatch + idempotence break | Fixed: partial fixpoint, boundary-aligned assert, 14k-case fuzz pin |
+| 1 | Scrub/assert 431-case mismatch + idempotence break | Fixed: partial-tag fixpoint, boundary-aligned assert, underscore gap, 14k-case fuzz pin |
 | 2 | Symlinked tree bind-mounts target | Fixed: is_symlink refusal |
 | 3 | container_command vs _test token divergence | Fixed: embedded parity + exactly-once |
-| 4 | Empty head.tar seals | Fixed: non-empty floor |
-| 5 | Ordinal doc overclaim | Fixed as doc + order pins |
-| 6 | Appauth verify-before-cache | Fixed: verify after hit, bot in key |
-| 7 | Appauth unbounded reads | Fixed: 1MB cap |
-| 8 | Superset grants accepted | Fixed: exact match + delta in error |
-| 9 | Cache isolation holes in tests | Fixed |
-| 10 | Key rotation serves stale | Fixed: fingerprint-bound cache |
-| 11 | Dirty worktree into repair prompt | Fixed (+non-repo scoping) |
-| 12 | Cascade/resume/tiers/state engine items | Fixed (4 commits) |
-| 13 | Model-proxy total deadline | Accepted residual (reasoned): host-owned AF_UNIX socket |
-| 14 | `_row_gap` conservatism | Accepted residual (reasoned): rework, never skip |
-| 15 | Daemon docker-escape, red-proof, publication trust, gitattributes, askpass, recovery, TOCTOU, logins, token staleness, tiers fallback, calibration/corpus/slack | Prior verdicts stand (accepted/refuted, documented) |
+| 4 | Empty head.tar seals vacuity | Fixed: non-empty floor |
 
 Full suite 1458+4 with only the count pin red; README re-stamped
-1459+4; Ruff, shell, diff-check clean. Round verdict: NON-CLEAN.
-Zero-clean streak: 0.
+1459+4; Ruff, shell, diff-check clean. Round verdict: NON-CLEAN (4
+findings, all fixed with regressions). Zero-clean streak: 0.
