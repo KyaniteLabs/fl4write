@@ -563,6 +563,13 @@ class TestSolAudit3Pins:
         out = issues.collect_new_issues(F(), "o/r", 1)
         assert [i["number"] for i in out] == [2]
 
+    def test_own_identity_ignores_forge_casing(self):
+        from fl4write.forges import is_own_identity
+        assert is_own_identity("Fl4write[bot]", "fl4write[bot]") is True
+        assert is_own_identity("KYANITELABS[BOT]", "fl4write[bot]") is True
+        assert is_own_identity("someone-else", "fl4write[bot]") is False
+        assert is_own_identity(None, "fl4write[bot]") is False
+
     def test_null_pull_request_marker_is_not_a_pr(self):
         from fl4write import issues
 
@@ -3026,6 +3033,27 @@ class TestMECERound7BE:
         out = ex.check_and_merge_own_prs(c, "fl4write[bot]")
         assert out == []  # scan completed; malformed rows were skipped
 
+    def test_merge_scan_names_non_list_envelope(self, monkeypatch, caplog):
+        import logging
+
+        from fl4write import executor as ex
+
+        def fake_api(method, path, data=None):
+            return {"total_count": 1}  # shape drift, not a PR list
+
+        monkeypatch.setattr(ex, "_gh_api", fake_api)
+        import fl4write.config as cfg_mod
+        c = cfg_mod.RepoConfig.model_validate({
+            "repo": "o/r",
+            "forges": {"github": {"role": "primary", "api_base": "https://api.github.com",
+                                  "token_env": "GHT"}},
+            "model": {"endpoint": "http://m/v1", "model": "t", "key_env": "K"},
+            "fix": {"enabled": True, "merge_own_prs": True},
+        })
+        with caplog.at_level(logging.WARNING, logger="fl4write.executor"):
+            assert ex.check_and_merge_own_prs(c, "fl4write[bot]") == []
+        assert "non-list envelope" in caplog.text
+
     def test_merge_scan_stops_at_deadline(self, monkeypatch):
         import time
 
@@ -4698,6 +4726,64 @@ class TestMECERound12Pins:
                                                  "sev": "Major", "msg": "m"}],
                                1, 1, complete=True, report=rep)
         assert "omni_issue" not in st  # dead id reconciled after 3 failures
+
+    def test_dead_omni_issue_reconciles_after_three_clean(self, tmp_path):
+        """Round-3 hunt: the empty-findings branch retried a dead id
+        forever with an unbounded counter. Same 3-strike reconcile as
+        the non-empty branch (converges to clean-success, F6-C018)."""
+        from fl4write.engine import _omni_upsert_issue
+        from fl4write.engine import CycleReport
+
+        class _Dead:
+            name = "github"
+
+            def update_issue(self, repo, number, body):
+                return False
+
+        st = {"omni_issue": 42}
+        rep = CycleReport(repo="o/r")
+        c = _sol_config(omnisweep={"enabled": True, "fix": False},
+                        ci_watch={"enabled": False})
+        for _ in range(3):
+            _omni_upsert_issue(c, _Dead(), st, [], 1, 1,
+                               complete=True, report=rep)
+        assert "omni_issue" not in st
+        assert st.get("omni_pub_fail", 0) == 0
+
+    def test_retro_seen_capped_at_two_thousand(self, tmp_path):
+        """Round-3 hunt: every other belt is capped; retro_seen grew one
+        entry per retro PR forever."""
+        from fl4write import state as state_mod
+
+        st = {"version": 1, "prs": {},
+              "retro_seen": {str(i): True for i in range(5000)}}
+        state_mod.prune_closed(st, set())
+        assert len(st["retro_seen"]) == 2000
+        assert st["retro_seen"].get("4999") is True  # newest survive
+
+    def test_null_check_run_rows_coerced(self, monkeypatch):
+        """Round-3 hunt: a null row raised AttributeError mid-scan."""
+        from fl4write import executor as ex
+
+        def fake_api(method, path, data=None):
+            if "check-runs" in path:
+                return {"check_runs": [None, {"status": "completed",
+                                              "conclusion": "success"}]}
+            if path.endswith("/status"):
+                return {"state": "success"}
+            raise AssertionError("unexpected call " + path)
+
+        monkeypatch.setattr(ex, "_gh_api", fake_api)
+        import fl4write.config as cfg_mod
+        c = cfg_mod.RepoConfig.model_validate({
+            "repo": "o/r",
+            "forges": {"github": {"role": "primary", "api_base": "https://api.github.com",
+                                  "token_env": "GHT"}},
+            "model": {"endpoint": "http://m/v1", "model": "t", "key_env": "K"},
+            "fix": {"enabled": True, "merge_own_prs": True},
+        })
+        assert ex._commit_ci_green(c, "a" * 40, 3) is True
+
 
     def test_ci_acted_string_false_cleared_at_load(self, tmp_path):
         from fl4write.state import load_state

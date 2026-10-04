@@ -1227,8 +1227,18 @@ def _omni_upsert_issue(
             # transient error keeps retrying.
             fails = int(st.get("omni_pub_fail", 0)) + 1
             if not findings:
-                # Recreating an empty issue would leave the previous findings
-                # visible forever. Keep its identity until the clean update lands.
+                # A DEAD issue id (deleted/forbidden) has nothing visible to
+                # preserve — reconcile it like the non-empty branch instead
+                # of retrying (and counting) forever. A transient outage
+                # costs one duplicate clean issue at most; a dead id heals.
+                if fails >= 3:
+                    report.alerts.append(
+                        f"omnisweep: clean update of issue #{number} failed {fails}x — id "
+                        "reconciled; a replacement clean issue will be created")
+                    st.pop("omni_issue", None)
+                    st["omni_pub_fail"] = 0
+                    st["omni_published"] = False
+                    return
                 st["omni_pub_fail"] = fails
                 report.alerts.append(
                     f"omnisweep: clean update of issue #{number} failed ({fails} attempts) — retrying next cycle")
@@ -1861,6 +1871,18 @@ def run_cycle(
                 if not state.needs_review(st, pr.number, pr.head_sha):
                     report.already_done += 1  # poll-invariant no-op: counted, never silent
                     resume = _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline)
+                    if resume == "gated-off":
+                        # Round-3 hunt: the twin post-merge path drops stale
+                        # records with an alert; the open path wedged silently
+                        # every cycle. Same drop, same alert, same rationale
+                        # (config opted out; the review itself is complete).
+                        rec = st.get("prs", {}).get(str(pr.number), {})
+                        if rec.pop("pending_fixes", None) is not None:
+                            rec.pop("pending_fix_sha", None)
+                            report.alerts.append(
+                                f"#{pr.number}: stale pending fixes dropped — fix lane is off "
+                                "(fixes disabled, shadow, or non-GitHub primary); review itself complete"
+                            )
                     if resume == "attempted":
                         # Zero-findings review: mirror the post-merge stall
                         # alert — attempted-but-deferred fixes here were

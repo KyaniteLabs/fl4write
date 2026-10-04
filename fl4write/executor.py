@@ -1054,7 +1054,12 @@ def _commit_ci_green(config: RepoConfig, sha: str, number: int,
             "GET",
             f"/repos/{config.repo}/commits/{sha}/check-runs"
             f"?per_page=100&page={page}")
-        batch = checks.get("check_runs") or []
+        batch = checks.get("check_runs") if isinstance(checks, dict) else []
+        batch = batch or []
+        # Round-3 hunt: a null row here raised AttributeError mid-scan
+        # (contained per-PR as a skip, but an unhandled shape). Coerce
+        # like the ciwatch lane: malformed rows are ignored, never fatal.
+        batch = [c for c in batch if isinstance(c, dict)]
         check_runs += batch
         if len(batch) < 100:
             break
@@ -1114,6 +1119,12 @@ def check_and_merge_own_prs(config: RepoConfig, bot_identity: str,
             batch = _gh_api("GET",
                             f"/repos/{config.repo}/pulls?state=open&per_page=100&page={page}")
             if not isinstance(batch, list):
+                # Round-3 hunt: a shape-drifted envelope used to end the
+                # scan silently (zero merges, no signal). Name it loudly;
+                # rows collected so far still get evaluated below.
+                log.warning("own-PR scan on %s: non-list envelope on page %s (%s) — "
+                            "stopping scan, collected rows still evaluated",
+                            config.repo, page, type(batch).__name__)
                 break
             prs += batch
             if len(batch) < 100:
