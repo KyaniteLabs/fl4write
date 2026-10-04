@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import time
+from typing import Any
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -30,8 +31,21 @@ APP_ID = 3592379
 DEFAULT_INSTALLATION_ID = 129423294  # KyaniteLabs org — used when no repo given
 KEY_PATH = Path.home() / ".sinter" / "forgejo" / "github-app-key.pem"
 
+# Cycle-6: bound every app-auth body read (a compromised endpoint or
+# MITM must not OOM the cycle) — mirrors forges._bounded_read at API-JSON
+# scale. Oversize reads fail the call like any transport error.
+_MAX_API_BODY = 1024 * 1024
+
+
+def _bounded_json_body(resp: Any, what: str) -> Any:
+    raw = resp.read(_MAX_API_BODY + 1)
+    if len(raw) > _MAX_API_BODY:
+        raise RuntimeError(f"github app {what}: response exceeds {_MAX_API_BODY} bytes")
+    return json.loads(raw.decode())
+
+
 # installation_id -> (token, minted_at). Tokens last 1h; 50min refresh margin.
-# Scoped single-repo tokens share the cache under ("scoped", id, repo) keys.
+# Scoped single-repo tokens share the cache under ("scoped", id, repo, bot) keys.
 _TOKEN_CACHE: dict = {}
 _TOKEN_TTL = 50 * 60
 
@@ -59,7 +73,7 @@ def _api(url: str, method: str = "GET") -> dict:
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
 
-        return json.loads(resp.read().decode())
+        return _bounded_json_body(resp, 'api')
 
 
 def resolve_installation_id(repo: str) -> int:
@@ -109,7 +123,7 @@ def get_installation_token(repo: str | None = None) -> str:
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
 
-        data = json.loads(resp.read().decode())
+        data = _bounded_json_body(resp, 'installation token')
     # F10-D006: envelope + non-empty-token validation BEFORE cache/export —
     # an empty token used to be cached and exported while the CLI still
     # selected fl4write[bot], producing unauthenticated app-identity ops
@@ -152,20 +166,25 @@ def get_repository_token(repo: str, bot_login: str) -> str:
     """Mint a fresh single-repository token with only exhaustive-workflow rights.
 
     Cycle-3: scoped tokens are cached like installation tokens (same 50m
-    TTL) — previously every call cost verify + resolve + mint, so a tight
-    fix/publish retry loop self-DoSed into secondary rate limits.
+    TTL). Zero-findings review: the cache check sits after resolve but
+    the bot-identity verify moved after the hit (bot_login joins the key),
+    so a cached repeat costs 1 HTTPS call (resolve) instead of 3.
     """
     import re
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise RuntimeError("invalid repository for scoped GitHub App token")
-    if verified_app_login() != bot_login:
-        raise RuntimeError("configured bot does not match the signing GitHub App")
     installation_id = resolve_installation_id(repo)
-    cache_key = ("scoped", installation_id, repo)
+    cache_key = ("scoped", installation_id, repo, bot_login)
     cached = _TOKEN_CACHE.get(cache_key)
     if cached and time.time() - cached[1] < _TOKEN_TTL:
         return cached[0]
+    # Zero-findings review: verify AFTER the cache hit, not before — the
+    # cached token was verified at mint, and bot_login joins the cache
+    # key so cross-bot confusion still re-verifies. Saves 2 HTTPS calls
+    # per cached repeat (verify + the resolve above stays: 1 call).
+    if verified_app_login() != bot_login:
+        raise RuntimeError("configured bot does not match the signing GitHub App")
     permissions = {"contents": "write", "pull_requests": "write", "issues": "write",
                    "actions": "read", "statuses": "read"}
     req = urllib.request.Request(
@@ -176,15 +195,17 @@ def get_repository_token(repo: str, bot_login: str) -> str:
                                  "Accept": "application/vnd.github+json"},
     )
     with urllib.request.urlopen(req, timeout=15) as response:
-        data = json.loads(response.read())
+        data = _bounded_json_body(response, 'scoped token')
     token = data.get("token") if isinstance(data, dict) else None
     repositories = data.get("repositories") if isinstance(data, dict) else None
     if (not isinstance(token, str) or not token or token != token.strip()
             or any(ord(c) < 0x20 for c in token)
             or not isinstance(repositories, list) or len(repositories) != 1
             or not isinstance(repositories[0], dict) or repositories[0].get("full_name") != repo
-            or not isinstance(data.get("permissions"), dict)
-            or any(data["permissions"].get(k) != v for k, v in permissions.items())):
+            or data.get("permissions") != permissions):
+        # Cycle-6: EXACT grant match, not subset — a server returning extra
+        # grants (e.g. administration:write) previously passed and widened
+        # the token past least privilege without a word.
         raise RuntimeError("GitHub App token scope could not be verified")
     _TOKEN_CACHE[cache_key] = (token, time.time())
     return token
