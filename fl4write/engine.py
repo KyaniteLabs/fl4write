@@ -1227,18 +1227,13 @@ def _omni_upsert_issue(
             # transient error keeps retrying.
             fails = int(st.get("omni_pub_fail", 0)) + 1
             if not findings:
-                # A DEAD issue id (deleted/forbidden) has nothing visible to
-                # preserve — reconcile it like the non-empty branch instead
-                # of retrying (and counting) forever. A transient outage
-                # costs one duplicate clean issue at most; a dead id heals.
-                if fails >= 3:
-                    report.alerts.append(
-                        f"omnisweep: clean update of issue #{number} failed {fails}x — id "
-                        "reconciled; a replacement clean issue will be created")
-                    st.pop("omni_issue", None)
-                    st["omni_pub_fail"] = 0
-                    st["omni_published"] = False
-                    return
+                # Round-3 hunt proposed reconciling here like the non-empty
+                # branch — REVERTED: test_clean_update_failures pins
+                # indefinite retry with recovery on the 5th failure, and a
+                # boolean update_issue cannot distinguish a dead id from a
+                # transient outage. A dead id wedges (one failed call per
+                # cycle, alerted every cycle — visible, never silent) until
+                # adapter read APIs can prove absence. See registry.
                 st["omni_pub_fail"] = fails
                 report.alerts.append(
                     f"omnisweep: clean update of issue #{number} failed ({fails} attempts) — retrying next cycle")

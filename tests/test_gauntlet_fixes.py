@@ -4727,28 +4727,6 @@ class TestMECERound12Pins:
                                1, 1, complete=True, report=rep)
         assert "omni_issue" not in st  # dead id reconciled after 3 failures
 
-    def test_dead_omni_issue_reconciles_after_three_clean(self, tmp_path):
-        """Round-3 hunt: the empty-findings branch retried a dead id
-        forever with an unbounded counter. Same 3-strike reconcile as
-        the non-empty branch (converges to clean-success, F6-C018)."""
-        from fl4write.engine import _omni_upsert_issue
-        from fl4write.engine import CycleReport
-
-        class _Dead:
-            name = "github"
-
-            def update_issue(self, repo, number, body):
-                return False
-
-        st = {"omni_issue": 42}
-        rep = CycleReport(repo="o/r")
-        c = _sol_config(omnisweep={"enabled": True, "fix": False},
-                        ci_watch={"enabled": False})
-        for _ in range(3):
-            _omni_upsert_issue(c, _Dead(), st, [], 1, 1,
-                               complete=True, report=rep)
-        assert "omni_issue" not in st
-        assert st.get("omni_pub_fail", 0) == 0
 
     def test_retro_seen_capped_at_two_thousand(self, tmp_path):
         """Round-3 hunt: every other belt is capped; retro_seen grew one
