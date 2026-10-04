@@ -499,3 +499,12 @@ Principal + 3 parallel scouts, all findings live-probed:
 Full suite 1467+4 with only the count pin red; README re-stamped
 1468+4; Ruff, shell, diff-check clean. Round verdict: NON-CLEAN.
 Zero-clean streak: 0.
+
+### Merge receipt — 2026-10-04 (PR #46 merged, zero-loop round 3 closed)
+
+Forgejo PR #46 merged as `eff452f` (CI green on head `9bfaa4d`).
+Review went two rounds (blocker: bundle ancestor sets; fixed,
+re-approved with tamper probes). Full local suite 1469+4 zero-failure
+before merge. Round 3: 10 findings + 1 reverted proposal. Zero-clean
+streak: 0 (round non-clean). Remaining: rounds 4-5, mini-seat reply,
+mirror divergence (do not touch), live quality, security menu.
