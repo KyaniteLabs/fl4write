@@ -433,3 +433,10 @@ re-approved). Full local suite 1454+4 zero-failure before merge.
 Round 1: 16 findings + full green. Zero-clean streak: 0 (round
 non-clean). Remaining: rounds 2-3, mini-seat reply, mirror divergence
 (do not touch), live quality, security menu.
+
+### Zero-loop round 2 opened — execution-first adversarial pass
+
+Round 1 closed with 16 findings. Round 2 hunts with live execution
+probes through real entry points (canned models, hostile payloads,
+tamper scenarios), not just reading. Bar unchanged: zero actionable
+findings to count toward the streak (currently 0 of 3).
