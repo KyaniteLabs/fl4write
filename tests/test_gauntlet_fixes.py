@@ -4326,6 +4326,35 @@ class TestMECERound11Analyzer:
         assert "https://example.invalid/guide" in kept
         assert_clean(kept)
 
+    def test_scrub_assert_agree_on_hostile_soup(self):
+        """Zero-findings review: 14000-case fuzzback — scrub() output must
+        always satisfy assert_clean() (a mismatch crashes the review post
+        on hostile findings), stay idempotent, and real threats must still
+        trip the assert when fed unscrubbed."""
+        import random as _random
+
+        from fl4write.scrub import assert_clean as _assert, scrub as _scrub
+        for threat in ('<script src=x></script>', '<svg onload=x>',
+                       '<div hidden>secret</div>', '[x](javascript:alert(1))',
+                       '<a onclick="steal()">x</a>'):
+            try:
+                _assert(threat)
+                raise AssertionError(f"threat passed assert: {threat!r}")
+            except ValueError:
+                pass
+        _random.seed(31337)
+        alphabet = ['<', '>', '&', '"', "'", '=', '!', '[', ']', '(', ')',
+                    '#', '-', '_', 'a', 'Z', '0', ' ', '\n', '`', '/', '.',
+                    ':', ';', '@', '$', '%', '*', 'onclick', 'javascript:',
+                    'http', 'data:', 'style', 'display:none', 'hidden',
+                    'script', 'svg', '-->', '<!--']
+        for _ in range(800):
+            s = ''.join(_random.choice(alphabet)
+                        for _ in range(_random.randint(0, 80)))
+            out = _scrub(s)
+            assert _scrub(out) == out, f"not idempotent: {s!r}"
+            _assert(out)
+
     def test_redact_url_userinfo_password(self):
         from fl4write.scrub import redact_credentials
         out = redact_credentials("uses https://admin:s3cr3t@lan-host/ endpoint")
