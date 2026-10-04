@@ -363,3 +363,13 @@ rate-limited; the two running report no new verified defects before
 cutoff. Cycle-6 extends the convergence bar: any new fix must beat the
 current all-green bar (green suite + a real defect fixed), not break
 it. No new code was added this cycle; 1440+4 stands.
+
+## ZERO-FINDINGS LOOP opened — 2026-10-04 (user order)
+
+Contract: exhaustive MECE autoresearch with systematic debugging until
+3 consecutive rounds close with ZERO actionable findings. A round =
+full-dimension sweep (principal-led this time, scouts burned their
+rate limits) + triage with live probes + fixes or written verdicts.
+Only verified, trigger-demonstrated defects count as findings;
+refuted/deferred items confirm cleanliness. Loop closes at 3 straight
+clean rounds; the count stands at 0.
