@@ -139,6 +139,13 @@ def _issue_author(issue: dict[str, Any]) -> str | None:
     return _login(issue.get("user")) or _login(issue.get("author"))
 
 
+def _same_repo(name: str | None, canonical: str) -> bool:
+    """Case-insensitive repository identity: forge casing is not stable
+    (Owner/Repo vs owner/repo), so a strict compare denied legitimate
+    owned ledgers. Both sides are already shape-validated."""
+    return isinstance(name, str) and name.casefold() == canonical.casefold()
+
+
 def _repo_name(payload: Any) -> str | None:
     if not isinstance(payload, dict):
         return None
@@ -167,7 +174,7 @@ def inspect_owned(adapter: ForgeAdapter, repo: str, issue: int, bot_login: str) 
 
     if _login(identity) != bot_login:
         raise PublicationError("authenticated identity mismatch")
-    if _repo_name(repository) != canonical:
+    if not _same_repo(_repo_name(repository), canonical):
         raise PublicationError("repository identity mismatch")
     if not isinstance(current, dict) or current.get("number") != issue:
         raise PublicationError("issue identity mismatch")
