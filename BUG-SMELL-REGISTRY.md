@@ -519,3 +519,13 @@ claimed round-1 work as round-2 — a context bleed across sessions;
 all of that shipped in round 1 (PR #44). The extra rows are removed
 (struck, not preserved: the branch diff is the authority for what
 round 2 changed, and it holds only CYCLE6-001/002/003).
+
+## CYCLE6-006 (REVERTED): clean-issue dead-id reconcile
+
+Proposed reconciling dead clean-issue ids at 3 strikes like the
+non-empty branch. REVERTED before merge: `test_clean_update_failures`
+pins indefinite retry with recovery on the 5th failure, and a boolean
+`update_issue` cannot distinguish dead ids from transient outages.
+The wedge (one failed call per cycle, alerted every cycle) stands as
+accepted — visible, never silent — until adapter read APIs can prove
+absence. Attempt + revert recorded so nobody re-proposes blind.

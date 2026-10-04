@@ -478,3 +478,24 @@ reply, mirror divergence (do not touch), live quality, security menu.
 
 Streak: 0 of 3. Fresh eyes, strict no-re-report list (rounds 1-2 +
 cycles 1-5 all merged). Only verified-new defects count.
+
+### Zero-loop round 3 ledger (closed)
+
+Principal + 3 parallel scouts, all findings live-probed:
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | Angle-bracket js: URLs bypass scrub+assert | Fixed |
+| 2 | Renderer proposals skip scrub (post crash) | Fixed |
+| 3 | Bundle dirs never compared | Fixed |
+| 4 | Identity case mismatch across lanes | Fixed (fold at choke point) |
+| 5 | Legacy empty report misclassified | Fixed (match embedded path) |
+| 6 | Open-PR gated-off wedge | Fixed (drop + alert, twin parity) |
+| 7 | Merge-scan envelope silent | Fixed (loud degrade) |
+| 8 | retro_seen unbounded | Fixed (cap 2000) |
+| 9 | Clean-issue dead-id reconcile | REVERTED pre-merge: broke tested transient-recovery contract; recorded |
+| 10 | Null check-run rows | Fixed (coerce) |
+
+Full suite 1467+4 with only the count pin red; README re-stamped
+1468+4; Ruff, shell, diff-check clean. Round verdict: NON-CLEAN.
+Zero-clean streak: 0.
