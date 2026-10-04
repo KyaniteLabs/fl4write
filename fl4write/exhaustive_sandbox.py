@@ -37,11 +37,20 @@ def container_command(command: list[str], tree: Path, image: str, name: str, tim
         raise SandboxUnavailable("test image must be an immutable local image SHA-256")
     if not tree.is_dir() or "," in str(tree.resolve()):
         raise SandboxUnavailable("test tree is unavailable or has an unsupported mount path")
+    if tree.is_symlink():
+        # Cycle-6: a symlinked tree bind-mounts its TARGET (verified live:
+        # symlink to / mounts host root readonly). The in-repo caller
+        # always builds via fresh mkdir, but direct callers must not inherit
+        # the hole — same is_symlink discipline as the evidence path.
+        raise SandboxUnavailable("test tree must not be a symlink")
     if not command or any(not isinstance(arg, str) or "\x00" in arg for arg in command):
         raise SandboxUnavailable("test command must be fixed argv")
-    if "{junit}" not in command:
-        raise SandboxUnavailable("isolated test command requires standalone {junit}")
-    argv = ["/evidence/report.xml" if arg == "{junit}" else arg for arg in command]
+    if sum(arg.count("{junit}") for arg in command) != 1:
+        # Cycle-6: parity with _test — embedded tokens (e.g.
+        # --junit-xml={junit}.xml) substitute; missing/doubled stay fatal.
+        raise SandboxUnavailable("isolated test command requires {junit} exactly once")
+    argv = [arg.replace("{junit}", "/evidence/report.xml") if "{junit}" in arg else arg
+            for arg in command]
     uid = os.getuid() or 65534
     gid = os.getgid() if os.getuid() else 65534
     proxy_args = []

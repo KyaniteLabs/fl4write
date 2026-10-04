@@ -488,3 +488,34 @@ sites) — the worktree already carried the verified pgid-capture
 version. Mechanics of the handoff were wrong; its caution was right
 and is honored by this audit. Tastecheck-repo remark: out of scope
 for this lane, no fl4write impact.
+
+## CYCLE6-001: scrub/assert hostile-soup mismatch + idempotence break
+
+**Files:** `fl4write/scrub.py`. 431/6000 fuzz cases: partial-tag and
+hidden-attr soup survived scrub but tripped assert_clean (one hostile
+finding could crash the whole review post), and barrier removal broke
+documented idempotence. **Local fix:** partial patterns iterate to
+fixpoint; assert demands scrub's word boundaries (glued names inert);
+hidden-attr alignment. **Regression:** seeded 14k-case fuzz pin (zero
+mismatches) + live-threat battery. **Status:** Fixed on
+`fix/zero-loop-r2`; review/merge pending.
+
+## CYCLE6-002: symlinked tree bind-mounts target; token divergence
+
+**File:** `fl4write/exhaustive_sandbox.py`. Symlinked tree mounted its
+target (verified: symlink to / yields src=/); container_command only
+substituted standalone `{junit}` while `_test` allowed embedded forms.
+**Local fix:** is_symlink refusal; embedded parity with exactly-once
+rule. **Status:** Fixed; review/merge pending.
+
+## CYCLE6-003: empty archives seal vacuity
+
+Empty head.tar sealed and verified — a non-empty floor was added.
+**Status:** Fixed on `fix/zero-loop-r2`; review/merge pending.
+
+CORRECTION (2026-10-04): this row first also claimed the cascade
+ordinal doc fix, and two further rows (appauth gaps, engine batch)
+claimed round-1 work as round-2 — a context bleed across sessions;
+all of that shipped in round 1 (PR #44). The extra rows are removed
+(struck, not preserved: the branch diff is the authority for what
+round 2 changed, and it holds only CYCLE6-001/002/003).

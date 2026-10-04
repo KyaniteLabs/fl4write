@@ -69,7 +69,19 @@ _EVENT_HANDLER_RE = re.compile(
 _JS_SCHEME_MD_RE = re.compile(r"(\]\(\s*)javascript:", re.IGNORECASE)
 _JS_SCHEME_HREF_RE = re.compile(
     r"(href\s*=\s*[\"']?\s*)javascript:", re.IGNORECASE)
-# Our persistent-comment marker must be minted only by the renderer.
+# Cycle-6: unterminated dangerous-tag opens (tag soup with no closing
+# ">") survived stripping AND tripped assert_clean, so one hostile
+# finding killed the whole review post (availability, fail-closed).
+# Neutralize the "<" — complete tags are already stripped above, so
+# anything still matching is partial by construction. Prose that would
+# otherwise crash the post renders with a visible "&lt;" instead.
+_PARTIAL_TAG_RE = re.compile(
+    r"<(?=\s*/?\s*(script|style|template|iframe|svg|math|object|embed|form|details|summary|div|section|article|blockquote|pre|hr|table|thead|tbody|tr|th|td)\b)",
+    re.IGNORECASE)
+# Same for tag-shaped spans carrying a hidden marker: "<b hidden agenda"
+# prose trips the assert today and crashes the post; neutralize the open.
+_PARTIAL_HIDDEN_RE = re.compile(
+    r"<(?=\s*[a-zA-Z]+[^<>]*\bhidden\b)", re.IGNORECASE)
 _MARKER_RE = re.compile(r"(?:fl4write|codesitter):v\d+:[0-9a-fA-F]+")
 
 
@@ -92,11 +104,17 @@ def controls(text: str) -> str:
     return "".join(out)
 
 
-def scrub(text: str) -> str:
-    """Category-strip untrusted text. Idempotent. Never raises."""
-    if not isinstance(text, str):
-        return ""
-    s = controls(text)
+def _scrub_once(s: str) -> str:
+    """One full rule pass. Comment stripping runs FIRST: removing comments
+    concatenates the halves into fresh image/data matches (verified live:
+    `![a]<!--[b]` assembles `![a][b]`), so rules ordered after comments
+    must see the joined text in the same pass cycle (see scrub fixpoint).
+    """
+    s = _HTML_COMMENT_RE.sub("", s)
+    if "<!--" in s:
+        # MECE round-1 (terra F1-07): an UNCLOSED comment opener can swallow
+        # the remainder of the rendered comment — remove any leftover opener
+        s = s.split("<!--", 1)[0] + s.split("<!--", 1)[1].replace("<!--", "")
     s = _DATA_URL_RE.sub("[scrubbed-data-url]", s)
     s = _BASE64_IMG_RE.sub("[scrubbed-image]", s)
     s = _REMOTE_IMG_RE.sub("[image removed]", s)
@@ -109,17 +127,40 @@ def scrub(text: str) -> str:
     # the usage alone leaves the URL live for other renderers
     s = _REMOTE_IMG_REF_DEF_RE.sub("", s)
     s = _REMOTE_SRC_RE.sub("&lt;remote-src ", s)
-    s = _HTML_COMMENT_RE.sub("", s)
-    if "<!--" in s:
-        # MECE round-1 (terra F1-07): an UNCLOSED comment opener can swallow
-        # the remainder of the rendered comment — remove any leftover opener
-        s = s.split("<!--", 1)[0] + s.split("<!--", 1)[1].replace("<!--", "")
     s = _HIDDEN_TAG_RE.sub("", s)
     s = _HIDDEN_STYLE_RE.sub("hidden-style", s)
+    # Cycle-6 fuzzback: neutralizing an inner "<" can MERGE surrounding
+    # text into a fresh partial-tag shape (barrier removal), so one pass
+    # is not a fixpoint and idempotence breaks. Both patterns only ever
+    # remove "<" characters — monotonically terminating — so iterate to
+    # stability. Later rules never introduce "<", preserving the fixpoint.
+    while True:
+        stepped = _PARTIAL_HIDDEN_RE.sub(
+            "&lt;", _PARTIAL_TAG_RE.sub("&lt;", s))
+        if stepped == s:
+            break
+        s = stepped
     s = _EVENT_HANDLER_RE.sub(r"\1 data-fl4write-on-\2-removed=", s)
     s = _JS_SCHEME_MD_RE.sub(r"\1[scrubbed-scheme]", s)
     s = _JS_SCHEME_HREF_RE.sub(r"\1[scrubbed-scheme]", s)
     s = _MARKER_RE.sub("[scrubbed-marker]", s)
+    return s
+
+
+def scrub(text: str) -> str:
+    """Category-strip untrusted text. Idempotent. Never raises."""
+    if not isinstance(text, str):
+        return ""
+    # Review round 2 (PR45): the whole body iterates to a fixpoint (cap
+    # 10) because comment removal assembles fresh image/data matches from
+    # the joined halves — a single pass left scrub output tripping
+    # assert_clean and broke idempotence on those shapes.
+    s = controls(text)
+    for _ in range(10):
+        stepped = _scrub_once(s)
+        if stepped == s:
+            return s
+        s = stepped
     return s
 
 
@@ -238,9 +279,15 @@ def assert_clean(text: str) -> None:
     # review even when every regex pattern above is clean (markers are
     # STRUCTURAL: bare words like 'hidden' or diff arrows must not trip)
     low = text.lower()
-    if "<!--" in low or re.search(r"<\s*/?\s*(style|script|template|iframe|svg|math|object|embed)", low) \
+    # Cycle-6 fuzzback: the tag alternative matched bare PREFIXES
+    # ("<scriptstyle" — an inert unknown element), while scrub correctly
+    # requires a word boundary. Glued names can never execute; demand the
+    # boundary here too so agreed-inert soup does not crash the post.
+    # Underscore/hyphen glued (`<script_`, `<script-x`) are valid custom
+    # element spellings — still inert — so they join the exclusion.
+    if "<!--" in low or re.search(r"<\s*/?\s*(style|script|template|iframe|svg|math|object|embed)(?![a-zA-Z0-9_-])", low) \
             or re.search(r"(?:display|visibility)\s*:\s*(?:none|hidden)", low) \
-            or re.search(r"<\s*[a-z]+[^>]*\bhidden\b", low) \
+            or re.search(r"<\s*[a-z]+[^<>]*\bhidden\b", low) \
             or re.search(r"<[^>]*\son[a-z0-9]+\s*=", low) \
             or re.search(r"\]\(\s*javascript:|href\s*=\s*[\"']?\s*javascript:", low):
         raise ValueError("unscrubbed html comment/hidden structure in output")

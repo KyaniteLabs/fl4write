@@ -290,3 +290,27 @@ def test_worker_kills_group_on_success_and_snapshots_report(tmp_path):
     )
     assert 'result["report_b64"] = embedded' in src
     assert "STATUS" in src and "mode=0700" not in src  # status path is /control
+
+
+def test_symlinked_tree_rejected(tmp_path):
+    target = tmp_path / "real"
+    target.mkdir()
+    link = tmp_path / "tree"
+    link.symlink_to(target)
+    with pytest.raises(sandbox.SandboxUnavailable, match="symlink"):
+        sandbox.container_command(["pytest", "{junit}"], link, IMAGE, "fixture", 30)
+
+
+def test_embedded_junit_token_substituted(tmp_path):
+    argv = sandbox.container_command(
+        ["pytest", "--junit-xml={junit}.xml"], tmp_path, IMAGE, "fixture", 30)
+    blob = " ".join(argv)
+    assert "--junit-xml=/evidence/report.xml.xml" in blob
+    assert "{junit}" not in blob
+
+
+def test_missing_or_doubled_junit_token_rejected(tmp_path):
+    with pytest.raises(sandbox.SandboxUnavailable, match="exactly once"):
+        sandbox.container_command(["pytest", "--junit-xml=out.xml"], tmp_path, IMAGE, "fixture", 30)
+    with pytest.raises(sandbox.SandboxUnavailable, match="exactly once"):
+        sandbox.container_command(["pytest", "{junit}", "{junit}"], tmp_path, IMAGE, "fixture", 30)

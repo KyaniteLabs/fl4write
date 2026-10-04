@@ -100,6 +100,18 @@ def _sealable_source(base, extra):
     return base
 
 
+def test_empty_archive_refused_at_seal(tmp_path):
+    """Cycle-6: an empty head.tar is meaningless evidence — refuse it
+    instead of sealing and verifying vacuity."""
+    from fl4write.exhaustive_evidence import EvidenceError, seal_bundle
+    source = tmp_path / "round"
+    source.mkdir()
+    (source / "head.tar").write_bytes(b"")
+    (source / "manifest.json").write_text("{}")
+    with pytest.raises(EvidenceError, match="empty"):
+        seal_bundle(source, tmp_path / "bundles")
+
+
 def test_top_level_tree_file_seals_while_tree_dir_skipped(tmp_path):
     """Cycle-6: a regular file literally named "tree" is evidence and
     must seal; the archived-tree directory stays out of scope."""

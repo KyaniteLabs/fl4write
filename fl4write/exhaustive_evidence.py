@@ -66,6 +66,10 @@ def seal_bundle(source: Path, destination: Path) -> dict[str, str]:
             entries[relative.as_posix()] = hashlib.sha256(raw).hexdigest()
         if not {"head.tar", "manifest.json"} <= entries.keys():
             raise EvidenceError("evidence lacks its reviewed archive")
+        # Cycle-6: an empty archive is meaningless evidence that otherwise
+        # seals and verifies — require a non-empty reviewed archive.
+        if (temporary / "head.tar").stat().st_size == 0:
+            raise EvidenceError("reviewed archive is empty")
         raw_manifest = _canonical({"version": 1, "files": entries})
         digest = hashlib.sha256(raw_manifest).hexdigest()
         manifest = temporary / "bundle.json"
