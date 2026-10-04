@@ -185,7 +185,10 @@ def due(configs: list[tuple[str, str, bool]], now: float | None = None,
         pushed_map: dict[str, float] | None = None) -> list[str]:
     """configs = [(filename, repo, is_github_primary)]. Returns due filenames
     (staggered colds across their cadence) + prints the plan line."""
-    now = now or time.time()
+    # Zero-findings review: explicit None check — a falsy epoch (now=0,
+    # used in tests/backfill) silently substituted wall-clock and shifted
+    # every stagger slot and hot/cold boundary.
+    now = time.time() if now is None else now
     by_repo: dict[str, str] = {}
     for fname, repo, _ in configs:
         if repo in by_repo:
