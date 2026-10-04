@@ -57,7 +57,14 @@ def _log_row(adapter_name, label, row) -> str:
 
 
 def is_own_identity(author: str, bot_login: str) -> bool:
-    return author == bot_login or author in LEGACY_BOT_LOGINS
+    # Cycle-6: forge login casing is not stable — fold before comparing so
+    # a case-variant own login cannot slip the uncertain-id guard in one
+    # lane (duplicate post) while matching in another.
+    if not isinstance(author, str) or not isinstance(bot_login, str):
+        return False
+    folded = author.casefold()
+    return folded == bot_login.casefold() \
+        or folded in {slug.casefold() for slug in LEGACY_BOT_LOGINS}
 
 
 # Retryable HTTP statuses for idempotent GETs (POSTs never blind-retry:

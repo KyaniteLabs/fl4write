@@ -115,15 +115,32 @@ def verify_bundle(reference: dict) -> dict[str, Path]:
                 or not {"head.tar", "manifest.json"} <= data["files"].keys()):
             raise EvidenceError("invalid evidence manifest")
         actual = {}
+        actual_dirs = set()
         for path in root.rglob("*"):
             if path.is_symlink() or path.stat().st_mode & 0o222:
                 raise EvidenceError("evidence contains mutable or linked entries")
+            if path.is_dir():
+                if path != root:
+                    actual_dirs.add(path.relative_to(root).as_posix())
+                continue
             if path.is_file() and path != manifest:
                 if not stat.S_ISREG(path.stat().st_mode):
                     raise EvidenceError("nonregular evidence")
                 actual[path.relative_to(root).as_posix()] = path
         if actual.keys() != data["files"].keys():
             raise EvidenceError("evidence bundle contents changed")
+        # Cycle-6: directories were checked for writability but never
+        # compared — an extra dir (even mode-locked) passed silently.
+        # Expected dirs are exactly the ancestors implied by manifest
+        # files (review round 2: parents-only dropped intermediates and
+        # refused legitimate nested bundles).
+        expected_dirs = set()
+        for name in data["files"]:
+            for parent in Path(name).parents:
+                if str(parent) != ".":
+                    expected_dirs.add(str(parent))
+        if actual_dirs != expected_dirs:
+            raise EvidenceError("evidence bundle directories changed")
         for name, path in actual.items():
             if hashlib.sha256(path.read_bytes()).hexdigest() != data["files"][name]:
                 raise EvidenceError("evidence content digest changed")

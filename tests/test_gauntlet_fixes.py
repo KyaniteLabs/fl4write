@@ -563,6 +563,13 @@ class TestSolAudit3Pins:
         out = issues.collect_new_issues(F(), "o/r", 1)
         assert [i["number"] for i in out] == [2]
 
+    def test_own_identity_ignores_forge_casing(self):
+        from fl4write.forges import is_own_identity
+        assert is_own_identity("Fl4write[bot]", "fl4write[bot]") is True
+        assert is_own_identity("KYANITELABS[BOT]", "fl4write[bot]") is True
+        assert is_own_identity("someone-else", "fl4write[bot]") is False
+        assert is_own_identity(None, "fl4write[bot]") is False
+
     def test_null_pull_request_marker_is_not_a_pr(self):
         from fl4write import issues
 
@@ -3026,6 +3033,27 @@ class TestMECERound7BE:
         out = ex.check_and_merge_own_prs(c, "fl4write[bot]")
         assert out == []  # scan completed; malformed rows were skipped
 
+    def test_merge_scan_names_non_list_envelope(self, monkeypatch, caplog):
+        import logging
+
+        from fl4write import executor as ex
+
+        def fake_api(method, path, data=None):
+            return {"total_count": 1}  # shape drift, not a PR list
+
+        monkeypatch.setattr(ex, "_gh_api", fake_api)
+        import fl4write.config as cfg_mod
+        c = cfg_mod.RepoConfig.model_validate({
+            "repo": "o/r",
+            "forges": {"github": {"role": "primary", "api_base": "https://api.github.com",
+                                  "token_env": "GHT"}},
+            "model": {"endpoint": "http://m/v1", "model": "t", "key_env": "K"},
+            "fix": {"enabled": True, "merge_own_prs": True},
+        })
+        with caplog.at_level(logging.WARNING, logger="fl4write.executor"):
+            assert ex.check_and_merge_own_prs(c, "fl4write[bot]") == []
+        assert "non-list envelope" in caplog.text
+
     def test_merge_scan_stops_at_deadline(self, monkeypatch):
         import time
 
@@ -4356,6 +4384,30 @@ class TestMECERound11Analyzer:
             assert _scrub(out) == out, f"not idempotent: {s!r}"
             _assert(out)
 
+    def test_angle_bracket_js_scheme_neutralized(self):
+        from fl4write.scrub import assert_clean, scrub
+        for hostile in ("[x](<javascript:alert(1)>)",
+                        "[x](<JAVASCRIPT:alert(1)>)",
+                        "[x](<  javascript:alert(1)>)",
+                        "<a href=<javascript:alert(1)>>x</a>"):
+            out = scrub(hostile)
+            assert "javascript:" not in out, out
+            assert_clean(out)
+
+    def test_render_proposal_scrubbed_like_message(self):
+        import sys as _sys
+        _sys.path.insert(0, "tests")
+        from test_fl4write import make_config, make_pr
+        from fl4write.models import Finding
+        from fl4write.renderer import render_review
+        for proposal in ("see ![x](https://evil/pixel.png) for details",
+                         "<img src=x onerror=alert(1)>",
+                         "[x](<javascript:alert(1)>)"):
+            f = Finding(rule_id="general", severity="Major", path="a.py",
+                        line=1, message="ok note", proposal=proposal)
+            body = render_review(make_pr(), [f], make_config(), review_hash="abc")
+            assert "evil" not in body and "javascript:" not in body
+
     def test_redact_url_userinfo_password(self):
         from fl4write.scrub import redact_credentials
         out = redact_credentials("uses https://admin:s3cr3t@lan-host/ endpoint")
@@ -4674,6 +4726,42 @@ class TestMECERound12Pins:
                                                  "sev": "Major", "msg": "m"}],
                                1, 1, complete=True, report=rep)
         assert "omni_issue" not in st  # dead id reconciled after 3 failures
+
+
+    def test_retro_seen_capped_at_two_thousand(self, tmp_path):
+        """Round-3 hunt: every other belt is capped; retro_seen grew one
+        entry per retro PR forever."""
+        from fl4write import state as state_mod
+
+        st = {"version": 1, "prs": {},
+              "retro_seen": {str(i): True for i in range(5000)}}
+        state_mod.prune_closed(st, set())
+        assert len(st["retro_seen"]) == 2000
+        assert st["retro_seen"].get("4999") is True  # newest survive
+
+    def test_null_check_run_rows_coerced(self, monkeypatch):
+        """Round-3 hunt: a null row raised AttributeError mid-scan."""
+        from fl4write import executor as ex
+
+        def fake_api(method, path, data=None):
+            if "check-runs" in path:
+                return {"check_runs": [None, {"status": "completed",
+                                              "conclusion": "success"}]}
+            if path.endswith("/status"):
+                return {"state": "success"}
+            raise AssertionError("unexpected call " + path)
+
+        monkeypatch.setattr(ex, "_gh_api", fake_api)
+        import fl4write.config as cfg_mod
+        c = cfg_mod.RepoConfig.model_validate({
+            "repo": "o/r",
+            "forges": {"github": {"role": "primary", "api_base": "https://api.github.com",
+                                  "token_env": "GHT"}},
+            "model": {"endpoint": "http://m/v1", "model": "t", "key_env": "K"},
+            "fix": {"enabled": True, "merge_own_prs": True},
+        })
+        assert ex._commit_ci_green(c, "a" * 40, 3) is True
+
 
     def test_ci_acted_string_false_cleared_at_load(self, tmp_path):
         from fl4write.state import load_state

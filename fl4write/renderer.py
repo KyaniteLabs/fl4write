@@ -221,7 +221,7 @@ def render_finding(f: Finding, tone: str, post_merge: bool = False) -> str:
             "<summary>💡 How to fix</summary>",
             "",
             "````",
-            _md_escape_block(scrub.redact_credentials(f.proposal)),
+            _md_escape_block(scrub.scrub(scrub.redact_credentials(f.proposal))),
             "````",
             "",
             "</details>",

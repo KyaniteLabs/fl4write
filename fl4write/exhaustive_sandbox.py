@@ -180,7 +180,10 @@ def run_isolated(command: list[str], tree: Path, evidence: Path, timeout: int, i
                 raise SandboxUnavailable("isolated test report is missing or invalid")
         else:
             report = _docker(["docker", "exec", name, "python3", "-I", WORKER, "report"], 20, binary=True)
-            if report.returncode or len(report.stdout) > MAX_REPORT:
+            # Cycle-6: match the embedded path — an empty report is a
+            # supervisor-integrity deferral, not a test failure. Without
+            # this, identical evidence classified differently by path.
+            if report.returncode or not report.stdout or len(report.stdout) > MAX_REPORT:
                 raise SandboxUnavailable("isolated test report is missing or invalid")
             report_bytes = report.stdout
         evidence.parent.mkdir(parents=True, exist_ok=True)

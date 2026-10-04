@@ -483,6 +483,13 @@ def prune_closed(state: dict[str, Any], open_numbers: set[int]) -> None:
     if len(ci_keys) > 100:  # insertion-ordered: drop the oldest markers
         for k in ci_keys[: len(ci_keys) - 100]:
             state.pop(k, None)
+    seen = state.get("retro_seen")
+    if isinstance(seen, dict) and len(seen) > 2000:
+        # Round-3 hunt: every other belt here is capped, but retro_seen
+        # gained one entry per retro PR forever. Newest 2000 survive
+        # (insertion order); evicted PRs stay covered by the head-SHA
+        # predicate + persistent-comment marker, so no re-review storm.
+        state["retro_seen"] = dict(list(seen.items())[len(seen) - 2000:])
 
 
 # Post-merge sweep watermark. Unlike the open-PR path (where correctness NEVER

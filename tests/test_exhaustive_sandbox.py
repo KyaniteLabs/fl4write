@@ -52,6 +52,21 @@ def test_completed_report_is_copied_after_supervisor_and_owned_container_is_remo
     assert calls[-1] == ["docker", "rm", "--force", name]
 
 
+def test_empty_legacy_report_defers_like_embedded(tmp_path, monkeypatch):
+    """Cycle-6: an empty legacy `report` exec means supervisor trouble,
+    not test failure — identical evidence must classify identically."""
+    def docker(argv, timeout, binary=False):
+        output = IMAGE + " 1" if argv[1:3] == ["image", "inspect"] else "container"
+        if "wait" in argv:
+            output = json.dumps({"kind": "completed", "returncode": 0})
+        if "report" in argv:
+            return subprocess.CompletedProcess(argv, 0, b"", "")
+        return subprocess.CompletedProcess(argv, 0, output, "")
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    with pytest.raises(sandbox.SandboxUnavailable, match="missing or invalid"):
+        sandbox.run_isolated(["pytest", "{junit}"], tmp_path, tmp_path / "result.xml", 30, IMAGE)
+
+
 def test_runner_timeout_retains_no_false_test_report_and_removes_container(tmp_path, monkeypatch):
     calls = []
     def docker(argv, timeout, binary=False):

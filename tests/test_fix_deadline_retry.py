@@ -104,6 +104,26 @@ def test_crashing_attempt_keeps_pending_entry(lane, monkeypatch):
     assert sum("entry kept" in a for a in report.alerts) == 2
 
 
+def test_gated_off_open_pr_drops_stale_pending(lane, monkeypatch, tmp_path):
+    """Round-3 hunt: the post-merge twin drops stale records with an
+    alert; the open path wedged silently. Same drop, same alert."""
+    pr, config, forge, st, clock, calls, findings = lane
+    config.fix.enabled = False
+    forge.prs = [pr]
+    monkeypatch.setattr(engine, "adapter_for", lambda *a: forge)
+    monkeypatch.setattr(engine, "_poll_fix_merges", lambda *a, **k: None)
+    state.mark_reviewed(st, pr.number, pr.head_sha, "test")
+    st["prs"]["1"]["pending_fixes"] = [findings[0].model_dump()]
+    st["prs"]["1"]["pending_fix_sha"] = pr.head_sha
+    path = tmp_path / "state.json"
+    state.save_state(path, st)
+    report = engine.run_cycle(config, path, get_diff=lambda p: ({"x.py"}, "diff"),
+                              run_fixes=True, deadline=10 ** 6)
+    assert report.reviewed == 0
+    assert "pending_fixes" not in state.load_state(path)["prs"]["1"]
+    assert any("stale pending fixes dropped" in a for a in report.alerts)
+
+
 def test_open_pr_resume_stall_alerts_like_post_merge(lane, monkeypatch, tmp_path):
     """Zero-findings review: attempted-but-deferred open-PR fixes were
     silent while post-merge stalls alerted — both now signal."""

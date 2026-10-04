@@ -66,9 +66,9 @@ _EVENT_HANDLER_RE = re.compile(
 # Cycle-3: javascript: link destinations are never legitimate (refdef
 # precedent strips them); inline [x](javascript:…) and href= forms are
 # neutralized at the scheme. Plain http(s) links stay (tested prose rule).
-_JS_SCHEME_MD_RE = re.compile(r"(\]\(\s*)javascript:", re.IGNORECASE)
+_JS_SCHEME_MD_RE = re.compile(r"(\]\(\s*<?\s*)javascript:", re.IGNORECASE)
 _JS_SCHEME_HREF_RE = re.compile(
-    r"(href\s*=\s*[\"']?\s*)javascript:", re.IGNORECASE)
+    r"(href\s*=\s*[\"']?\s*<?\s*)javascript:", re.IGNORECASE)
 # Cycle-6: unterminated dangerous-tag opens (tag soup with no closing
 # ">") survived stripping AND tripped assert_clean, so one hostile
 # finding killed the whole review post (availability, fail-closed).
@@ -289,5 +289,5 @@ def assert_clean(text: str) -> None:
             or re.search(r"(?:display|visibility)\s*:\s*(?:none|hidden)", low) \
             or re.search(r"<\s*[a-z]+[^<>]*\bhidden\b", low) \
             or re.search(r"<[^>]*\son[a-z0-9]+\s*=", low) \
-            or re.search(r"\]\(\s*javascript:|href\s*=\s*[\"']?\s*javascript:", low):
+            or re.search(r"\]\(\s*<?\s*javascript:|href\s*=\s*[\"']?\s*<?\s*javascript:", low):
         raise ValueError("unscrubbed html comment/hidden structure in output")

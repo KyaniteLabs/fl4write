@@ -100,6 +100,46 @@ def _sealable_source(base, extra):
     return base
 
 
+def test_extra_bundle_directory_refused(tmp_path):
+    """Cycle-6: directories were checked for writability but never
+    compared — an extra (even mode-locked) dir passed silently."""
+    from fl4write.exhaustive_evidence import EvidenceError, seal_bundle, verify_bundle
+    source = tmp_path / "round"
+    source.mkdir()
+    (source / "head.tar").write_bytes(b"reviewed archive")
+    (source / "manifest.json").write_text("{}")
+    ref = seal_bundle(source, tmp_path / "bundles")
+    bundle = Path(ref["path"])
+    # Simulate a writer planting a dir, then restoring canonical perms:
+    # verify must compare directory sets, not just writability.
+    bundle.chmod(0o700)
+    extra = bundle / "extra_dir"
+    extra.mkdir(mode=0o500)
+    bundle.chmod(0o500)
+    with pytest.raises(EvidenceError, match="directories changed"):
+        verify_bundle(ref)
+
+
+def test_nested_bundle_directories_verify(tmp_path):
+    """Review round 2 (PR46): parents-only derivation refused
+    legitimate nested bundles — ancestors must all be expected."""
+    from fl4write.exhaustive_evidence import seal_bundle, verify_bundle
+    import hashlib as _hl
+    import json as _j
+    source = tmp_path / "round"
+    source.mkdir()
+    (source / "head.tar").write_bytes(b"reviewed archive")
+    (source / "manifest.json").write_text(_j.dumps({
+        "head": "a" * 40,
+        "archive_sha256": _hl.sha256(b"reviewed archive").hexdigest()}))
+    deep = source / "sub" / "inner"
+    deep.mkdir(parents=True)
+    (deep / "deep.txt").write_text("deep evidence")
+    ref = seal_bundle(source, tmp_path / "bundles")
+    sealed = verify_bundle(ref)
+    assert "sub/inner/deep.txt" in sealed
+
+
 def test_empty_archive_refused_at_seal(tmp_path):
     """Cycle-6: an empty head.tar is meaningless evidence — refuse it
     instead of sealing and verifying vacuity."""
