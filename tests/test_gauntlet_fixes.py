@@ -1190,6 +1190,26 @@ class TestMECERound3SolPins:
         finally:
             iss._call_model = orig
 
+    def test_triage_bool_coercion_rejects_numeric_strings(self):
+        import json as _json
+        from fl4write import config as cfg
+        raw = {"repo": "o/r",
+               "forges": {"github": {"role": "primary", "api_base": "http://x", "token_env": "T"}},
+               "model": {"endpoint": "http://m/v1", "model": "t", "key_env": "K"},
+               "review": {"secrets": "x"}, "severity_vocab": ["Critical","Major","Minor","Nit"]}
+        c = cfg.RepoConfig.model_validate(raw)
+        import fl4write.issues as iss
+        orig = iss._call_model  # issues binds its own reference at import
+        try:
+            iss._call_model = lambda *a, **k: _json.dumps(
+                {"labels": [], "is_duplicate": "1", "is_regression": "0",
+                 "duplicate_hint": None, "draft_reply": "fine", "urgency": "low"})
+            triage = iss.triage_issue({"number": 1, "title": "t", "body": "b"}, c)
+            assert triage is not None
+            assert triage["is_duplicate"] is False and triage["is_regression"] is False
+        finally:
+            iss._call_model = orig
+
     def test_triage_prompt_redacts_credentials(self):
         import json as _json
         from fl4write import config as cfg

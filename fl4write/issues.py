@@ -135,10 +135,12 @@ def triage_issue(issue: dict[str, Any], config: RepoConfig) -> dict[str, Any] | 
         def _as_bool(v) -> bool:
             # MECE round-3 (sol F3-004): Python truthiness turned the STRING
             # "false" into True — only real booleans and "true"/"false"
-            # literals are accepted; anything else defaults False
+            # literals are accepted; anything else defaults False.
+            # Zero-findings review: "1" also coerced True despite the
+            # contract above — now rejected like every other non-literal.
             if isinstance(v, bool):
                 return v
-            if isinstance(v, str) and v.strip().lower() in ("true", "1"):
+            if isinstance(v, str) and v.strip().lower() == "true":
                 return True
             return False
         raw["is_duplicate"] = _as_bool(raw.get("is_duplicate"))
