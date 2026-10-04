@@ -4356,6 +4356,30 @@ class TestMECERound11Analyzer:
             assert _scrub(out) == out, f"not idempotent: {s!r}"
             _assert(out)
 
+    def test_angle_bracket_js_scheme_neutralized(self):
+        from fl4write.scrub import assert_clean, scrub
+        for hostile in ("[x](<javascript:alert(1)>)",
+                        "[x](<JAVASCRIPT:alert(1)>)",
+                        "[x](<  javascript:alert(1)>)",
+                        "<a href=<javascript:alert(1)>>x</a>"):
+            out = scrub(hostile)
+            assert "javascript:" not in out, out
+            assert_clean(out)
+
+    def test_render_proposal_scrubbed_like_message(self):
+        import sys as _sys
+        _sys.path.insert(0, "tests")
+        from test_fl4write import make_config, make_pr
+        from fl4write.models import Finding
+        from fl4write.renderer import render_review
+        for proposal in ("see ![x](https://evil/pixel.png) for details",
+                         "<img src=x onerror=alert(1)>",
+                         "[x](<javascript:alert(1)>)"):
+            f = Finding(rule_id="general", severity="Major", path="a.py",
+                        line=1, message="ok note", proposal=proposal)
+            body = render_review(make_pr(), [f], make_config(), review_hash="abc")
+            assert "evil" not in body and "javascript:" not in body
+
     def test_redact_url_userinfo_password(self):
         from fl4write.scrub import redact_credentials
         out = redact_credentials("uses https://admin:s3cr3t@lan-host/ endpoint")
