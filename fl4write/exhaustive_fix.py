@@ -197,6 +197,12 @@ def _model_patch(config: RepoConfig, reviewed_head: str,
     readme = tree / "README.md"
     if readme.is_file() and not readme.is_symlink():
         paths.add("README.md")
+    # Cycle-6: the model must see exactly the reviewed bytes — uncommitted
+    # edits in a finding file at the reviewed HEAD used to flow into the
+    # prompt while proofs ran against clean clones. Fail closed.
+    dirty = _git(["status", "--porcelain", "--", *sorted(paths)], tree)
+    if dirty.strip():
+        raise FixError("finding sources have uncommitted changes at the reviewed head")
     for path in sorted(paths):
         target = tree / path
         if target.is_symlink() or not target.is_file():
