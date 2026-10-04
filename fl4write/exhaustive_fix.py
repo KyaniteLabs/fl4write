@@ -199,8 +199,15 @@ def _model_patch(config: RepoConfig, reviewed_head: str,
         paths.add("README.md")
     # Cycle-6: the model must see exactly the reviewed bytes — uncommitted
     # edits in a finding file at the reviewed HEAD used to flow into the
-    # prompt while proofs ran against clean clones. Fail closed.
-    dirty = _git(["status", "--porcelain", "--", *sorted(paths)], tree)
+    # prompt while proofs ran against clean clones. Fail closed. Non-repo
+    # trees (fixture dirs, tarball extractions) have no baseline to compare
+    # against and keep the old behavior.
+    try:
+        dirty = _git(["status", "--porcelain", "--", *sorted(paths)], tree)
+    except FixError as exc:
+        if "not a git repository" not in str(exc):
+            raise
+        dirty = ""
     if dirty.strip():
         raise FixError("finding sources have uncommitted changes at the reviewed head")
     for path in sorted(paths):
