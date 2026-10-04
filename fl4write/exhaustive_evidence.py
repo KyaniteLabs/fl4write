@@ -42,7 +42,12 @@ def seal_bundle(source: Path, destination: Path) -> dict[str, str]:
     try:
         for path in sorted(source.rglob("*")):
             relative = path.relative_to(source)
-            if relative.parts[0] == "tree":
+            # Cycle-6: the archived-tree DIRECTORY is out of scope for the
+            # bundle — but a regular top-level file literally named "tree"
+            # is evidence and must seal. Skip the dir and everything under
+            # it; keep a same-named file.
+            if relative.parts[0] == "tree" and (
+                    path.is_dir() or len(relative.parts) > 1):
                 continue
             if path.is_symlink():
                 raise EvidenceError("evidence contains a symlink")
