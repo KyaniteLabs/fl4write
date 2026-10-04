@@ -373,3 +373,22 @@ rate limits) + triage with live probes + fixes or written verdicts.
 Only verified, trigger-demonstrated defects count as findings;
 refuted/deferred items confirm cleanliness. Loop closes at 3 straight
 clean rounds; the count stands at 0.
+
+### Zero-loop round 1 ledger (in progress, principal-led)
+
+Scope swept so far (read + live-probed, branch `fix/zero-loop-r1`):
+
+| Area | Files | Result |
+|---|---|---|
+| Issues triage | `fl4write/issues.py:135-143` | FINDING: `_as_bool` accepted `"1"` as True against its own contract → fixed (`a18e708`), probe: hostile `"1"`/`"0"` now coerce False |
+| Renderer | `fl4write/renderer.py:89-105` | FINDING: 5000-digit line crashed `int()` (ValueError escapes forge-fed parsing) → fixed (`ebc75f6`), probe: skew row skipped, roundtrip intact |
+| Org law | `fl4write/law.py` (full) | Clean: static text, no executable surface |
+| Metrics | `fl4write/metrics.py:33-71` | Clean post-renderer-fix: parse now cannot raise; `acceptance_snapshot` never-raises contract holds |
+| Timestamps | `fl4write/timestamps.py` (full) | Clean: naive/malformed → None on all probes |
+| Models | `fl4write/models.py` (full) | Clean: plain DTOs, coercion belted at construction sites |
+| Config validators | `fl4write/config.py:261-338` | Clean: namespace-collision, bool-int, vocab pins verified by reading |
+| CLI diff path | `fl4write/cli.py:69-95` | Accepted residual (reasoned): empty-text/empty-files proceeds to clean verdict; only reachable on gh rc-0 with unparseable stdout — forge contract covers the error path |
+
+Round verdict so far: NON-CLEAN (2 findings, both fixed with regressions).
+Still to sweep: recon worker, publication, retro/postmerge, ciwatch,
+omnisweep engine paths, forges adapters, appauth TTL edges.
