@@ -124,7 +124,10 @@ _OMNI_CARRY: tuple[tuple[str, tuple], ...] = (
     ("omni_cursor", (str,)), ("omni_head", (str,)),
     ("omni_total", (int,)), ("omni_report_version", (int,)),
     ("omni_pub_fail", (int,)), ("omni_scope_pending", (bool,)),
-    ("omni_scanned_total", (int,)),
+    ("omni_scanned_total", (int,)), ("omni_next_id", (int,)),
+    ("omni_fp", (str,)), ("omni_file_fails", (dict,)),
+    ("omni_unscannable", (list,)), ("omni_unfetchable", (list,)),
+    ("omni_truncated_seen", (bool,)),
 )
 
 

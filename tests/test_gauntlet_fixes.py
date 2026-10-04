@@ -2062,6 +2062,17 @@ class TestMECERound5SolPins:
         p.write_bytes(b"\xff\xfe{corrupt")
         st = load_state(p)
         assert st["prs"] == {} and "omni_issue" not in st
+        # sweep progress keys ride along with exact types
+        p.write_text('{"version": 999, "omni_next_id": 7, "omni_fp": "ab12", '
+                     '"omni_file_fails": {"a.py": 2}, "omni_unscannable": ["b.py"], '
+                     '"omni_unfetchable": ["c.py"], "omni_truncated_seen": true, '
+                     '"omni_cursor": 9}', encoding="utf-8")
+        st = load_state(p)
+        assert st["omni_next_id"] == 7 and st["omni_fp"] == "ab12"
+        assert st["omni_file_fails"] == {"a.py": 2}
+        assert st["omni_unscannable"] == ["b.py"] and st["omni_unfetchable"] == ["c.py"]
+        assert st["omni_truncated_seen"] is True
+        assert "omni_cursor" not in st  # int cursor would crash string compares
 
     # -- F5-010: bounded top-level lane belts ---------------------------------
 
