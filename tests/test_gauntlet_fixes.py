@@ -2784,6 +2784,15 @@ class TestMECERound7LunaPins:
         assert not any(r == "injected" for _sev, _p, _l, r in parsed)
         assert FINDING_LINE_RE.search("### 🔴 Critical — `x.py:3` — `a\nb`") is None
 
+    def test_absurd_line_magnitude_skips_row(self):
+        from fl4write.renderer import parse_finding_lines
+
+        # Zero-findings review: 5000-digit line numbers (CPython refuses
+        # the int conversion) must skip the row, not crash parsing —
+        # bodies come back from the forge.
+        hostile = "### 🔴 Critical — `x.py:" + "9" * 5000 + "` — `secrets`"
+        assert parse_finding_lines(hostile) == []
+
     def test_rule_key_with_newline_refused_at_load(self, tmp_path):
         from fl4write.config import load_config
 
