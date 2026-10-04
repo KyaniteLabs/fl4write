@@ -463,3 +463,13 @@ record is below; the branch diff is the authority.
 Full suite 1458+4 with only the count pin red; README re-stamped
 1459+4; Ruff, shell, diff-check clean. Round verdict: NON-CLEAN (4
 findings, all fixed with regressions). Zero-clean streak: 0.
+
+### Merge receipt — 2026-10-04 (PR #45 merged, zero-loop round 2 closed)
+
+Forgejo PR #45 merged as `852b27c` (CI green on head `6820374`).
+Review went two rounds (blocker: comment-join ordering; fixed with
+comments-first fixpoint + strengthened pin; re-approved with 20k-case
+independent fuzz, zero breaks). One accepted follow-up recorded
+(quoted-`>` attribute agreement gap). Round 2: 4 findings + full green.
+Zero-clean streak: 0 (round non-clean). Remaining: round 3, mini-seat
+reply, mirror divergence (do not touch), live quality, security menu.
