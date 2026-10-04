@@ -104,11 +104,17 @@ def controls(text: str) -> str:
     return "".join(out)
 
 
-def scrub(text: str) -> str:
-    """Category-strip untrusted text. Idempotent. Never raises."""
-    if not isinstance(text, str):
-        return ""
-    s = controls(text)
+def _scrub_once(s: str) -> str:
+    """One full rule pass. Comment stripping runs FIRST: removing comments
+    concatenates the halves into fresh image/data matches (verified live:
+    `![a]<!--[b]` assembles `![a][b]`), so rules ordered after comments
+    must see the joined text in the same pass cycle (see scrub fixpoint).
+    """
+    s = _HTML_COMMENT_RE.sub("", s)
+    if "<!--" in s:
+        # MECE round-1 (terra F1-07): an UNCLOSED comment opener can swallow
+        # the remainder of the rendered comment — remove any leftover opener
+        s = s.split("<!--", 1)[0] + s.split("<!--", 1)[1].replace("<!--", "")
     s = _DATA_URL_RE.sub("[scrubbed-data-url]", s)
     s = _BASE64_IMG_RE.sub("[scrubbed-image]", s)
     s = _REMOTE_IMG_RE.sub("[image removed]", s)
@@ -121,11 +127,6 @@ def scrub(text: str) -> str:
     # the usage alone leaves the URL live for other renderers
     s = _REMOTE_IMG_REF_DEF_RE.sub("", s)
     s = _REMOTE_SRC_RE.sub("&lt;remote-src ", s)
-    s = _HTML_COMMENT_RE.sub("", s)
-    if "<!--" in s:
-        # MECE round-1 (terra F1-07): an UNCLOSED comment opener can swallow
-        # the remainder of the rendered comment — remove any leftover opener
-        s = s.split("<!--", 1)[0] + s.split("<!--", 1)[1].replace("<!--", "")
     s = _HIDDEN_TAG_RE.sub("", s)
     s = _HIDDEN_STYLE_RE.sub("hidden-style", s)
     # Cycle-6 fuzzback: neutralizing an inner "<" can MERGE surrounding
@@ -143,6 +144,23 @@ def scrub(text: str) -> str:
     s = _JS_SCHEME_MD_RE.sub(r"\1[scrubbed-scheme]", s)
     s = _JS_SCHEME_HREF_RE.sub(r"\1[scrubbed-scheme]", s)
     s = _MARKER_RE.sub("[scrubbed-marker]", s)
+    return s
+
+
+def scrub(text: str) -> str:
+    """Category-strip untrusted text. Idempotent. Never raises."""
+    if not isinstance(text, str):
+        return ""
+    # Review round 2 (PR45): the whole body iterates to a fixpoint (cap
+    # 10) because comment removal assembles fresh image/data matches from
+    # the joined halves — a single pass left scrub output tripping
+    # assert_clean and broke idempotence on those shapes.
+    s = controls(text)
+    for _ in range(10):
+        stepped = _scrub_once(s)
+        if stepped == s:
+            return s
+        s = stepped
     return s
 
 

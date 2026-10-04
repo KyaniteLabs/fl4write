@@ -4347,10 +4347,11 @@ class TestMECERound11Analyzer:
                     '#', '-', '_', 'a', 'Z', '0', ' ', '\n', '`', '/', '.',
                     ':', ';', '@', '$', '%', '*', 'onclick', 'javascript:',
                     'http', 'data:', 'style', 'display:none', 'hidden',
-                    'script', 'svg', '-->', '<!--']
-        for _ in range(800):
+                    'script', 'svg', '-->', '<!--', '<!--[', '](<!--',
+                    'data<!--']
+        for _ in range(2000):
             s = ''.join(_random.choice(alphabet)
-                        for _ in range(_random.randint(0, 80)))
+                        for _ in range(_random.randint(0, 120)))
             out = _scrub(s)
             assert _scrub(out) == out, f"not idempotent: {s!r}"
             _assert(out)
