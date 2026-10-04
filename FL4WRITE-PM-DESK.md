@@ -424,3 +424,12 @@ Branch `fix/zero-loop-r1`: full suite 1452+4 with only the count pin
 red; README re-stamped 1453+4; Ruff, shell, diff-check clean. Ledger
 table above carries per-finding evidence. Next: push, PR, independent
 review, babysit to merge. Zero-clean streak: 0 (round non-clean).
+
+### Merge receipt — 2026-10-04 (PR #44 merged, zero-loop round 1 closed)
+
+Forgejo PR #44 merged as `14a6751` (CI green on head `f47f0db`).
+Review went two rounds (APPROVE + 2 advisories, both implemented and
+re-approved). Full local suite 1454+4 zero-failure before merge.
+Round 1: 16 findings + full green. Zero-clean streak: 0 (round
+non-clean). Remaining: rounds 2-3, mini-seat reply, mirror divergence
+(do not touch), live quality, security menu.
