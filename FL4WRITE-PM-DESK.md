@@ -473,3 +473,8 @@ independent fuzz, zero breaks). One accepted follow-up recorded
 (quoted-`>` attribute agreement gap). Round 2: 4 findings + full green.
 Zero-clean streak: 0 (round non-clean). Remaining: round 3, mini-seat
 reply, mirror divergence (do not touch), live quality, security menu.
+
+### Zero-loop round 3 opened
+
+Streak: 0 of 3. Fresh eyes, strict no-re-report list (rounds 1-2 +
+cycles 1-5 all merged). Only verified-new defects count.
