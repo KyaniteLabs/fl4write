@@ -131,9 +131,14 @@ def verify_bundle(reference: dict) -> dict[str, Path]:
             raise EvidenceError("evidence bundle contents changed")
         # Cycle-6: directories were checked for writability but never
         # compared — an extra dir (even mode-locked) passed silently.
-        # Expected dirs are exactly the parents implied by manifest files.
-        expected_dirs = {str(Path(name).parent) for name in data["files"]}
-        expected_dirs = {d for d in expected_dirs if d != "."}
+        # Expected dirs are exactly the ancestors implied by manifest
+        # files (review round 2: parents-only dropped intermediates and
+        # refused legitimate nested bundles).
+        expected_dirs = set()
+        for name in data["files"]:
+            for parent in Path(name).parents:
+                if str(parent) != ".":
+                    expected_dirs.add(str(parent))
         if actual_dirs != expected_dirs:
             raise EvidenceError("evidence bundle directories changed")
         for name, path in actual.items():
