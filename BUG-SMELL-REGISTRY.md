@@ -488,3 +488,45 @@ sites) — the worktree already carried the verified pgid-capture
 version. Mechanics of the handoff were wrong; its caution was right
 and is honored by this audit. Tastecheck-repo remark: out of scope
 for this lane, no fl4write impact.
+
+## CYCLE6-001: scrub/assert hostile-soup mismatch + idempotence break
+
+**Files:** `fl4write/scrub.py`. 431/6000 fuzz cases: partial-tag and
+hidden-attr soup survived scrub but tripped assert_clean (one hostile
+finding could crash the whole review post), and barrier removal broke
+documented idempotence. **Local fix:** partial patterns iterate to
+fixpoint; assert demands scrub's word boundaries (glued names inert);
+hidden-attr alignment. **Regression:** seeded 14k-case fuzz pin (zero
+mismatches) + live-threat battery. **Status:** Fixed on
+`fix/zero-loop-r2`; review/merge pending.
+
+## CYCLE6-002: symlinked tree bind-mounts target; token divergence
+
+**File:** `fl4write/exhaustive_sandbox.py`. Symlinked tree mounted its
+target (verified: symlink to / yields src=/); container_command only
+substituted standalone `{junit}` while `_test` allowed embedded forms.
+**Local fix:** is_symlink refusal; embedded parity with exactly-once
+rule. **Status:** Fixed; review/merge pending.
+
+## CYCLE6-003: empty archives seal; ordinal doc overclaim
+
+Empty head.tar sealed and verified vacuity — non-empty floor added.
+Cascade fixture ordinals differ per (concurrency, screened) config
+while the docstring claimed blanket determinism — corrected and pinned
+per-configuration. **Status:** Fixed; review/merge pending.
+
+## CYCLE6-004: appauth verify/cache/reads/scope gaps
+
+Verify + resolve ran before the cache check (docstring overclaimed
+savings); unbounded body reads; subset grant check accepted supersets;
+key rotation served stale within TTL. **Local fix:** verify after hit
+with bot-bound keys, 1MB read caps, exact grant match with delta in
+the error, fingerprint-bound cache. **Status:** Fixed; review/merge
+pending.
+
+## CYCLE6-005: engine/resume/tiers/state correctness batch
+
+Stalled open-PR resume silent (alerts added mirroring post-merge);
+epoch-zero wall-clock substitution; partial omni identity on
+reconcile (next_id, fp, failure maps, flags). **Status:** Fixed;
+review/merge pending.
