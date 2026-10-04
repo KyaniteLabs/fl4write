@@ -92,7 +92,10 @@ def collect_new_issues(forge: ForgeAdapter, repo: str, last_number: int,
                   and i["number"] > 0]
     fresh = [i for i in valid_rows
              if (i["number"] > last_number or i["number"] in retry)
-             and "pull_request" not in i]
+             # Zero-findings review: test key TRUTHINESS, not presence — a
+             # null pull_request marker (forge drift) skipped the issue as
+             # complete while the watermark advanced past it, permanently.
+             and not i.get("pull_request")]
     return _IssueList(sorted(fresh, key=lambda i: i.get("number", 0)),
                       complete=len(valid_rows) == len(all_issues))
 

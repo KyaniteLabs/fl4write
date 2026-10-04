@@ -563,6 +563,19 @@ class TestSolAudit3Pins:
         out = issues.collect_new_issues(F(), "o/r", 1)
         assert [i["number"] for i in out] == [2]
 
+    def test_null_pull_request_marker_is_not_a_pr(self):
+        from fl4write import issues
+
+        class F:
+            def _paginated(self, path, page_size, max_pages=10):
+                return [{"number": 5, "title": "x", "pull_request": None},
+                        {"number": 6, "title": "y",
+                         "pull_request": {"url": "http://x"}}]
+            def _call(self, method, path): return []
+
+        out = issues.collect_new_issues(F(), "o/r", 1)
+        assert [i["number"] for i in out] == [5]
+
 
 class TestADVR4FinalE2E:
     """Round-4 closing e2e: a hostile repo (prompt-injection diff, malicious
