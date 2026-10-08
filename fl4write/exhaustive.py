@@ -99,8 +99,22 @@ def _run(argv: list[str], cwd: Path, timeout: int, env: dict[str, str],
         raise Deferred(f"process unavailable: {exc}") from exc
 
 
-def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(["git", *args], cwd=repo, text=True, capture_output=True)
+def _git(repo: Path, *args: str, timeout: int = 120) -> str:
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "HOME": tempfile.gettempdir(),
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    result = _run(
+        ["git", "-c", f"core.hooksPath={os.devnull}", *args],
+        cwd=repo,
+        timeout=timeout,
+        env=env,
+    )
     if result.returncode:
         raise Deferred(f"git {' '.join(args)} failed: {scrub.inline(result.stderr, 160)}")
     return result.stdout.strip()

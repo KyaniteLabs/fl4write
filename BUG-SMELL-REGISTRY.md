@@ -529,3 +529,10 @@ pins indefinite retry with recovery on the 5th failure, and a boolean
 The wedge (one failed call per cycle, alerted every cycle) stands as
 accepted — visible, never silent — until adapter read APIs can prove
 absence. Attempt + revert recorded so nobody re-proposes blind.
+
+## CYCLE-A4 (autoloop M-20261008-11): file:cycle-01-git-hardening.md
+
+Finding shipped through the re-armed autoloop bridge-floor lane (one model call,
+cycle 4 of 60). Diff: estate receipts/cycle-4.diff; suite: full default
+run green post-apply; README re-stamped: yes. **Status:** Fixed locally
+(local-commits-only law; PR/push remains CEO-gated).
