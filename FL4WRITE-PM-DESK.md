@@ -508,3 +508,17 @@ re-approved with tamper probes). Full local suite 1469+4 zero-failure
 before merge. Round 3: 10 findings + 1 reverted proposal. Zero-clean
 streak: 0 (round non-clean). Remaining: rounds 4-5, mini-seat reply,
 mirror divergence (do not touch), live quality, security menu.
+
+## TRUTH-DEBT VERIFICATION — M-20261008-10 (2026-10-08T02:24Z; fl4write truth-debt agent, CEO order "fix all i want perfect products"; 13-day staleness re-verify of the 09-25 EOF receipt)
+
+- Flag 1 — e6fc1ea "docs(D7): register D7-035…" (claimed fix+test landed; diff was docs-only): NO-OP ALREADY CLEAN. Object no longer exists in any ref on this clone (`git cat-file -t` invalid; rebased away pre-landing by 34a38ae, so no shared-branch rewrite ever occurred). Truthful record at HEAD: registry D7-035 status line reads "FIXED (2026-09-20, commit c3c0dcb — …after the 09-19 claim was found false…)" with reproduction; real fix + regression test in history (c3c0dcb). The 09-25 OPEN FLAG (corrected entry absent from mini merge tip 131d1f0) is RESOLVED: entry restored by 6172a0d (2026-09-20) and present at current main tip (BUG-SMELL-REGISTRY.md:167 @ 9f897ce).
+- Flag 2 — ce41c74 "README live test count 715 -> 720" (fabricated): NO-OP ALREADY CLEAN. Object gone from history; zero "720 passing" claims in tracked docs; README count is the verifier-stamped 1469+4 (line 77; stamp commit 9bfaa4d; full suite green at PR #46 merge per receipt above).
+- Red doc-truth ("suite-truth: doc-truth verifier exit=1", CYCLE 60): NO-OP ALREADY CLEAN — the mini autoloop desk carrying it no longer exists: mini ~/workspaces/fl4write-autoloop/ holds only engine shim logs; loop-state.json, STOP file and desk were all removed in the Oct-5 stand-down (re-verified live this turn over ssh). Correction of record = the 09-25 EOF RECEIPT above + this block.
+- Loop state (honest): STOOD DOWN — no STOP file, no loop-state.json, no desk on the mini. Autoloop RE-ARM is OUT OF SCOPE for this mission — queued behind engines/Platform; recorded only, not acted on.
+- Certification state (honest): UNcertified. Mechanism proven — live evidence this turn: the in-flight round's recon worker REJECTED an ungrounded model finding (LEARNINGS.md line-drift, verify-round-20261008T015046Z.log), so the grounding gate bites. 3 consecutive green rounds NOT completed (gate table above: fresh complete clean rounds 0/3). A Docker-isolated exhaustive round-0001 @ 9f897ce has been IN FLIGHT on the mini since ~2026-10-08T02:05Z — that is mission M-20261008-03's work: noted here, not duplicated, not touched (mini repo working tree left exactly as found).
+- Note (record-only): MBA mirror pointer product/OFF-MBA-MIRROR-fl4write-autoloop-desk.md is an empty pointer (sweep-regenerated hourly; source desk gone) — left to the sweep owner. This block is a docs-only direct commit on main per the established direct-docs flow (cf. 9f897ce, 9bfaa4d).
+
+### IF-I-DIE-NOW
+- Mid-flight: nothing — verification-only pass; every finding closed no-op-already-clean; this block is the sole write.
+- Owed: nothing from this mission. Live fl4write items keep their owners: Docker cert rounds (M-20261008-03, in flight on mini), mirror/runner verify, live-route quality, security menu, GitHub-mirror divergence (do not touch), autoloop re-arm (queued behind engines/Platform).
+- Artifacts: this block; MISSIONS-LEDGER.tsv row M-20261008-10; evidence commits c3c0dcb, e1f9ad5, 34a38ae, 6172a0d, 9bfaa4d, 9f897ce.
