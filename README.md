@@ -145,3 +145,7 @@ majority of posted Criticals were false positives (see #5 and LEARNINGS
 containment and the scrub/injection surface were rebuilt under the readiness
 gauntlet; phase-2 citation grounding (findings must quote the reviewed
 code's bytes) is the remaining gate before re-quoting Q1.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
