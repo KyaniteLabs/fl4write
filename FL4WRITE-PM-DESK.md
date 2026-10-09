@@ -537,3 +537,62 @@ mirror divergence (do not touch), live quality, security menu.
 - Mid-flight: nothing — cycle 4 landed clean (tree clean in loop clone); no cycle in flight.
 - Owed: nothing from this mission. Standing: the loop self-runs (next launchd slot); if it self-STOPs (STOP file at `~/workspaces/fl4write-autoloop/STOP`), read `receipts/receipts.jsonl` last rows for the reason before re-arming. Push/PR of loop commits (7375fad+) needs a CEO word. Cert round (M-20261008-03) is unrelated and owns `~/workspaces/fl4write`.
 - Artifacts: mini `~/workspaces/fl4write-autoloop/` — `autoloop.sh` (v5), `autoloop-state.json`, `receipts/` (jsonl + per-cycle logs + diffs), `findings/cycle-01-git-hardening.md`, loop clone `repo` @7375fad; launchd `com.fl4write.autoloop.plist`; MISSIONS-LEDGER.tsv row M-20261008-11.
+
+## CI RED-ON-MAIN DEFECT — M-20261008-15 (2026-10-08 ~17:4x PDT; fl4write CI fix agent, from sweep D-6)
+
+**BLUF: canonical main was never live-red — the sweep's D-6 evidence is the GitHub
+mirror, which diverged at the 09-28 red tip and went stale. No code or workflow fix
+exists to land; root cause closed with evidence; receipts filed (registry row
+CI-INCIDENT-2026-09-28). Green-run-on-main evidence: this block's own docs commit.**
+
+Correction of record (narrow, per evidence — the earlier claim was "CI red on main
+since 09-28 + two newest main commits carry [skip ci]"; what it is now: TRUE for the
+GitHub mirror only; UNCHANGED: the 09-28 Forgejo red cluster was real, and the
+skip-ci smell on the mirror is real).
+
+Evidence chain:
+- 09-27T22:56Z run 119 (3bb3979) green → e60c61e "Q10 grounding upgrade" introduced
+  `for l in lines` (exhaustive.py:399, ruff E741) → runs 120-124 (e60c61e, 74c15b5,
+  071145e, 9723205, 1963133) ALL `failure`, last 09-28T09:32Z. Lint-only: worktree
+  @1963133 runs the FULL suite green locally (1365 passed + 4 skipped, 6:38).
+- Silent window 09-28→10-03: zero main pushes (git log), so no runs fired — the red
+  simply sat on the tip nobody pushed past. Fixed by e039f39 (rename `l`) as the
+  FIRST commit when pushes resumed 10-03T14:04Z. Every main push since: green
+  (runs 129-177). Two newest main commits: 253c3d0 → run 176 success (02:25Z),
+  9909087 → run 177 success (03:06Z, 2026-10-08). Forgejo runner healthy
+  (ubuntu-latest label resolves, pinned container pulls, 3-min full lane).
+- Local verification at current main (9909087): ruff "All checks passed!", full
+  suite 1469 passed + 4 skipped in 7:06 — matches README stamp 1469+4 and run 177.
+- The "[skip ci]" commits (25c978f + duplicate ca6a2ce, 2026-10-02 "evidence
+  toolkit") live on GITHUB main only — NOT ancestors of Forgejo main (merge-base =
+  1963133, the red tip). The mirror went stale + divergent there; that is the
+  standing do-not-touch item (PM-DESK 2026-10-04 block). gh#16 (license, sweep
+  PR, CEO-gate per M-20261008-13 DONE row) is built on that stale lineage and
+  fails Actions today (run 37862445233) on the SAME fossilized E741.
+- No GitHub push credential on this host (~/.git-credentials is Forgejo-only), so
+  no mirror reconciliation was possible or attempted — correctly: it is owned.
+
+What landed (this mission):
+1. This desk block + BUG-SMELL-REGISTRY row `CI-INCIDENT-2026-09-28` — docs commit
+   on main per the established direct-docs flow; CI runs on it (no skip), giving
+   the mission's green-run-on-main evidence on a commit this mission authored.
+2. Nothing else — deliberately. Landing a cosmetic workflow change to satisfy the
+   "land a fix" contract would manufacture work; the gate did its job (lint red on
+   landing, fixed next working session, zero test regressions ever).
+
+Not mine, left standing with owners:
+- gh#16 license PR (CEO-gate, sweep's lane): will keep failing Actions until
+  rebased onto post-e039f39 main (one-line rename conflict class).
+- Forgejo PR #47 (zero-loop round 4): open since 10-04, head CI green (run 175)
+  but `mergeable: false` (conflicts with main), zero reviews — zero-loop lane.
+- Mirror sync infra (Platform): broken since ~09-28; every future "CI red"
+  misread of this repo traces to it.
+
+### IF-I-DIE-NOW
+- Mid-flight: nothing — diagnosis + receipts only; this commit is the last write.
+- Owed: nothing from this mission. Standing (owned elsewhere): gh#16 rebase
+  (CEO-gate lane), PR #47 review/merge (zero-loop lane), mirror sync (Platform).
+- Artifacts: registry row CI-INCIDENT-2026-09-28; this block; MISSIONS-LEDGER.tsv
+  row M-20261008-15 (appended on completion); evidence: Forgejo runs 119-177,
+  GitHub run 37862445233, local suite logs (venvs /tmp/fl4w-ci-venv,
+  /tmp/fl4w-red-venv, worktree /tmp/fl4w-red-1963133).

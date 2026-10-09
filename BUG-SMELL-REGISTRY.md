@@ -529,3 +529,23 @@ pins indefinite retry with recovery on the 5th failure, and a boolean
 The wedge (one failed call per cycle, alerted every cycle) stands as
 accepted — visible, never silent — until adapter read APIs can prove
 absence. Attempt + revert recorded so nobody re-proposes blind.
+
+## CI-INCIDENT-2026-09-28: ruff E741 red main + skip-ci-on-stale-mirror smell (closed 2026-10-08)
+
+**Bug:** commits e60c61e..1963133 (2026-09-27T23:20Z..09-28T09:32Z) landed direct on
+main with `for l in lines` at fl4write/exhaustive.py:399 — ruff E741 (ambiguous name
+`l`). Forgejo runs 120-124: five consecutive `failure`, gate red ~5d of wall-clock
+(no further main pushes in the window, so nothing re-exposed it). Fixed by e039f39
+"style(exhaustive): rename ambiguous loop variable" (2026-10-03T14:04Z); every main
+push since is green (runs 129-177; two newest main commits 253c3d0/9909087 green at
+runs 176/177, 2026-10-08). Verified at the red tip itself: worktree @1963133 full
+suite 1365 passed + 4 skipped — the red was lint-only, tests were never red.
+
+**Smell (open, owned elsewhere):** GitHub-mirror main diverged at the red tip
+(1963133), went stale, and carries a direct `[skip ci]` commit (25c978f, evidence
+toolkit) — the gate was skipped precisely where the mirror looked red. gh#16
+(license) is built on that lineage and fails Actions on the same fossilized E741.
+**Disposition:** mirror divergence is a standing do-not-touch item (PM-DESK
+2026-10-04 block); gh#16 is the polish sweep's CEO-gated PR (MISSIONS-LEDGER
+M-20261008-13 DONE row). Canonical main never needed `[skip ci]` — docs commits run
+CI and pass. Evidence: mission M-20261008-15, PM-DESK 2026-10-08 block.
