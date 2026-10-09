@@ -396,7 +396,7 @@ def _validated(value: Any, path: str, start: int, end: int, source: str):
             if grounded_line is None:
                 for k in range(1, 4):
                     hi = min(end, line + k)
-                    window = "\n".join(l.strip() for l in lines[line - 1:hi])
+                    window = "\n".join(ln.strip() for ln in lines[line - 1:hi])
                     if ev and ev in window:
                         grounded_line = line
                         break
