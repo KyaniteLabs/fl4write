@@ -52,6 +52,7 @@ from . import scrub
 from .analyzer import _call_model
 from .config import RepoConfig
 from .fixlane import FixLaneBlocked, dependency_depth, escalate, fix_allowed, merge_own_pr
+from .forges import ForgeError
 from .models import Finding, PullRequest
 
 log = logging.getLogger("fl4write.executor")
@@ -203,8 +204,16 @@ def _gh_api(method: str, path: str, data: dict | None = None) -> Any:
         headers={"Authorization": f"token {token}", "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
+        # Round-4 hunt: same unbounded-read class as the forge lanes and
+        # appauth (both capped) — a compromised endpoint must not OOM us.
+        # ForgeError matches the forge lanes: every _gh_api caller already
+        # degrades it (row skip / None / error result / contained alert).
+        from .forges import MAX_BODY as _MAX_BODY
 
-        return json.loads(resp.read().decode())
+        raw = resp.read(_MAX_BODY + 1)
+        if len(raw) > _MAX_BODY:
+            raise ForgeError(f"github api {method} {path}: response exceeds {_MAX_BODY} bytes")
+        return json.loads(raw.decode())
 
 
 def _get_file_content(repo: str, path: str, ref: str) -> str | None:
@@ -239,7 +248,8 @@ def _get_file_content(repo: str, path: str, ref: str) -> str | None:
             return None
         return raw.decode("utf-8")
     except (urllib.error.HTTPError, urllib.error.URLError, UnicodeDecodeError,
-            binascii.Error, ValueError, TypeError, AttributeError) as exc:
+            binascii.Error, ValueError, TypeError, AttributeError,
+            ForgeError) as exc:
         # binascii: forged/invalid base64 payloads (MECE round-1, luna F1-10).
         # F11-B001: ValueError (malformed JSON), TypeError/AttributeError
         # (payload in an unexpected shape) used to escape this boundary and
@@ -774,17 +784,25 @@ def _pytest_verify_argv(parts: list[str]) -> list[str] | None:
     return out
 
 
-def verify_diff_tests(pr: PullRequest, config: RepoConfig, test_files: list[str]) -> "Finding | None":
+def verify_diff_tests(pr: PullRequest, config: RepoConfig, test_files: list[str],
+                        deadline: float | None = None) -> "Finding | None":
     """Deterministic spec check: check out the PR head in a sandbox worktree
     and run the repo's test command. If the diff's own tests FAIL, return a
     Critical Finding carrying the failure tail — no model in the loop for
     this class (both M3 and deepseek gave a planted, self-failing diff a
     clean review twice each; live-caught on the first-real-fix E2E).
-    Returns None on any infrastructure trouble (never a false finding)."""
+    Returns None on any infrastructure trouble (never a false finding).
+    Cycle-6: deadline-aware — the engine reserves budget at entry, but the
+    fetch (180s) plus suite (test_timeout) never observed expiry mid-run."""
     from .models import Finding as _Finding
 
     token = os.environ.get("CODESITTER_GITHUB_TOKEN", "")
     workdir = Path(tempfile.mkdtemp(prefix="fl4write-verify-"))
+    import time as _clock
+
+    def _expired() -> bool:
+        return deadline is not None and _clock.monotonic() >= deadline
+
     try:
         def _v_unverified(reason: str) -> None:
             # F13-B006 (reopened F12-B012): every early exit emits its outcome
@@ -797,12 +815,18 @@ def verify_diff_tests(pr: PullRequest, config: RepoConfig, test_files: list[str]
                 pass
 
         verify_askpass: list[dict[str, str]] = []
+        if _expired():
+            _v_unverified('cycle deadline already reached — UNVERIFIED')
+            return None
         fetch_url = f"https://github.com/{pr.repo}.git"
         if _run(["git", "init", "-q"], cwd=workdir).returncode != 0:
             _v_unverified("git init failed")
             return None
         pull_env = _push_token_env(workdir, token)
         verify_askpass.append(pull_env)
+        if _expired():
+            _v_unverified('cycle deadline reached before fetch — UNVERIFIED')
+            return None
         if _run(["git", "fetch", "-q", "--depth", "1", fetch_url, pr.head_sha],
                 cwd=workdir, timeout=180, env=pull_env).returncode != 0:
             _v_unverified('git fetch failed')
@@ -903,6 +927,9 @@ def verify_diff_tests(pr: PullRequest, config: RepoConfig, test_files: list[str]
         env = _sandbox_env_for(_vhome)
         import time as _time
         _t0 = _time.time()
+        if _expired():
+            _v_unverified('cycle deadline reached before test run — UNVERIFIED')
+            return None
         from . import telemetry as _tel
         if "pytest" in cmd and not chain:
             # host-controlled evidence (UltraQA P4/Sol): junit is written only

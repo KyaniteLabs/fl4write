@@ -182,9 +182,12 @@ def _diff_line_spans(diff_text: str) -> dict[str, list[tuple[int, int]]]:
             claimed = cur["start"] + max(cur["count"] - 1, 0)
             if cur["count"] == 0:
                 return  # pure deletion: no new-file lines exist
+            if cur["present"] == 0:
+                return  # nothing groundable on the page (e.g. submodule
+                # pointers only, malformed bodies): no span to cite
             # New-file lines present = added (+) plus context (" ") lines;
             # removed (-) lines and the "+++" header are not new-file lines.
-            if 0 < cur["present"] < cur["count"]:
+            if cur["present"] < cur["count"]:
                 spans[path].append((cur["start"], cur["start"] + cur["present"] - 1))
             else:
                 spans[path].append((cur["start"], claimed))
@@ -199,11 +202,13 @@ def _diff_line_spans(diff_text: str) -> dict[str, list[tuple[int, int]]]:
                 else:
                     cur = None
             elif cur is not None and (line[:1] in (" ", "+") or not line) \
-                    and line[:3] != "+++":
+                    and line[:3] != "+++" \
+                    and not line.startswith("+Subproject commit "):
                 # New-file lines present on the page: added (+) and context
                 # (" ", including blank context lines). Removed (-) lines,
-                # the "+++" header and "\ No newline" markers are not
-                # new-file lines.
+                # the "+++" header, "\ No newline" markers and submodule
+                # gitlink pointers (a commit hash is not reviewable code)
+                # are not new-file lines.
                 cur["present"] += 1
         _flush()
     return spans

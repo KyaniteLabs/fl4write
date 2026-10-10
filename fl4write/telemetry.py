@@ -18,6 +18,7 @@ Event kinds:
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -96,8 +97,11 @@ def record_route(model: str, ok: bool, latency_s: float, parse_ok: bool,
             "prompt_tokens": 0, "completion_tokens": 0,
         })
         latency_s = float(latency_s or 0.0)
-        if latency_s < 0:
-            latency_s = 0.0  # F14-B001: negative latency is corrupt data
+        if latency_s < 0 or not math.isfinite(latency_s):
+            # F14-B001: negative latency is corrupt data. Round-4 hunt:
+            # NaN/inf poisoned the running aggregate permanently (nan +
+            # anything stays nan) — non-finite reads as 0.0 like negatives.
+            latency_s = 0.0
         st["calls"] += 1
         st["ok"] += int(bool(ok))
         st["parse_fail"] += int(not parse_ok)

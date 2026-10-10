@@ -25,7 +25,7 @@ _WHITELIST_CODEPOINTS = {0x09, 0x0A}
 
 _DATA_URL_RE = re.compile(r"data:[^\s\"')]+", re.IGNORECASE)
 _BASE64_IMG_RE = re.compile(r"!\[[^\]]*\]\([^)]*base64[^)]*\)", re.IGNORECASE)
-_REMOTE_SRC_RE = re.compile(r"<\s*(img|source|script|iframe)[^>]*src\s*=", re.IGNORECASE)
+_REMOTE_SRC_RE = re.compile(r"<\s*(img|source|script|iframe|video|audio|track|embed)[^>]*src\s*=", re.IGNORECASE)
 _REMOTE_IMG_RE = re.compile(r"!\[[^\]]*\]\(\s*https?://[^)]*\)", re.IGNORECASE)  # exfil beacon
 # F13-A7 (reopened F11-A6/F12-A4): alt text may contain ESCAPED brackets
 # ('![a\\]](https://…)') — the plain class above cannot match them
@@ -50,7 +50,8 @@ _SRCSET_RE = re.compile(
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _HIDDEN_TAG_RE = re.compile(
     r"</?\s*(details|summary|script|style|iframe|h[1-6]|table|thead|tbody|tr|th|td|"
-    r"div|section|article|blockquote|pre|hr|svg|math|object|embed|form)\b[^>]*>",
+    r"div|section|article|blockquote|pre|hr|svg|math|object|embed|form|"
+    r"video|audio|track|source)\b[^>]*>",
     re.IGNORECASE)
 # F13-A8: scrub and assert_clean must speak the same language — inline
 # display/visibility declarations are neutralized HERE so posted prose that
@@ -201,6 +202,10 @@ def redact_credentials(text: str) -> str:
     # F13-A1 (CRITICAL, reopened F1-013): credential ASSIGNMENT values are
     # redacted regardless of entropy — 'password=aaaaaaaaaaaaaaaa' is a real
     # hard-coded credential even though its Shannon entropy is ~0
+    # Round-4 reversal note: splitting the value class to preserve trailing
+    # prose was REVERTED — multi-word secrets (passphrases) would leak, and
+    # D7-033 deliberately redacts multi-word values. Fail-closed wins over
+    # prose preservation in a redaction function.
     _ASSIGN_KEY = (
         r"(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|"
         r"client[_-]?secret|auth(?:orization)?|private[_-]?key)s?\s*[:=]\s*"

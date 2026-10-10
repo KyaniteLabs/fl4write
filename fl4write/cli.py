@@ -167,12 +167,19 @@ _KNOWN_FLAGS = ("--live", "--fixes", "--issues", "--omni")
 # explicit live belt, never implied by the absence of a flag.
 
 
+def _is_flag_token(arg: str) -> bool:
+    """Single- AND double-dash tokens are flags; bare "-" alone stays a
+    positional (stdin convention). Round-4 hunt: single-dash typos like
+    -live slipped the typo guard and became a phantom config path."""
+    return arg.startswith("-") and len(arg) > 1
+
+
 def _unknown_flags(argv: list[str]) -> list[str]:
     """Flags the CLI does not know. MECE round-1 (sol F1-006): unknown
     arguments were silently ignored — a typo like --lvie for --live ran the
     cycle in the WRONG mode (silent mis-operation, and worse for shadow-mode
     typos). Every flag must be explicit."""
-    return [a for a in argv[1:] if a.startswith("--") and a not in _KNOWN_FLAGS]
+    return [a for a in argv[1:] if _is_flag_token(a) and a not in _KNOWN_FLAGS]
 
 
 def _cycle_budget_s() -> int | None:
@@ -215,7 +222,7 @@ def main() -> int:
     # (luna-max DOM-D): EXACTLY one positional is the contract — extra
     # positionals were silently ignored, so a typo'd invocation ran a valid
     # config while discarding the mistake
-    positionals = [a for a in sys.argv[1:] if not a.startswith("--")]
+    positionals = [a for a in sys.argv[1:] if not _is_flag_token(a)]
     if len(positionals) != 1:
         print(f"expected exactly ONE config path, got {len(positionals)} "
               f"positional argument(s) — refusing to run (typo guard)",

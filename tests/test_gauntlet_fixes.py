@@ -968,6 +968,27 @@ class TestMECESolPins:
         # F3-004: --shadow is refused (fake-safety trap removed)
         assert _unknown_flags(["c", "cfg.yaml", "--shadow"]) == ["--shadow"]
 
+    def test_single_dash_flags_refused(self):
+        from fl4write.cli import _unknown_flags
+        assert _unknown_flags(["c", "cfg.yaml", "-lvie"]) == ["-lvie"]
+        assert _unknown_flags(["c", "cfg.yaml", "-h"]) == ["-h"]
+        assert _unknown_flags(["c", "cfg.yaml", "-"]) == []
+        assert _unknown_flags(["c", "cfg.yaml", "--live", "-fixes"]) == ["-fixes"]
+
+    def test_nan_latency_zeroed_not_poisoned(self):
+        from fl4write import telemetry as tel
+        tel._ROUTE_STATS.clear()
+        try:
+            tel.record_route("m", True, float("nan"), True, 5, 5)
+            tel.record_route("m", True, float("inf"), True, 5, 5)
+            tel.record_route("m", True, 1.0, True, 5, 5)
+            st = tel.route_stats()["m"]
+            assert st["latency_s"] == 1.0
+            assert st["calls"] == 3
+        finally:
+            tel._ROUTE_STATS.clear()
+
+
 
 class TestMECERedaction:
     """F1-013: credential-shaped text is redacted at posting surfaces."""
@@ -2047,6 +2068,43 @@ class TestMECERound5SolPins:
         assert st["merged_since"] == "2026-09-01T00:00:00Z"
         assert st["retro_seen"] == {"1": True}
 
+    def test_null_fix_depth_normalizes_to_default(self, tmp_path):
+        """Review follow-up (PR47): per-PR fix_depth None survived and
+        hit unguarded int() in the fix lane."""
+        import json as _json
+        from fl4write.state import load_state
+
+        p = tmp_path / "s.json"
+        p.write_text(_json.dumps({"version": 1,
+                                  "prs": {"7": {"fix_depth": None}}}))
+        st = load_state(p)
+        assert "fix_depth" not in st["prs"]["7"]
+
+    def test_explicit_nulls_normalize_to_absent(self, tmp_path):
+        """Round-4 hunt: explicit nulls survived every normalizer guard
+        and crashed consumers via .get-with-default misses."""
+        import json as _json
+        from fl4write.state import load_state
+
+        p = tmp_path / "s.json"
+        p.write_text(_json.dumps({
+            "version": 1, "prs": {}, "merged_since": None,
+            "retro_cursor": None, "omni_pub_fail": None,
+            "issues_foreign_quarantined": None, "model_failures": None,
+            "omni_file_fails": None, "omni_scanned_total": None,
+            "omni_next_id": None, "omni_total": None,
+            "omni_unfetchable": None, "omni_unscannable": None,
+            "omni_findings": None, "omni_complete": None,
+            "omni_published": None, "retro_complete": None,
+            "omni_aborted": None, "retro_seen": None, "open_ids": None,
+            "omni_cursor": None, "omni_head": None, "omni_fp": None,
+            "omni_report_version": None, "omni_scope_pending": None,
+            "omni_truncated_seen": None, "omni_clean_published": None,
+            "retro_parked": None, "pm_shadow_seen": None,
+            "retro_shadow_seen": None}))
+        st = load_state(p)
+        assert st == {"version": 1, "prs": {}}
+
     def test_reconcile_carries_validated_omni_identity(self, tmp_path):
         from fl4write.state import load_state
 
@@ -2475,7 +2533,7 @@ class TestMECERound6LunaMaxPins:
         monkeypatch.setattr("fl4write.analyzer.analyze", boom)
         monkeypatch.setattr(
             "fl4write.executor.verify_diff_tests",
-            lambda pr, config, test_like: Finding(
+            lambda pr, config, test_like, deadline=None: Finding(
                 rule_id="tests", severity="Critical", path="tests/test_x.py",
                 line=1, category="CI", message="diff tests FAIL (test)"))
         sp = tmp_path / "s.json"
@@ -3073,6 +3131,20 @@ class TestMECERound7BE:
         })
         assert ex.check_and_merge_own_prs(c, "fl4write[bot]",
                                           deadline=time.monotonic() - 1) == []
+
+    def test_gh_api_refuses_oversize_body(self, monkeypatch):
+        """Round-4 hunt: same unbounded-read class as the forge lanes."""
+        from fl4write import executor as ex
+        from fl4write.forges import ForgeError, MAX_BODY
+
+        class _Big:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self, n=-1): return b"x" * (MAX_BODY + 1)
+
+        monkeypatch.setattr(ex.urllib.request, "urlopen", lambda req, timeout=30: _Big())
+        with pytest.raises(ForgeError, match="exceeds"):
+            ex._gh_api("GET", "/repos/o/r")
 
     def test_commit_green_returns_none_past_deadline(self, monkeypatch):
         import time
@@ -4384,6 +4456,19 @@ class TestMECERound11Analyzer:
             assert _scrub(out) == out, f"not idempotent: {s!r}"
             _assert(out)
 
+    def test_media_remote_loads_neutralized(self):
+        from fl4write.scrub import assert_clean, scrub
+        for hostile in ("<video src=https://evil/x.mp4>",
+                        "<audio src=https://evil/x.mp3>",
+                        "<track src=https://evil/x.vtt>",
+                        "<video poster=https://evil/x.jpg>",
+                        "<VIDEO SRC=https://evil/x>"):
+            out = scrub(hostile)
+            # No live load remains: src-bearing tags neutralize to a
+            # marker (URL survives as inert text); poster-only strips.
+            assert " src=" not in out and " SRC=" not in out, out
+            assert_clean(out)
+
     def test_angle_bracket_js_scheme_neutralized(self):
         from fl4write.scrub import assert_clean, scrub
         for hostile in ("[x](<javascript:alert(1)>)",
@@ -4407,6 +4492,15 @@ class TestMECERound11Analyzer:
                         line=1, message="ok note", proposal=proposal)
             body = render_review(make_pr(), [f], make_config(), review_hash="abc")
             assert "evil" not in body and "javascript:" not in body
+
+    def test_assignment_redaction_stays_fail_closed_on_prose(self):
+        # Round-4 reversal: preserving trailing prose would leak multi-word
+        # passphrases (D7-033 deliberately redacts multi-word values).
+        from fl4write.scrub import redact_credentials
+        out = redact_credentials("api_key: xyz123 and the sky is blue today")
+        assert "xyz123" not in out and "[redacted]" in out
+        assert redact_credentials('password = "abcdef"') == 'password = "[redacted]"'
+        assert redact_credentials("password=aaaaaaaaaaaaaaaa") == "password=[redacted]"
 
     def test_redact_url_userinfo_password(self):
         from fl4write.scrub import redact_credentials
@@ -4738,6 +4832,28 @@ class TestMECERound12Pins:
         state_mod.prune_closed(st, set())
         assert len(st["retro_seen"]) == 2000
         assert st["retro_seen"].get("4999") is True  # newest survive
+
+    def test_github_head_sha_rejects_non_string(self, monkeypatch):
+        """Round-4 hunt: int/bool SHAs flowed into anchors/URLs — same
+        class as the Forgejo head_sha lane."""
+        from fl4write.forges import GitHubAdapter
+        import fl4write.config as cfg_mod
+        ad = GitHubAdapter(cfg_mod.ForgeBinding(
+            role="primary", api_base="https://api.github.com", token_env="GHT"))
+
+        def fake_call(method, path, payload=None, _retry=True):
+            if path.endswith("/commits/main"):
+                return {"sha": fake_call.sha}
+            if "check-runs" in path:
+                return {"check_runs": []}
+            return {"default_branch": "main"}
+
+        monkeypatch.setattr(ad, "_call", fake_call)
+        for sha, expected in ((12345, None), (True, None), ("", None),
+                              (None, None), ("a" * 40, ("a" * 40, []))):
+            fake_call.sha = sha
+            out = ad.head_check_runs("o/r")
+            assert (out is None and expected is None) or out[0] == expected[0], sha
 
     def test_null_check_run_rows_coerced(self, monkeypatch):
         """Round-3 hunt: a null row raised AttributeError mid-scan."""

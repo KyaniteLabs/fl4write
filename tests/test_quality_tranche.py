@@ -109,6 +109,25 @@ class TestExecutorPatchPrompt:
 
 
 class TestFixTelemetryAndFreshness:
+    def test_verify_diff_tests_stops_at_deadline(self, tmp_path, monkeypatch):
+        """Round-4 hunt: the fetch (180s) plus suite (test_timeout) never
+        observed cycle expiry mid-run."""
+        import time as _time
+
+        from fl4write import executor as ex
+        from fl4write.models import PullRequest
+
+        def boom(*a, **k):
+            pytest.fail("no subprocess past an expired deadline")
+
+        monkeypatch.setattr(ex, "_run", boom)
+        pr = PullRequest(forge="github", number=1, repo="o/r", title="t",
+                         head_sha="a" * 40)
+        from test_fl4write import make_config
+        c = make_config()
+        assert ex.verify_diff_tests(pr, c, ["x.py"],
+                                    deadline=_time.monotonic() - 1) is None
+
     def test_run_new_session_kills_backgrounded_daemon(self, tmp_path):
         from fl4write import executor as ex
         marker = tmp_path / "daemon-wrote"
@@ -711,7 +730,7 @@ class TestVerifyWiring:
             lambda pr, files, text, config, mode="pr": ReviewDoc(pr=pr, findings=[]))
         monkeypatch.setattr(
             "fl4write.executor.verify_diff_tests",
-            lambda pr, config, test_files: Finding(
+            lambda pr, config, test_files, deadline=None: Finding(
                 rule_id="tests", severity="Critical", path=test_files[0], line=1,
                 category="CI", message="the diff's own tests FAIL (wired)"))
         rc(c, tmp_path / "s.json", get_diff=lambda pr: (
