@@ -182,8 +182,13 @@ def load_state(path: Path) -> dict[str, Any]:
                     if not isinstance(_rec, dict):
                         continue
                     _fd = _rec.get("fix_depth")
-                    if _fd is not None and (isinstance(_fd, bool)
-                                            or not isinstance(_fd, int)):
+                    # Review follow-up (PR47): explicit None survived and
+                    # hit unguarded int() in the fix lane — drop it; the
+                    # downstream .get default (0) reapplies.
+                    if _fd is None:
+                        _rec.pop("fix_depth", None)
+                        _dirty = True
+                    elif isinstance(_fd, bool) or not isinstance(_fd, int):
                         log.warning("state %s: non-int fix_depth dropped", path)
                         _rec.pop("fix_depth", None)
                         _dirty = True
@@ -255,6 +260,10 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
     for key in ("merged_since", "retro_cursor"):
         v = out.get(key)
         if v is None:
+            # Round-4 hunt: explicit nulls survived every guard and crashed
+            # consumers via .get-with-default misses. Null normalizes to
+            # absent (downstream defaults reapply); malformed still warns.
+            out.pop(key, None)
             continue
         if not isinstance(v, str) or not _valid_iso(v):
             # MECE round-6 (luna-max F6-C011): an arbitrary string watermark
@@ -263,7 +272,9 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
             log.warning("state %s: invalid %s %r dropped (bounded reconcile)", key, key, v)
             out.pop(key, None)
     omni = out.get("omni_findings")
-    if omni is not None:
+    if omni is None:
+        out.pop("omni_findings", None)
+    else:
         if not isinstance(omni, list):
             log.warning("state omni_findings: non-list dropped (bounded reconcile)")
             out.pop("omni_findings", None)
@@ -301,21 +312,23 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
                 for _r in out.get("omni_findings", [])]
     # F13-C004: the publication-retry counter is consumed by raw int()
     v = out.get("omni_pub_fail")
-    if v is not None:
-        if isinstance(v, bool) or not isinstance(v, int):
-            log.warning("state omni_pub_fail: non-int %r dropped", v)
-            out.pop("omni_pub_fail", None)
+    if v is None:
+        out.pop("omni_pub_fail", None)
+    elif isinstance(v, bool) or not isinstance(v, int):
+        log.warning("state omni_pub_fail: %r dropped (bounded reconcile)", v)
+        out.pop("omni_pub_fail", None)
     # F13-B009: the foreign-marker quarantine list is appended by the lane
     v = out.get("issues_foreign_quarantined")
-    if v is not None:
-        if not isinstance(v, list):
-            log.warning("state issues_foreign_quarantined: non-list dropped")
-            out.pop("issues_foreign_quarantined", None)
-        else:
-            kept = [int(x) for x in v if isinstance(x, int)
-                    and not isinstance(x, bool) and x > 0]
-            if len(kept) != len(v) or len(kept) > 200:
-                out["issues_foreign_quarantined"] = kept[-200:]
+    if v is None:
+        out.pop("issues_foreign_quarantined", None)
+    elif not isinstance(v, list):
+        log.warning("state issues_foreign_quarantined: non-list dropped")
+        out.pop("issues_foreign_quarantined", None)
+    else:
+        kept = [int(x) for x in v if isinstance(x, int)
+                and not isinstance(x, bool) and x > 0]
+        if len(kept) != len(v) or len(kept) > 200:
+            out["issues_foreign_quarantined"] = kept[-200:]
     # MECE round-7 (terra F7-002): omni cursors/counters drive raw
     # int()/comparison operations — wrong types used to TypeError/ValueError
     # the cycle outside its handled exceptions. F11-C008 (reopened F7-C002):
@@ -325,7 +338,13 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
     _omni_core_bad = False
     for key in ("omni_cursor", "omni_head", "omni_fp"):
         v = out.get(key)
-        if v is not None and not isinstance(v, str):
+        if v is None:
+            # Review round 2 (PR47): explicit nulls skipped every guard
+            # here and crashed string compares downstream
+            # (engine `p > cursor` → TypeError on None).
+            out.pop(key, None)
+            continue
+        if not isinstance(v, str):
             log.warning("state omni core %s: non-string %r — sweep state reset", key, v)
             _omni_core_bad = True
     parked = out.get("retro_parked")
@@ -353,6 +372,7 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
     for key in ("model_failures", "omni_file_fails"):
         v = out.get(key)
         if v is None:
+            out.pop(key, None)
             continue
         if not isinstance(v, dict):
             log.warning("state %s: non-dict %r dropped (bounded reconcile)", key, v)
@@ -363,21 +383,28 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
             if len(kept) != len(v):
                 log.warning("state %s: dropping non-int values (bounded reconcile)", key)
             out[key] = kept
-    for key in ("omni_scanned_total", "omni_next_id", "omni_total"):
+    for key in ("omni_scanned_total", "omni_next_id", "omni_total",
+                "omni_report_version"):
         v = out.get(key)
         if v is None:
+            out.pop(key, None)
             continue
         if isinstance(v, bool) or not isinstance(v, int):
             log.warning("state %s: non-int %r dropped (bounded reconcile)", key, v)
             out.pop(key, None)
-    for key in ("omni_complete", "omni_published", "retro_complete", "omni_aborted"):
+    for key in ("omni_complete", "omni_published", "retro_complete", "omni_aborted",
+                "omni_scope_pending", "omni_truncated_seen", "omni_clean_published"):
         v = out.get(key)
-        if v is not None and not isinstance(v, bool):
+        if v is None:
+            out.pop(key, None)
+        elif not isinstance(v, bool):
             # a truthy STRING ("false") falsely terminalized lanes
             log.warning("state %s: non-bool %r dropped (bounded reconcile)", key, v)
             out.pop(key, None)
     open_ids = out.get("open_ids")
-    if open_ids is not None:
+    if open_ids is None:
+        out.pop("open_ids", None)
+    else:
         if not isinstance(open_ids, list):
             log.warning("state open_ids: non-list dropped (bounded reconcile)")
             out.pop("open_ids", None)
@@ -389,6 +416,7 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
     for key in ("omni_unfetchable", "omni_unscannable"):
         v = out.get(key)
         if v is None:
+            out.pop(key, None)
             continue
         if not isinstance(v, list):
             log.warning("state %s: non-list %r dropped (bounded reconcile)", key, v)
@@ -404,7 +432,10 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
     for key in ("retro_seen", "retro_parked", "pm_shadow_seen", "retro_shadow_seen",
                 "model_failures", "omni_file_fails"):
         v = out.get(key)
-        if v is not None and not isinstance(v, dict):
+        if v is None:
+            out.pop(key, None)
+            continue
+        if not isinstance(v, dict):
             log.warning("state %s: non-dict %r dropped (bounded reconcile)", key, v)
             out.pop(key, None)
     for key in ("retro_defer:",):  # prefix keys: retro_defer:<num>:<sha> -> int

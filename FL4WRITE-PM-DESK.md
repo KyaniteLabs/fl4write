@@ -596,3 +596,33 @@ Not mine, left standing with owners:
   row M-20261008-15 (appended on completion); evidence: Forgejo runs 119-177,
   GitHub run 37862445233, local suite logs (venvs /tmp/fl4w-ci-venv,
   /tmp/fl4w-red-venv, worktree /tmp/fl4w-red-1963133).
+### Zero-loop round 4 opened
+
+Streak: 0 of 3. Scope: everything merged through PR #46 is now
+no-re-report territory. Only verified-new defects count.
+
+### Zero-loop round 4 ledger (closed)
+
+Principal + 3 parallel scouts, every finding live-probed:
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | Explicit-null state survival (11 keys) | Fixed: normalize to absent |
+| 2 | verify_diff_tests deadline-blind | Fixed: gates before fetch + run |
+| 3 | _gh_api unbounded reads | Fixed: 8MB ForgeError cap |
+| 4 | Media-tag remote loads bypass | Fixed: tag lists extended |
+| 5 | Submodule pointers groundable | Fixed: excluded from spans |
+| 6 | Assignment greed | REVERTED pre-merge: fail-closed beats prose (D7-033 pin) |
+| 7 | GitHub head-SHA + tree-SHA untyped | Fixed: both lanes |
+| 8 | Single-dash typos slip guard | Fixed: all dash tokens are flags |
+| 9 | NaN/inf latency poisons aggregates | Fixed: non-finite reads 0.0 |
+| 10 | Casefold identity | Fixed at choke point |
+| 11 | Bundle dirs uncompared | Fixed: ancestor sets |
+| 12 | Legacy empty report misclassified | Fixed: parity with embedded |
+| 13 | Gated-off wedge / envelope silence / retro cap / null rows | Fixed (4) |
+| 14 | Clean-issue reconcile proposal | REVERTED pre-merge: broke tested transient recovery |
+| 15 | Model-proxy total deadline | Accepted residual (reasoned): host-owned socket |
+
+Full suite 1478+4 with only the count pin red; README re-stamped
+1479+4; Ruff, shell, diff-check clean. Round verdict: NON-CLEAN.
+Zero-clean streak: 0.

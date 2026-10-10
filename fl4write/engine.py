@@ -168,7 +168,7 @@ def _review_pr(
     ):
         from . import executor as _ex
 
-        failing = _ex.verify_diff_tests(pr, config, test_like)
+        failing = _ex.verify_diff_tests(pr, config, test_like, deadline=deadline)
         if failing is not None:
             findings.append(failing)
             report.alerts.append(

@@ -88,6 +88,45 @@ class TestUngroundableBlocks:
         assert _line_outside_diff("nope.py", 3, DELETED) is False
 
 
+SUBMODULE = ("diff --git a/subm b/subm\n"
+             "index abc1234..def5678 160000\n"
+             "--- a/subm\n"
+             "+++ b/subm\n"
+             "@@ -1 +1 @@\n"
+             "-Subproject commit abc1234\n"
+             "+Subproject commit def5678\n")
+
+
+class TestSubmodulePointers:
+    def test_submodule_hunk_yields_no_spans(self):
+        from fl4write.analyzer import _diff_line_spans
+        assert _diff_line_spans(SUBMODULE)["subm"] == []
+
+    def test_submodule_finding_dropped(self, monkeypatch):
+        import json as _json
+        from fl4write import config as _cfg
+        from fl4write.analyzer import analyze
+        from fl4write.models import PullRequest as _PR
+        item = {"rule_id": "general", "severity": "Minor", "path": "subm",
+                "line": 1, "category": "c", "message": "pointer changed"}
+        monkeypatch.setattr(
+            "fl4write.analyzer._call_model",
+            lambda route, prompt, mode="pr", system=None, **kw: _json.dumps(
+                {"findings": [item]}),
+        )
+        config = _cfg.RepoConfig.model_validate({
+            "repo": "o/r",
+            "forges": {"github": {"role": "primary",
+                                  "api_base": "https://api.github.com",
+                                  "token_env": "GHT"}},
+            "model": {"endpoint": "http://model/v1", "model": "test", "key_env": "MK"},
+            "review": {"general": "catch defects"},
+            "severity_vocab": ["Critical", "Major", "Minor", "Nit"]})
+        doc = analyze(_PR(forge="github", number=1, repo="o/r", head_sha="a" * 40),
+                      {"subm"}, SUBMODULE, config)
+        assert doc.findings == []
+
+
 class TestClippedSpans:
     def _cut_diff(self):
         head = ("diff --git a/big.py b/big.py\n+++ b/big.py\n"

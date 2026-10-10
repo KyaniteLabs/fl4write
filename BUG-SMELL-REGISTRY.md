@@ -549,3 +549,35 @@ toolkit) — the gate was skipped precisely where the mirror looked red. gh#16
 2026-10-04 block); gh#16 is the polish sweep's CEO-gated PR (MISSIONS-LEDGER
 M-20261008-13 DONE row). Canonical main never needed `[skip ci]` — docs commits run
 CI and pass. Evidence: mission M-20261008-15, PM-DESK 2026-10-08 block.
+## CYCLE7-001: explicit-null state survival (crash class)
+
+**File:** `fl4write/state.py`. Every normalizer guard kept explicit
+nulls, crashing consumers via `.get`-with-default misses (live-probed:
+AttributeError/TypeError across model_failures, omni maps, findings,
+counters, quarantine). **Local fix:** null normalizes to absent
+uniformly; full-key sweep test pins it. **Status:** Fixed on
+`fix/zero-loop-r4`; review/merge pending.
+
+## CYCLE7-002: verify deadline-blindness + unbounded gh reads
+
+**File:** `fl4write/executor.py`. `verify_diff_tests` never observed
+cycle expiry (180s fetch + long suites); `_gh_api` read unbounded.
+**Local fix:** deadline gates before fetch and test run; 8MB ForgeError
+cap with file-fetch degradation. **Status:** Fixed; review/merge
+pending.
+
+## CYCLE7-003: media loads, submodule spans, SHA typing, flag typos, NaN
+
+Media-tag remote loads bypassed scrub+assert; subproject pointers
+grounded as code; two GitHub SHA lanes untyped; single-dash typos
+became phantom paths; NaN latency poisoned aggregates permanently.
+**Local fix:** tag lists extended; gitlinks excluded from spans; both
+SHA lanes typed; all dash tokens are flags; non-finite reads 0.0.
+**Status:** Fixed; review/merge pending.
+
+## CYCLE7-004: assignment greed + clean-reconcile reversals
+
+Both proposed, both REVERTED pre-merge with rationale: prose-preserving
+redaction would leak multi-word passphrases (D7-033 pin holds);
+dead-id reconcile broke tested transient recovery (boolean API can't
+distinguish). Recorded so nobody re-proposes blind.

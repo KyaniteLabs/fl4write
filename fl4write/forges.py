@@ -368,8 +368,9 @@ class ForgeAdapter:
             head = self._call("GET", f"/repos/{repo}/commits/{quote(branch, safe='')}")
             if not isinstance(head, dict):
                 return None  # F8-003: commit envelope validated
-            sha = head.get("sha") or ""
-            if not sha:
+            sha = head.get("sha")
+            # Round-4 hunt: non-string SHAs flowed into URLs/anchors.
+            if not isinstance(sha, str) or not sha:
                 return None
             tree = self._call("GET", f"/repos/{repo}/git/trees/{sha}?recursive=1")
             if not isinstance(tree, dict) or not isinstance(tree.get("tree"), list):
@@ -634,8 +635,10 @@ class GitHubAdapter(ForgeAdapter):
             head = self._call("GET", f"/repos/{repo}/commits/{quote(branch, safe='')}")
             if not isinstance(head, dict):
                 return None  # F8-003: commit envelope validated
-            sha = head.get("sha") or ""
-            if not sha:
+            sha = head.get("sha")
+            # Round-4 hunt: same untyped-passthrough class as the Forgejo
+            # head_sha lane — int/bool SHAs flowed into anchors/URLs.
+            if not isinstance(sha, str) or not sha:
                 return None
             page = 1
             check_runs: list[dict] = []
