@@ -78,6 +78,18 @@ fi
 if [ -z "${FL4WRITE_MODEL_ENDPOINT:-}" ]; then
     export FL4WRITE_MODEL_ENDPOINT=http://127.0.0.1:46399/v1/chat/completions
 fi
+# Same pattern for the tailnet-direct Forgejo API (CF WAF blocks bot writes on
+# the public host, BUG-SMELL 2026-09-01): the Forgejo fleet configs carry a
+# ${FL4WRITE_FORGEJO_API_BASE} placeholder so no host address rides the public
+# repo. No default exists — an unset value fails those configs loud.
+if [ -z "${FL4WRITE_FORGEJO_API_BASE:-}" ]; then
+    _fj_base=$(grep "^export FL4WRITE_FORGEJO_API_BASE=" ~/.bashrc 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')
+    if [ -n "$_fj_base" ]; then
+        export FL4WRITE_FORGEJO_API_BASE="$_fj_base"
+    else
+        echo "$(date -Iseconds) ERR: FL4WRITE_FORGEJO_API_BASE unset (env and ~/.bashrc) — Forgejo fleet configs will fail to load" >> "$LOG"
+    fi
+fi
 
 # SCALE Phase 2: tiered due-list + process pool (consensus-gated, #6).
 # The scheduler is invoked EXACTLY ONCE (Sol#2: three invocations = 3x the

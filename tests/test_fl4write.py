@@ -77,9 +77,11 @@ class TestConfig:
         with pytest.raises(Exception):
             make_config(tone="savage")
 
-    def test_reference_instance_loads(self, tmp_path):
+    def test_reference_instance_loads(self, tmp_path, monkeypatch):
         # kinocut is FJ-primary since the all-FJ order (LEARNINGS #34); the
         # GH-side instance was retired — the .fj twin is the live config.
+        # Its tailnet api_base is launcher-provided (run-cycle.sh).
+        monkeypatch.setenv("FL4WRITE_FORGEJO_API_BASE", "http://forgejo.test:3000/api/v1")
         src = Path(__file__).parent.parent / "kinocut.fj.fl4write.yaml"
         c = cfg.load_config(src)
         assert c.repo == "KyaniteLabs/kinocut"
@@ -780,13 +782,15 @@ def test_all_fleet_configs_load(cfg_path, monkeypatch):
     """Every fleet config loads against the strict schema (audit E8: 1-of-31
     coverage). Set the token env vars the schemas now require, and the LAN
     model endpoint the tracked fl4write config takes from the environment
-    (Lever 3b: ${FL4WRITE_MODEL_ENDPOINT} placeholder)."""
+    (Lever 3b: ${FL4WRITE_MODEL_ENDPOINT} placeholder), plus the tailnet
+    Forgejo API base the Forgejo fleet configs take the same way."""
     import os
+    launcher = {"FL4WRITE_MODEL_ENDPOINT": "http://127.0.0.1:46399/v1/chat/completions",
+                "FL4WRITE_FORGEJO_API_BASE": "http://forgejo.test:3000/api/v1"}
     for name in ("CODESITTER_GITHUB_TOKEN", "CODESITTER_DEEPSEEK_KEY",
-                 "CODESITTER_FORGEJO_TOKEN", "FL4WRITE_MODEL_ENDPOINT"):
+                 "CODESITTER_FORGEJO_TOKEN", *launcher):
         if name not in os.environ:
-            monkeypatch.setenv(name, "http://192.168.1.72:8908/v1/chat/completions"
-                              if name == "FL4WRITE_MODEL_ENDPOINT" else "test")
+            monkeypatch.setenv(name, launcher.get(name, "test"))
     c = cfg.load_config(cfg_path)
     assert c.repo and "/" in c.repo
 
