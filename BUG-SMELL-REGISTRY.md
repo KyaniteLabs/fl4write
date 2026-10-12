@@ -70,7 +70,7 @@ no triage. Curated outcomes live in LEARNINGS.md.
 
 - 2026-10-12 SECURITY fork-detection fail-open — a PR row with no usable head repo was classified same-repo, so fork rails (no test execution, comment-only fix lane, fork tone) could be skipped. Fixed fail-closed (unknown head repo = fork) on both adapters; 14 pins
 - 2026-10-12 SECURITY executed-code isolation — verify gate (82 live GitHub repos) and fix lane (36 repos) ran untrusted test code as the runner user (documented residual: absolute-path reads of host secrets, open network). Now routed through the reviewed Docker runtime (exhaustive_sandbox.run_isolated); fail closed without FL4WRITE_TEST_IMAGE; FL4WRITE_TEST_ISOLATION=host is the explicit opt-out. E2E-probed on real Docker: host secret invisible, no network, read-only source, non-root, os._exit(0) fake refused; 16 pins
-
+- 2026-10-12 coverage-note severity — the 2026-09-17 reliability baseline's only clean-case false positives (2/5, 40% actionable FP) were testing-quality "new function is not accompanied by any tests" notes at Major; a coverage reminder is not a defect. Fixed: coverage-note ceiling in analyzer (coverage-gap wording + no failure/red claim → Minor), 10 pins incl. keep-Major guards for real failure claims
 ## D7-031: split-token redaction swallows assignment key, leaking value
 
 **File:** `fl4write/scrub.py`, `redact_credentials()`

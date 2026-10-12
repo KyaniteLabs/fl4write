@@ -97,7 +97,7 @@ class TestADV02FailToWording:
         item = _item("The tests fail to cover the new error branch; the diff ships a coverage gap.",
                      rule="testing-quality", sev="Critical")
         doc = _analyze(monkeypatch, item, config=make_config(test_cmd="pytest tests/"))
-        assert doc.findings and doc.findings[0].severity == "Major"
+        assert doc.findings and doc.findings[0].severity == "Minor"  # coverage note: L1-B5 then the coverage-note ceiling
 
     def test_failed_to_compile_still_a_failure_claim(self, monkeypatch):
         item = _item("The tests failed to compile under the new dependency pin.",
@@ -355,7 +355,7 @@ class TestSolAudit2Pins:
                      "they also failed to fully exercise the error path.",
                      rule="testing-quality", sev="Critical")
         doc = _analyze(monkeypatch, item, config=make_config(test_cmd="pytest"))
-        assert doc.findings and doc.findings[0].severity == "Major"
+        assert doc.findings and doc.findings[0].severity == "Minor"  # coverage note: L1-B5 then the coverage-note ceiling
 
     def test_identical_duplicate_envelope_parses(self):
         # audit item 3: format-echo identical to the real envelope is harmless
