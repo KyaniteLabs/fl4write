@@ -73,6 +73,28 @@ _SANDBOX_HOME: str | None = None
 _SECRET_ENV_KEYS = ("GITHUB_TOKEN", "CODESITTER", "MINIMAX", "ANTHROPIC", "OPENAI",
                     "AWS", "AZURE", "GOOGLE", "FL4WRITE_TELEMETRY", "GIT_ASKPASS")
 
+# Executed test code (a PR's own tests, a model-written fix) runs in the
+# reviewed Docker runtime (tools/exhaustive-runtime: no network, no host home,
+# read-only source, non-root) — never as the runner user, who can read every
+# host secret by absolute path. Fail closed: no immutable image -> no run.
+# FL4WRITE_TEST_ISOLATION=host is the explicit, logged operator opt-out.
+TEST_IMAGE_ENV = "FL4WRITE_TEST_IMAGE"
+TEST_ISOLATION_ENV = "FL4WRITE_TEST_ISOLATION"
+
+
+def _test_isolation() -> tuple[str, str]:
+    """('container', image) | ('host', '') | ('unavailable', reason)."""
+    mode = (os.environ.get(TEST_ISOLATION_ENV) or "container").strip().lower()
+    if mode == "host":
+        return "host", ""
+    if mode != "container":
+        return "unavailable", f"{TEST_ISOLATION_ENV} must be 'container' or 'host'"
+    image = (os.environ.get(TEST_IMAGE_ENV) or "").strip()
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
+        return "unavailable", (f"{TEST_IMAGE_ENV} is not an immutable image id "
+                               "(sha256:...) — executed tests refused")
+    return "container", image
+
 
 def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 120,
          env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -90,10 +112,9 @@ def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 120,
 
 def _sandbox_home() -> str:
     """One throwaway HOME per process for executed code. Residual boundary
-    (documented, MECE round 1): a determined same-user process can still read
-    ABSOLUTE paths (/Users/<runner>/.sinter/...) — true isolation needs OS
-    privilege separation (dedicated runner user), tracked for the sandbox
-    tranche. This closes every HOME-relative secret store (~/.sinter, ~/.ssh,
+    (documented, MECE round 1): a same-user process can still read ABSOLUTE
+    paths (/Users/<runner>/.sinter/...) — which is why executed tests default
+    to the Docker runtime and this host path is an explicit opt-out only. This closes every HOME-relative secret store (~/.sinter, ~/.ssh,
     ~/.aws, ~/.codex/auth.json) and the env-var secret surface."""
     global _SANDBOX_HOME
     if _SANDBOX_HOME is None:
@@ -259,9 +280,10 @@ def _pytest_evidence(argv: list[str], cwd: Path, timeout: int,
     file, which pytest writes only when the session genuinely finishes — this
     defeats the accidental-kill and flush-then-exit classes (a killed process
     never writes junit). Honest boundary (MECE round 1, luna F1-01): the
-    junit path is visible in argv to the same-user test process, so a
-    DETERMINED adversary in the executed code can forge the artifact; closing
-    that needs OS privilege separation (sandbox tranche), not argv secrets.
+    junit path is visible in argv to the same-user test process, so in the
+    host opt-out a DETERMINED adversary in the executed code can forge the
+    artifact. The default container path closes that: the root-owned
+    supervisor writes the evidence the host reads (see _test_isolation).
     Green = tests>0, failures=0, errors=0. Returns (green, result)."""
     xml_argv = list(argv)
     # F11-B002 (round 11, luna DOM-B, reopened F1-002): CONFIGURED junit
@@ -289,8 +311,27 @@ def _pytest_evidence(argv: list[str], cwd: Path, timeout: int,
         sep = xml_argv.index("--")
     except ValueError:
         sep = len(xml_argv)
-    xml_argv = xml_argv[:sep] + ["--junitxml", str(junit_path)] + xml_argv[sep:]
-    result = _run(xml_argv, cwd=cwd, timeout=timeout, env=env)
+    mode, detail = _test_isolation()
+    if mode == "unavailable":
+        log.warning("executed tests refused: %s", detail)
+        return False, subprocess.CompletedProcess(xml_argv, 125, "", detail)
+    if mode == "container":
+        from .exhaustive_sandbox import SandboxCleanupPending, SandboxUnavailable, run_isolated
+        # the supervisor writes the evidence; the host copies it to junit_path
+        iso_argv = xml_argv[:sep] + ["--junitxml", "{junit}"] + xml_argv[sep:]
+        try:
+            result = run_isolated(iso_argv, cwd, junit_path, timeout, detail)
+        except SandboxCleanupPending as exc:
+            log.warning("isolated test run finished; %s", exc)
+            result = exc.result
+        except SandboxUnavailable as exc:
+            log.warning("isolated test runtime unavailable: %s", exc)
+            junit_path.unlink(missing_ok=True)
+            return False, subprocess.CompletedProcess(iso_argv, 125, "", str(exc))
+    else:
+        log.warning("executed tests run on the HOST (%s=host opt-out)", TEST_ISOLATION_ENV)
+        xml_argv = xml_argv[:sep] + ["--junitxml", str(junit_path)] + xml_argv[sep:]
+        result = _run(xml_argv, cwd=cwd, timeout=timeout, env=env)
     if result.returncode != 0:
         return False, result
     try:
@@ -393,6 +434,11 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
 
     if dependency_depth(pr, pr.title, config) == "skip":
         return _finish("skipped", "dependency PR")
+
+    _iso_mode, _iso_detail = _test_isolation()
+    if _iso_mode == "unavailable":
+        # every push is gated on executed tests; refuse before the model call
+        return _finish("error", f"test isolation unavailable: {_iso_detail}")
 
     try:
         content = _get_file_content(pr.repo, finding.path, pr.head_sha)
@@ -740,6 +786,11 @@ def verify_diff_tests(pr: PullRequest, config: RepoConfig, test_files: list[str]
                 pass
 
         verify_askpass: list[dict[str, str]] = []
+        iso_mode, iso_detail = _test_isolation()
+        if iso_mode == "unavailable":
+            log.warning("verify_diff_tests: %s — UNVERIFIED (no run, no finding)", iso_detail)
+            _v_unverified("test isolation unavailable")
+            return None
         fetch_url = f"https://github.com/{pr.repo}.git"
         if _run(["git", "init", "-q"], cwd=workdir).returncode != 0:
             _v_unverified("git init failed")
@@ -902,6 +953,10 @@ def verify_diff_tests(pr: PullRequest, config: RepoConfig, test_files: list[str]
             # chained or non-pytest runner: no host-controlled evidence yet —
             # rc is the only signal; a zero-exit with NO output is treated as
             # UNPROVEN (never a clean claim, never a false "did not run")
+            if iso_mode != "host":
+                # no isolated path for evidence-less runners: never run on the host
+                log.warning("verify_diff_tests: runner %r has no isolated path — UNVERIFIED", cmd)
+                return None
             result = _run(argv, cwd=workdir, timeout=config.test_timeout, env=env)
             green = result.returncode == 0
             if green and not f"{result.stdout}\n{result.stderr}".strip():

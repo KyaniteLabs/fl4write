@@ -591,6 +591,26 @@ _FAILURE_VERB_RE = re.compile(
     r"\b(fail(s|ed|ing|ure)?s?|break(s|ing)?|broke(n)?)\b")
 
 
+# Coverage-verb constructions ("the tests fail to COVER/exercise the new
+# branch") are NOT failure claims (UltraQA round 1, ADV-02; round-2 qualifier
+# variants per Sol audit: "fails to adequately cover", "failed to fully
+# exercise"); genuine failure verbs ("failed to compile/run/start") stay claims.
+_COVERAGE_VERB_RE = re.compile(
+    r"\bfail(s|ed|ing)? to (adequately |fully |properly |actually |really )?"
+    r"(cover|exercise|assert|test|reach|hit|touch|catch|detect|verify)\b")
+
+
+# Positive coverage-GAP wording: what a "no tests ship with this" reminder says.
+# The coverage-note ceiling needs this AND no failure claim, so a real failing
+# assertion phrased without a failure verb ("expects 2, receives 0") keeps its
+# severity.
+_COVERAGE_GAP_RE = re.compile(
+    r"\b(?:no|missing|lacks?|lacking|without)\b[^.;!?\n]{0,30}\btests?\b"
+    r"|\buntested\b|\bnot (?:covered|tested|accompanied)\b|\bcoverage gap\b"
+    r"|\bfail(?:s|ed|ing)? to (?:adequately |fully |properly |actually |really )?"
+    r"(?:cover|exercise)\b")
+
+
 def _failure_claimed(text: str) -> bool:
     """F13-A6-follow-on: a failure verb is a CLAIM unless a negation ends
     within ~a clause of it — 'never fail' refutes; 'never runs it: skip
@@ -793,20 +813,26 @@ def analyze(
     # engine can actually prove it); anything else is a coverage note -> Major.
     for f in findings:
         if f.severity == "Critical" and f.rule_id in ("testing-quality", "tests"):
-            low = f.message.lower()
-            # coverage-verb constructions ("the tests fail to COVER/exercise the
-            # new branch") are NOT failure claims (UltraQA round 1, ADV-02;
-            # round-2 qualifier variants per Sol audit: "fails to adequately
-            # cover", "failed to fully exercise"); genuine failure verbs
-            # ("failed to compile/run/start") stay claims.
-            low = re.sub(
-                r"\bfail(s|ed|ing)? to (adequately |fully |properly |actually |really )?"
-                r"(cover|exercise|assert|test|reach|hit|touch)\b",
-                " ", low)
+            low = _COVERAGE_VERB_RE.sub(" ", f.message.lower())
             claims_failure = _failure_claimed(low)
             if not claims_failure or not (config.test_cmd or "").strip():
                 f.severity = "Major"
                 log.info("demoted testing-quality Critical->Major (unverifiable/no-failure claim): %s:%s",
+                         scrub.inline(f.path, 200), f.line)
+    # Coverage-note ceiling (2026-09-17 reliability baseline: both clean-case
+    # false positives were "the new function is not accompanied by any tests"
+    # at Major): a testing-family finding that names a coverage gap and claims
+    # no failing or red test is a reminder, not a defect -> Minor. It still renders; it no longer
+    # counts as actionable (Critical/Major) or feeds Major-floor fix lanes.
+    for f in findings:
+        if f.severity in ("Critical", "Major") and f.rule_id in ("testing-quality", "tests"):
+            raw = f.message.lower()
+            low = _COVERAGE_VERB_RE.sub(" ", _REFUTATION_SPAN_RE.sub(
+                " ", _normalize_negations(raw)))
+            if _COVERAGE_GAP_RE.search(raw) and not (
+                    _failure_claimed(low) or re.search(r"\bred\b", low)):
+                f.severity = "Minor"
+                log.info("demoted testing-family finding->Minor (coverage note): %s:%s",
                          scrub.inline(f.path, 200), f.line)
     # L1-B3: a secrets-family Critical must carry a LITERAL credential in the
     # message — a token PREFIX (ghp_/sk-/AKIA/xoxb/glpat-) or a high-entropy

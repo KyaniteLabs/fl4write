@@ -61,6 +61,14 @@ Run in shadow mode (`shadow: true`) first — findings log, nothing posts.
 Cutover checklist: 48h shadow diff reviewed → host decision recorded (always-on
 host OR explicitly accepted sleep gap) → PAT scopes enumerated + rotation set.
 
+**Executed tests are isolated.** The verify gate and the fix lane run a PR's
+tests (untrusted code) only inside the reviewed Docker runtime: no network, no
+host home, read-only source, non-root. Build it once on the runner and export
+its image id (`FL4WRITE_TEST_IMAGE=sha256:...`, env or `~/.bashrc`); see
+[the runtime guide](tools/exhaustive-runtime/README.md). Without an image those
+lanes refuse to execute code. `FL4WRITE_TEST_ISOLATION=host` restores the old
+same-user host execution as an explicit, logged opt-out.
+
 ## Status — v0.4+ production (fleet of 130 central configs; see PILOT.md)
 
 All five review modes live (open-PR, post-merge, retro audit, ci_watch,
@@ -74,7 +82,7 @@ Current fleet state (2026-09-05; recovered [audit ledger](docs/pm-recovery/ROUND
 across GitHub + Forgejo in hourly cycles; the tier scheduler selects due repos
 (`run-cycle.sh`, hourly crontab, single-host law — LEARNINGS #17).
 
-The merged suite (exhaustive-loop candidate + main) is **1368 passing + 4 skipped** — count stamped by the doc-truth verifier run on a clean tree; hand-editing this figure is a false receipt (REVIEW LAWS 2026-09-19).
+The merged suite (exhaustive-loop candidate + main) is **1408 passing + 4 skipped** — count stamped by the doc-truth verifier run on a clean tree; hand-editing this figure is a false receipt (REVIEW LAWS 2026-09-19).
 
 The unmerged repair candidate at `81a97d5` passed **1039 live tests with zero
 skips**, Ruff and canonical Forgejo CI. Its default suite passed 1036 tests

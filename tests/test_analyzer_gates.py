@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from fl4write import config as cfg
 from fl4write.analyzer import analyze
 from fl4write.models import PullRequest
@@ -118,7 +120,7 @@ class TestSelfContradictionGate:
         }
         doc = _analyze(monkeypatch, item)
         assert len(doc.findings) == 1
-        assert doc.findings[0].severity == "Major"  # L1-B5 ceiling applies
+        assert doc.findings[0].severity == "Minor"  # coverage note: L1-B5 then the coverage-note ceiling
 
     def test_major_self_contradiction_also_dropped(self, monkeypatch):
         item = {
@@ -164,7 +166,7 @@ class TestTestingQualityCeiling:
         }
         doc = _analyze(monkeypatch, item, config=make_config())
         assert len(doc.findings) == 1
-        assert doc.findings[0].severity == "Major"
+        assert doc.findings[0].severity == "Minor"  # coverage note: L1-B5 then the coverage-note ceiling
 
     def test_failure_claim_without_test_cmd_demoted(self, monkeypatch):
         # even an explicit "would fail" claim is unverifiable when the bot cannot
@@ -201,6 +203,56 @@ class TestTestingQualityCeiling:
         doc = _analyze(monkeypatch, item, config=make_config())
         assert len(doc.findings) == 1
         assert doc.findings[0].severity == "Critical"
+
+
+class TestCoverageNoteCeiling:
+    """A testing-family finding that names a coverage gap and claims no failing
+    or red test is a reminder, not a defect: it lands at Minor (2026-09-17
+    reliability baseline — both clean-case false positives were these, at
+    Major). Real failure claims keep their severity."""
+
+    def _item(self, message, sev="Major", rule="testing-quality"):
+        return {"rule_id": rule, "severity": sev, "path": "users_query.py",
+                "line": 3, "category": "c", "message": message}
+
+    @pytest.mark.parametrize("message", [
+        # the baseline's two clean-case false positives, verbatim heads
+        "The new query function `find_user` is not accompanied by any tests. "
+        "The repository law `testing-quality` requires that core logic be tested.",
+        "The new logic in `count_lines` is not accompanied by any tests. The "
+        "repository law requires that changes to logic ship with tests.",
+        "This change ships without tests for the new branch.",
+        "The helper is untested.",
+    ])
+    def test_coverage_gap_lands_minor(self, monkeypatch, message):
+        doc = _analyze(monkeypatch, self._item(message))
+        assert [f.severity for f in doc.findings] == ["Minor"]
+
+    def test_tests_rule_alias_also_capped(self, monkeypatch):
+        doc = _analyze(monkeypatch, self._item("No tests cover the new parser.", rule="tests"),
+                       config=make_config(review={"tests": "logic ships with tests"}))
+        assert [f.severity for f in doc.findings] == ["Minor"]
+
+    @pytest.mark.parametrize("message", [
+        "The test `test_median_odd_unsorted` fails against the implementation; "
+        "there are no tests for the even case either.",
+        "No tests were updated and the existing suite is red on this change.",
+        "The new parser lacks tests, and test_parse breaks on empty input.",
+    ])
+    def test_failure_claim_keeps_major(self, monkeypatch, message):
+        doc = _analyze(monkeypatch, self._item(message))
+        assert [f.severity for f in doc.findings] == ["Major"]
+
+    def test_failing_assertion_without_gap_wording_keeps_major(self, monkeypatch):
+        # no failure verb, but no coverage-gap wording either: a real claim
+        doc = _analyze(monkeypatch, self._item(
+            "The test expects 2 digests but the implementation reports 0."))
+        assert [f.severity for f in doc.findings] == ["Major"]
+
+    def test_other_rules_untouched(self, monkeypatch):
+        doc = _analyze(monkeypatch, self._item(
+            "The new function has no tests and leaks the file handle.", rule="general"))
+        assert [f.severity for f in doc.findings] == ["Major"]
 
 
 class TestSolAuditPins:
@@ -271,7 +323,7 @@ class TestSolAuditPins:
         }
         doc = _analyze(monkeypatch, item, config=make_config(test_cmd="pnpm vitest run"))
         assert len(doc.findings) == 1
-        assert doc.findings[0].severity == "Major"
+        assert doc.findings[0].severity == "Minor"  # coverage note: L1-B5 then the coverage-note ceiling
 
     def test_unicode_and_empty_messages_safe(self, monkeypatch):
         item = {
