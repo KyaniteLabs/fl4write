@@ -53,7 +53,7 @@ The FL4WRITE product: this repo, the 154-repo fleet (58 GitHub originals + 46 Fo
 ## KEY TRAPS (full stories in LEARNINGS.md)
 
 - **Racing branches**: the CEO's docs sweeps rebase from stale bases and eat in-repo .fl4write.yaml files. Surveillance catches them; re-adopt on current main; verify CONTENTS-ON-BRANCH.
-- **Cloudflare WAF**: blocks API writes from non-browser UAs to git.kyanitelabs.tech. Use tailnet-direct ($FL4WRITE_FORGEJO_API_BASE) for all Forgejo writes.
+- **Cloudflare WAF**: blocks API writes from non-browser UAs to git.kyanitelabs.tech. Use tailnet-direct (the `api_base` in the `*.fj.fl4write.yaml` configs) for all Forgejo writes.
 - **Forgejo push-locks**: repos with `master` default have branch protection. Use new_branch→PR→merge. The admin CI-bypass (temporarily disable status checks) works for stubborn cases.
 - **Fixture time-rot**: hardcoded dates in tests expire. Use time-relative fixtures. Four rounds of this already.
 - **Deploy what you define**: new rules/features must be verified against the production config-loading path before claiming they ship.

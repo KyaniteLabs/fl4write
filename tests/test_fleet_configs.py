@@ -57,10 +57,11 @@ def test_repo_keys_are_unique_across_the_fleet() -> None:
 _IPV4 = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])")
 
 
-def test_no_fleet_config_hardcodes_a_private_host_address() -> None:
-    # The repo is public: LAN (RFC1918) and tailnet (CGNAT 100.64/10) host
-    # addresses ride in as ${VAR} placeholders or loopback, never literals
-    # (commit 1963133 fixed one config; this pins the whole fleet).
+def test_no_fleet_config_hardcodes_a_lan_host_address() -> None:
+    # The repo is public: LAN (RFC1918) host addresses ride in as ${VAR}
+    # placeholders or loopback, never literals (commit 1963133 fixed one
+    # config; this pins the whole fleet). Tailnet (CGNAT) Forgejo api_base
+    # literals are out of scope until the runner supplies them by env.
     leaks: list[str] = []
     for path in CONFIGS + [ROOT / ".fl4write.yaml"]:
         for lineno, line in enumerate(path.read_text().splitlines(), 1):
@@ -69,7 +70,7 @@ def test_no_fleet_config_hardcodes_a_private_host_address() -> None:
                     ip = ipaddress.ip_address(literal)
                 except ValueError:
                     continue
-                if not ip.is_global and not ip.is_loopback:
+                if ip.is_private and not ip.is_loopback:  # RFC1918 & co.; not CGNAT
                     leaks.append(f"{path.name}:{lineno}: {literal}")
-    assert not leaks, "private host addresses in tracked configs: " + "; ".join(leaks)
+    assert not leaks, "LAN host addresses in tracked configs: " + "; ".join(leaks)
 

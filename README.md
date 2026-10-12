@@ -101,11 +101,11 @@ For providers that support it, a model route can set `thinking: enabled` or
 `thinking: disabled`. Omitting it preserves the provider default. The proxy pins
 this setting to the selected route, so isolated callers cannot override it.
 
-**Launcher-provided hosts:** tracked configs never carry LAN or tailnet host
-addresses (pinned by `tests/test_fleet_configs.py`). `run-cycle.sh` supplies
-`FL4WRITE_MODEL_ENDPOINT` (defaults to loopback) and
-`FL4WRITE_FORGEJO_API_BASE` (tailnet-direct Forgejo API; read from the
-environment or `~/.bashrc`, no default) before the scheduler loads any config.
+**Host addresses in configs:** tracked configs never carry LAN (RFC1918) host
+addresses (pinned by `tests/test_fleet_configs.py`): local engines are reached
+on loopback, and `run-cycle.sh` supplies `FL4WRITE_MODEL_ENDPOINT` (defaults to
+loopback). The Forgejo configs still name the tailnet-direct Forgejo API
+(`api_base`); moving that to the environment is a follow-up.
 
 Round 14 remains open; no exhaustive certification is
 claimed. CI on every push. Quality loop on

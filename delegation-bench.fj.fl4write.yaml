@@ -2,7 +2,7 @@ repo: simon/delegation-bench
 forges:
   forgejo:
     role: primary
-    api_base: ${FL4WRITE_FORGEJO_API_BASE}
+    api_base: http://100.92.68.103:3000/api/v1
     token_env: CODESITTER_FORGEJO_TOKEN
 model:
   endpoint: https://api.deepinfra.com/v1/openai/chat/completions

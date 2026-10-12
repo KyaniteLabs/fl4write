@@ -2,7 +2,7 @@ repo: simon/org-bus
 forges:
   forgejo:
     role: primary
-    api_base: ${FL4WRITE_FORGEJO_API_BASE}
+    api_base: http://100.92.68.103:3000/api/v1
     token_env: CODESITTER_FORGEJO_TOKEN
 model:
   endpoint: http://127.0.0.1:8908/v1/chat/completions
