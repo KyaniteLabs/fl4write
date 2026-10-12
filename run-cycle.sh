@@ -72,6 +72,19 @@ if [ -z "${CODESITTER_FORGEJO_TOKEN:-}" ]; then
     export CODESITTER_FORGEJO_TOKEN=$(grep "^export CODESITTER_FORGEJO_TOKEN=" ~/.bashrc 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')
 fi
 
+# Executed test code (verify gate, fix lane) runs only in the isolated Docker
+# runtime (tools/exhaustive-runtime). Same .bashrc extraction as the tokens;
+# without an image those lanes refuse to execute code (UNVERIFIED / no fix).
+for _iso_var in FL4WRITE_TEST_IMAGE FL4WRITE_TEST_ISOLATION; do
+    if [ -z "${!_iso_var:-}" ]; then
+        _iso_val=$(grep "^export ${_iso_var}=" ~/.bashrc 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')
+        [ -n "$_iso_val" ] && export "${_iso_var}=${_iso_val}"
+    fi
+done
+if [ -z "${FL4WRITE_TEST_IMAGE:-}" ] && [ "${FL4WRITE_TEST_ISOLATION:-}" != "host" ]; then
+    echo "$(date -Iseconds) WARN: FL4WRITE_TEST_IMAGE unset — verify/fix lanes will not execute tests (see tools/exhaustive-runtime/README.md)" >> "$LOG"
+fi
+
 # Lever 3b (2026-09-27): the tracked fl4write config takes its LAN model
 # endpoint from the environment (${FL4WRITE_MODEL_ENDPOINT} placeholder).
 # Without it the hourly scheduler alert-fallbacks this repo every cycle.

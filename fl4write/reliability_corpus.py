@@ -11,7 +11,9 @@ NO wall-clock dates anywhere in fixture data — every case is pure code):
   comorbidity classes) and keep their impl+failing-test shape so numbers
   stay comparable with the 09-16 desk receipt (3/3 recall, Champion).
   Cases 4-10 are new single-file classes with NO test in the diff — they
-  measure the model's own reading of code, not test-tracing.
+  measure the model's own reading of code, not test-tracing. Cases 11-20
+  (corpus growth) add ten more single-file classes in the same shape; each
+  was executed when added to confirm the defect is real, not merely styled.
 
 - CLEAN_CASES: plausible, correct, LAW-CLEAN feature diffs (each ships its
   tests — org law: changes to logic ship with tests). Any finding on them is
@@ -20,7 +22,10 @@ NO wall-clock dates anywhere in fixture data — every case is pure code):
   clean cases were test-less, so law-mandated missing-tests notes were
   counted as FPs — both recorded baseline readings of actionable-FP were
   inflated by this; the law-note rate stays derivable from records instead
-  of masquerading as noise.
+  of masquerading as noise. Twenty clean cases (one per defect class where a
+  correct counterpart exists, plus independent features) so one false
+  positive moves the rate 5 points, not 20. "Clean by construction" is a
+  CHECKED claim: tests/test_reliability.py runs every clean case's own tests.
 
 build_case_diff() emits a realistic new-file unified diff (diff --git +
 @@ hunks) so the analyzer's grounding gates (path in diff, line inside
@@ -214,6 +219,170 @@ DEFECT_CASES = [
             ),
         },
     },
+    {
+        "id": "path-join-escape",
+        "defect_class": "path-traversal",
+        "origin": "harness class (corpus growth)",
+        "title": "Add attachment download helper",
+        "files": {
+            "attachments.py": (
+                "from pathlib import Path\n"
+                "\n"
+                "UPLOAD_ROOT = Path('/srv/uploads')\n"
+                "\n"
+                "\n"
+                "def read_attachment(name: str) -> bytes:\n"
+                "    'Return the bytes of an uploaded attachment by file name.'\n"
+                "    return (UPLOAD_ROOT / name).read_bytes()\n"
+            ),
+        },
+    },
+    {
+        "id": "shell-true-grep",
+        "defect_class": "shell-injection",
+        "origin": "harness class (corpus growth)",
+        "title": "Add log search helper",
+        "files": {
+            "log_search.py": (
+                "import subprocess\n"
+                "\n"
+                "\n"
+                "def count_matches(pattern: str, log_path: str) -> int:\n"
+                "    'Count log lines matching a user-supplied pattern.'\n"
+                '    out = subprocess.run(f"grep -c {pattern} {log_path}", shell=True,\n'
+                "                         capture_output=True, text=True)\n"
+                "    return int(out.stdout.strip() or 0)\n"
+            ),
+        },
+    },
+    {
+        "id": "shared-default-list",
+        "defect_class": "mutable-default-arg",
+        "origin": "harness class (corpus growth)",
+        "title": "Add tag builder",
+        "files": {
+            "tags.py": (
+                "def with_tag(tag: str, tags: list[str] = []) -> list[str]:\n"
+                "    'Return a tag list that includes tag (new list unless one is given).'\n"
+                "    tags.append(tag)\n"
+                "    return tags\n"
+            ),
+        },
+    },
+    {
+        "id": "floor-division-mean",
+        "defect_class": "integer-division-truncation",
+        "origin": "harness class (corpus growth)",
+        "title": "Add latency average",
+        "files": {
+            "latency.py": (
+                "def mean_latency_ms(samples: list[float]) -> float:\n"
+                "    'Arithmetic mean of latency samples in milliseconds.'\n"
+                "    if not samples:\n"
+                "        raise ValueError('no samples')\n"
+                "    return sum(samples) // len(samples)\n"
+            ),
+        },
+    },
+    {
+        "id": "range-skips-last",
+        "defect_class": "range-excludes-last",
+        "origin": "harness class (corpus growth)",
+        "title": "Add invoice total",
+        "files": {
+            "invoice.py": (
+                "def invoice_total(line_amounts: list[int]) -> int:\n"
+                "    'Sum of every invoice line amount, in cents.'\n"
+                "    total = 0\n"
+                "    for i in range(len(line_amounts) - 1):\n"
+                "        total += line_amounts[i]\n"
+                "    return total\n"
+            ),
+        },
+    },
+    {
+        "id": "regex-match-prefix",
+        "defect_class": "unanchored-regex",
+        "origin": "harness class (corpus growth)",
+        "title": "Add username validation",
+        "files": {
+            "usernames.py": (
+                "import re\n"
+                "\n"
+                "_USERNAME = re.compile(r'[a-z0-9_]{3,20}')\n"
+                "\n"
+                "\n"
+                "def is_valid_username(name: str) -> bool:\n"
+                "    'True when name is 3-20 chars of lowercase letters, digits, underscore.'\n"
+                "    return _USERNAME.match(name) is not None\n"
+            ),
+        },
+    },
+    {
+        "id": "pickle-request-body",
+        "defect_class": "unsafe-deserialization",
+        "origin": "harness class (corpus growth)",
+        "title": "Add session import endpoint",
+        "files": {
+            "session_import.py": (
+                "import base64\n"
+                "import pickle\n"
+                "\n"
+                "\n"
+                "def import_session(body: str) -> dict:\n"
+                "    'Decode a client-supplied session blob (base64) into a dict.'\n"
+                "    return pickle.loads(base64.b64decode(body))\n"
+            ),
+        },
+    },
+    {
+        "id": "counter-keyerror",
+        "defect_class": "missing-key-default",
+        "origin": "harness class (corpus growth)",
+        "title": "Add word frequency helper",
+        "files": {
+            "wordfreq.py": (
+                "def word_counts(text: str) -> dict[str, int]:\n"
+                "    'Count how often each whitespace-separated word appears.'\n"
+                "    counts: dict[str, int] = {}\n"
+                "    for word in text.split():\n"
+                "        counts[word] += 1\n"
+                "    return counts\n"
+            ),
+        },
+    },
+    {
+        "id": "is-string-compare",
+        "defect_class": "identity-vs-equality",
+        "origin": "harness class (corpus growth)",
+        "title": "Add job status check",
+        "files": {
+            "jobs.py": (
+                "def is_finished(status: str) -> bool:\n"
+                "    'True when a job status string reports completion.'\n"
+                '    return status is "done"\n'
+            ),
+        },
+    },
+    {
+        "id": "lambda-late-binding",
+        "defect_class": "late-binding-closure",
+        "origin": "harness class (corpus growth)",
+        "title": "Add per-level log handlers",
+        "files": {
+            "handlers.py": (
+                "LEVELS = ['debug', 'info', 'error']\n"
+                "\n"
+                "\n"
+                "def build_handlers() -> dict:\n"
+                "    'Map each level name to a callable returning that level name.'\n"
+                "    handlers = {}\n"
+                "    for level in LEVELS:\n"
+                "        handlers[level] = lambda: level\n"
+                "    return handlers\n"
+            ),
+        },
+    },
 ]
 
 CLEAN_CASES = [
@@ -336,6 +505,459 @@ CLEAN_CASES = [
                 "def is_critical(sev_score: int) -> bool:\n"
                 "    'Critical when score >= 90.'\n"
                 "    return sev_score >= 90\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-safe-path",
+        "origin": "correct counterpart of path-join-escape",
+        "title": "Add attachment download helper",
+        "files": {
+            "test_attachments_safe.py": (
+                "import pytest\n"
+                "from attachments_safe import read_attachment\n"
+                "\n"
+                "\n"
+                "def test_reads_file_inside_root(tmp_path):\n"
+                "    (tmp_path / 'a.txt').write_bytes(b'hi')\n"
+                "    assert read_attachment(tmp_path, 'a.txt') == b'hi'\n"
+                "\n"
+                "\n"
+                "def test_rejects_escape(tmp_path):\n"
+                "    with pytest.raises(ValueError):\n"
+                "        read_attachment(tmp_path, '../outside.txt')\n"
+            ),
+            "attachments_safe.py": (
+                "from pathlib import Path\n"
+                "\n"
+                "\n"
+                "def read_attachment(root: Path, name: str) -> bytes:\n"
+                "    'Return an uploaded file by name; names may not leave root.'\n"
+                "    base = root.resolve()\n"
+                "    target = (base / name).resolve()\n"
+                "    if not target.is_relative_to(base):\n"
+                "        raise ValueError('attachment name escapes the upload root')\n"
+                "    return target.read_bytes()\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-subprocess-argv",
+        "origin": "correct counterpart of shell-true-grep",
+        "title": "Add log search helper",
+        "files": {
+            "test_log_search_safe.py": (
+                "from log_search_safe import count_matches\n"
+                "\n"
+                "\n"
+                "def test_counts_and_treats_pattern_as_data(tmp_path):\n"
+                "    log = tmp_path / 'app.log'\n"
+                "    log.write_text('ok\\nerror one\\nerror; echo x\\n')\n"
+                "    assert count_matches('error', str(log)) == 2\n"
+                "    assert count_matches('x; echo PWNED', str(log)) == 0\n"
+            ),
+            "log_search_safe.py": (
+                "import subprocess\n"
+                "\n"
+                "\n"
+                "def count_matches(pattern: str, log_path: str) -> int:\n"
+                "    'Count log lines matching pattern (passed as an argument, no shell).'\n"
+                '    out = subprocess.run(["grep", "-c", "-e", pattern, "--", log_path],\n'
+                "                         capture_output=True, text=True, timeout=30)\n"
+                "    if out.returncode not in (0, 1):  # 1 = no lines matched\n"
+                "        raise RuntimeError(out.stderr.strip() or 'grep failed')\n"
+                "    return int(out.stdout.strip() or 0)\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-default-none",
+        "origin": "correct counterpart of shared-default-list",
+        "title": "Add tag builder",
+        "files": {
+            "test_tags_safe.py": (
+                "from tags_safe import with_tag\n"
+                "\n"
+                "\n"
+                "def test_fresh_list_each_call():\n"
+                "    assert with_tag('a') == ['a']\n"
+                "    assert with_tag('b') == ['b']\n"
+                "\n"
+                "\n"
+                "def test_extends_given_list_without_mutating_it():\n"
+                "    given = ['x']\n"
+                "    assert with_tag('y', given) == ['x', 'y']\n"
+                "    assert given == ['x']\n"
+            ),
+            "tags_safe.py": (
+                "def with_tag(tag: str, tags: list[str] | None = None) -> list[str]:\n"
+                "    'Return a new tag list: the given tags (if any) plus tag.'\n"
+                "    return [*(tags or []), tag]\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-true-mean",
+        "origin": "correct counterpart of floor-division-mean",
+        "title": "Add latency average",
+        "files": {
+            "test_latency_safe.py": (
+                "import pytest\n"
+                "from latency_safe import mean_latency_ms\n"
+                "\n"
+                "\n"
+                "def test_mean_keeps_fraction():\n"
+                "    assert mean_latency_ms([1.0, 2.0]) == 1.5\n"
+                "\n"
+                "\n"
+                "def test_empty_raises():\n"
+                "    with pytest.raises(ValueError):\n"
+                "        mean_latency_ms([])\n"
+            ),
+            "latency_safe.py": (
+                "def mean_latency_ms(samples: list[float]) -> float:\n"
+                "    'Arithmetic mean of latency samples in milliseconds.'\n"
+                "    if not samples:\n"
+                "        raise ValueError('no samples')\n"
+                "    return sum(samples) / len(samples)\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-invoice-sum",
+        "origin": "correct counterpart of range-skips-last",
+        "title": "Add invoice total",
+        "files": {
+            "test_invoice_safe.py": (
+                "from invoice_safe import invoice_total\n"
+                "\n"
+                "\n"
+                "def test_sums_every_line():\n"
+                "    assert invoice_total([100, 250]) == 350\n"
+                "\n"
+                "\n"
+                "def test_empty_invoice_is_zero():\n"
+                "    assert invoice_total([]) == 0\n"
+            ),
+            "invoice_safe.py": (
+                "def invoice_total(line_amounts: list[int]) -> int:\n"
+                "    'Sum of every invoice line amount, in cents.'\n"
+                "    return sum(line_amounts)\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-fullmatch",
+        "origin": "correct counterpart of regex-match-prefix",
+        "title": "Add username validation",
+        "files": {
+            "test_usernames_safe.py": (
+                "from usernames_safe import is_valid_username\n"
+                "\n"
+                "\n"
+                "def test_accepts_plain_names():\n"
+                "    assert is_valid_username('bob_42')\n"
+                "\n"
+                "\n"
+                "def test_rejects_trailing_junk_and_short():\n"
+                "    assert not is_valid_username('bob; DROP TABLE users')\n"
+                "    assert not is_valid_username('ab')\n"
+            ),
+            "usernames_safe.py": (
+                "import re\n"
+                "\n"
+                "_USERNAME = re.compile(r'[a-z0-9_]{3,20}')\n"
+                "\n"
+                "\n"
+                "def is_valid_username(name: str) -> bool:\n"
+                "    'True when name is 3-20 chars of lowercase letters, digits, underscore.'\n"
+                "    return _USERNAME.fullmatch(name) is not None\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-json-session",
+        "origin": "correct counterpart of pickle-request-body",
+        "title": "Add session import endpoint",
+        "files": {
+            "test_session_import_safe.py": (
+                "import base64\n"
+                "import json\n"
+                "\n"
+                "import pytest\n"
+                "from session_import_safe import import_session\n"
+                "\n"
+                "\n"
+                "def _blob(obj):\n"
+                "    return base64.b64encode(json.dumps(obj).encode()).decode()\n"
+                "\n"
+                "\n"
+                "def test_round_trip():\n"
+                "    assert import_session(_blob({'user': 'a'})) == {'user': 'a'}\n"
+                "\n"
+                "\n"
+                "def test_non_object_rejected():\n"
+                "    with pytest.raises(ValueError):\n"
+                "        import_session(_blob([1, 2]))\n"
+            ),
+            "session_import_safe.py": (
+                "import base64\n"
+                "import json\n"
+                "\n"
+                "\n"
+                "def import_session(body: str) -> dict:\n"
+                "    'Decode a client-supplied session blob (base64 JSON object) into a dict.'\n"
+                "    data = json.loads(base64.b64decode(body, validate=True))\n"
+                "    if not isinstance(data, dict):\n"
+                "        raise ValueError('session blob must be a JSON object')\n"
+                "    return data\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-counter",
+        "origin": "correct counterpart of counter-keyerror",
+        "title": "Add word frequency helper",
+        "files": {
+            "test_wordfreq_safe.py": (
+                "from wordfreq_safe import word_counts\n"
+                "\n"
+                "\n"
+                "def test_counts_repeats():\n"
+                "    assert word_counts('a b a') == {'a': 2, 'b': 1}\n"
+                "\n"
+                "\n"
+                "def test_empty_text():\n"
+                "    assert word_counts('') == {}\n"
+            ),
+            "wordfreq_safe.py": (
+                "from collections import Counter\n"
+                "\n"
+                "\n"
+                "def word_counts(text: str) -> dict[str, int]:\n"
+                "    'Count how often each whitespace-separated word appears.'\n"
+                "    return dict(Counter(text.split()))\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-status-equality",
+        "origin": "correct counterpart of is-string-compare",
+        "title": "Add job status check",
+        "files": {
+            "test_jobs_safe.py": (
+                "from jobs_safe import is_finished\n"
+                "\n"
+                "\n"
+                "def test_done_by_value():\n"
+                "    assert is_finished(''.join(['do', 'ne']))\n"
+                "\n"
+                "\n"
+                "def test_other_status():\n"
+                "    assert not is_finished('running')\n"
+            ),
+            "jobs_safe.py": (
+                "def is_finished(status: str) -> bool:\n"
+                "    'True when a job status string reports completion.'\n"
+                '    return status == "done"\n'
+            ),
+        },
+    },
+    {
+        "id": "clean-bound-handlers",
+        "origin": "correct counterpart of lambda-late-binding",
+        "title": "Add per-level log handlers",
+        "files": {
+            "test_handlers_safe.py": (
+                "from handlers_safe import build_handlers\n"
+                "\n"
+                "\n"
+                "def test_each_handler_keeps_its_level():\n"
+                "    h = build_handlers()\n"
+                "    assert [h[k]() for k in ('debug', 'info', 'error')] == ['debug', 'info', 'error']\n"
+            ),
+            "handlers_safe.py": (
+                "LEVELS = ['debug', 'info', 'error']\n"
+                "\n"
+                "\n"
+                "def build_handlers() -> dict:\n"
+                "    'Map each level name to a callable returning that level name.'\n"
+                "    return {level: (lambda level=level: level) for level in LEVELS}\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-token-compare",
+        "origin": "independent clean case (constant-time secret compare)",
+        "title": "Add webhook token check",
+        "files": {
+            "test_webhook_auth.py": (
+                "from webhook_auth import token_matches\n"
+                "\n"
+                "\n"
+                "def test_matching_and_mismatching():\n"
+                "    assert token_matches('abc123', 'abc123')\n"
+                "    assert not token_matches('abc124', 'abc123')\n"
+                "    assert not token_matches('', 'abc123')\n"
+            ),
+            "webhook_auth.py": (
+                "import hmac\n"
+                "\n"
+                "\n"
+                "def token_matches(supplied: str, expected: str) -> bool:\n"
+                "    'Constant-time comparison of a webhook token against the configured one.'\n"
+                "    return hmac.compare_digest(supplied.encode(), expected.encode())\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-retry",
+        "origin": "independent clean case (bounded retry)",
+        "title": "Add bounded retry helper",
+        "files": {
+            "test_retry.py": (
+                "import pytest\n"
+                "from retry import retry\n"
+                "\n"
+                "\n"
+                "def test_succeeds_after_transient_failures():\n"
+                "    calls, sleeps = [], []\n"
+                "\n"
+                "    def flaky():\n"
+                "        calls.append(1)\n"
+                "        if len(calls) < 3:\n"
+                "            raise ConnectionError('blip')\n"
+                "        return 'ok'\n"
+                "\n"
+                "    assert retry(flaky, attempts=3, sleep=sleeps.append) == 'ok'\n"
+                "    assert sleeps == [0.5, 1.0]\n"
+                "\n"
+                "\n"
+                "def test_gives_up_and_reraises():\n"
+                "    def always():\n"
+                "        raise ConnectionError('down')\n"
+                "\n"
+                "    with pytest.raises(ConnectionError):\n"
+                "        retry(always, attempts=2, sleep=lambda s: None)\n"
+            ),
+            "retry.py": (
+                "import time\n"
+                "from typing import Callable, TypeVar\n"
+                "\n"
+                "T = TypeVar('T')\n"
+                "\n"
+                "\n"
+                "def retry(fn: Callable[[], T], attempts: int = 3, base_delay: float = 0.5,\n"
+                "          sleep: Callable[[float], None] = time.sleep) -> T:\n"
+                "    'Call fn, retrying ConnectionError with doubling delay; re-raise the last.'\n"
+                "    if attempts < 1:\n"
+                "        raise ValueError('attempts must be >= 1')\n"
+                "    for attempt in range(attempts - 1):\n"
+                "        try:\n"
+                "            return fn()\n"
+                "        except ConnectionError:\n"
+                "            sleep(base_delay * 2 ** attempt)\n"
+                "    return fn()  # last attempt: its error propagates\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-chunks",
+        "origin": "independent clean case (list chunking)",
+        "title": "Add batch chunker",
+        "files": {
+            "test_batching.py": (
+                "import pytest\n"
+                "from batching import chunks\n"
+                "\n"
+                "\n"
+                "def test_even_and_ragged_tail():\n"
+                "    assert chunks([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]\n"
+                "    assert chunks([], 3) == []\n"
+                "\n"
+                "\n"
+                "def test_rejects_nonpositive_size():\n"
+                "    with pytest.raises(ValueError):\n"
+                "        chunks([1], 0)\n"
+            ),
+            "batching.py": (
+                "def chunks(items: list, size: int) -> list[list]:\n"
+                "    'Split items into consecutive batches of at most size elements.'\n"
+                "    if size < 1:\n"
+                "        raise ValueError('size must be >= 1')\n"
+                "    return [items[i:i + size] for i in range(0, len(items), size)]\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-slugify",
+        "origin": "independent clean case (string normalization)",
+        "title": "Add URL slug helper",
+        "files": {
+            "test_slugs.py": (
+                "from slugs import slugify\n"
+                "\n"
+                "\n"
+                "def test_basic_and_punctuation():\n"
+                "    assert slugify('Hello, World!') == 'hello-world'\n"
+                "    assert slugify('  --Already-Slugged--  ') == 'already-slugged'\n"
+                "\n"
+                "\n"
+                "def test_nothing_usable():\n"
+                "    assert slugify('!!!') == ''\n"
+            ),
+            "slugs.py": (
+                "import re\n"
+                "\n"
+                "\n"
+                "def slugify(title: str) -> str:\n"
+                "    'Lowercase ASCII slug: runs of non-alphanumerics become one hyphen.'\n"
+                "    return re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')\n"
+            ),
+        },
+    },
+    {
+        "id": "clean-env-flag",
+        "origin": "independent clean case (env parsing)",
+        "title": "Add feature flag reader",
+        "files": {
+            "test_flags.py": (
+                "import pytest\n"
+                "from flags import env_flag\n"
+                "\n"
+                "\n"
+                "def test_truthy_falsy_and_default(monkeypatch):\n"
+                "    monkeypatch.setenv('F', ' Yes ')\n"
+                "    assert env_flag('F') is True\n"
+                "    monkeypatch.setenv('F', '0')\n"
+                "    assert env_flag('F') is False\n"
+                "    monkeypatch.delenv('F')\n"
+                "    assert env_flag('F', default=True) is True\n"
+                "\n"
+                "\n"
+                "def test_garbage_raises(monkeypatch):\n"
+                "    monkeypatch.setenv('F', 'maybe')\n"
+                "    with pytest.raises(ValueError):\n"
+                "        env_flag('F')\n"
+            ),
+            "flags.py": (
+                "import os\n"
+                "\n"
+                "_TRUE = {'1', 'true', 'yes', 'on'}\n"
+                "_FALSE = {'0', 'false', 'no', 'off', ''}\n"
+                "\n"
+                "\n"
+                "def env_flag(name: str, default: bool = False) -> bool:\n"
+                "    'Read a boolean feature flag from the environment; unknown values raise.'\n"
+                "    raw = os.environ.get(name)\n"
+                "    if raw is None:\n"
+                "        return default\n"
+                "    value = raw.strip().lower()\n"
+                "    if value in _TRUE:\n"
+                "        return True\n"
+                "    if value in _FALSE:\n"
+                "        return False\n"
+                "    raise ValueError(f'{name} must be a boolean flag, got {raw!r}')\n"
             ),
         },
     },

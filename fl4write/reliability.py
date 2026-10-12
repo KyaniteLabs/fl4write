@@ -248,12 +248,18 @@ def fp_metrics(clean_records: list[dict]) -> dict:
     n = len(by_case)
     noise = sum(any(r["flag"] == "defect" for r in runs) for runs in by_case.values())
     actionable = sum(any(r["actionable"] for r in runs) for runs in by_case.values())
+    # which rules generate the noise: clean cases flagged per rule_id (a case
+    # counts once per rule however many runs/findings repeat it)
+    noise_by_rule: Counter = Counter()
+    for runs in by_case.values():
+        noise_by_rule.update({f["rule_id"] for r in runs for f in r.get("findings", [])})
     return {
         "clean_cases": n,
         "noise_fp_rate": noise / n if n else 0.0,
         "actionable_fp_rate": actionable / n if n else 0.0,
         "flagged_case_ids": sorted(cid for cid, runs in by_case.items()
                                    if any(r["flag"] == "defect" for r in runs)),
+        "noise_by_rule": dict(sorted(noise_by_rule.items())),
     }
 
 
@@ -401,6 +407,9 @@ def format_summary(report: dict) -> str:
     lines.append(f"\n## False positives (clean diffs)\n- noise: {fp['noise_fp_rate']:.1%}  "
                  f"actionable: {fp['actionable_fp_rate']:.1%} "
                  f"({fp['clean_cases']} clean cases; flagged: {', '.join(fp['flagged_case_ids']) or 'none'})")
+    if fp.get("noise_by_rule"):
+        lines.append("- noise by rule: " + ", ".join(
+            f"{rule}={n}" for rule, n in fp["noise_by_rule"].items()))
     cal = report["calibration"]
     lines.append(f"\n## Honest uncertainty\n- numeric confidence emitted by product: "
                  f"{cal['confidence_field_emitted']} (severity is the only claim-strength signal)")
