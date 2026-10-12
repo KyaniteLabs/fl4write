@@ -452,7 +452,9 @@ class ForgeAdapter:
                 title=title or "",
                 body=body or "",
                 head_sha=head_sha,
-                is_fork=bool(head_repo and head_repo != repo),
+                # Fail CLOSED: a PR whose head repo is unknown (missing, null,
+                # malformed) is a fork — every fork rail keys on this flag.
+                is_fork=not (isinstance(head_repo, str) and head_repo == repo),
                 author=login or "",
                 is_bot_author=str(user.get("type", "")).lower() == "bot",
                 merged_at=p.get("merged_at") or "",
