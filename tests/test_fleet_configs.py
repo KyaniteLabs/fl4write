@@ -11,7 +11,9 @@ Innerscape, checkyourself, devarch-framework, Elixis).
 
 from __future__ import annotations
 
+import ipaddress
 import pathlib
+import re
 
 import yaml
 
@@ -50,3 +52,25 @@ def test_repo_keys_are_unique_across_the_fleet() -> None:
         "duplicate repo keys — the loader cycles one config only, the rest ALERT every "
         "cycle and never run: " + "; ".join(duplicates)
     )
+
+
+_IPV4 = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])")
+
+
+def test_no_fleet_config_hardcodes_a_lan_host_address() -> None:
+    # The repo is public: LAN (RFC1918) host addresses ride in as ${VAR}
+    # placeholders or loopback, never literals (commit 1963133 fixed one
+    # config; this pins the whole fleet). Tailnet (CGNAT) Forgejo api_base
+    # literals are out of scope until the runner supplies them by env.
+    leaks: list[str] = []
+    for path in CONFIGS + [ROOT / ".fl4write.yaml"]:
+        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+            for literal in _IPV4.findall(line):
+                try:
+                    ip = ipaddress.ip_address(literal)
+                except ValueError:
+                    continue
+                if ip.is_private and not ip.is_loopback:  # RFC1918 & co.; not CGNAT
+                    leaks.append(f"{path.name}:{lineno}: {literal}")
+    assert not leaks, "LAN host addresses in tracked configs: " + "; ".join(leaks)
+

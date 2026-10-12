@@ -19,6 +19,6 @@ code, tests and desk tooling link to them by those paths.
 | `desk/` | Dated desk memos: CEO gate menu, platform coordination |
 | `brand/` | Design system and avatar prompt |
 
-Host addresses never appear in tracked files. Docs use placeholders
-(`<runner-host>`, `<forgejo-host>`); the runner reads real values from its
-environment (`FL4WRITE_FORGEJO_API_BASE`, `FL4WRITE_MODEL_ENDPOINT`).
+Docs use placeholders for hosts (`<runner-host>`, `<forgejo-host>`). Configs
+carry no LAN addresses (loopback or `FL4WRITE_MODEL_ENDPOINT` instead); the
+Forgejo configs' `api_base` still names the tailnet-direct Forgejo API.

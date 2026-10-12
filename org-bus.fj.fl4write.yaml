@@ -5,7 +5,7 @@ forges:
     api_base: http://100.92.68.103:3000/api/v1
     token_env: CODESITTER_FORGEJO_TOKEN
 model:
-  endpoint: http://192.168.1.72:8908/v1/chat/completions
+  endpoint: http://127.0.0.1:8908/v1/chat/completions
   model: Qwen3.8-27B
   key_env: ''
   temperature: 0.0
