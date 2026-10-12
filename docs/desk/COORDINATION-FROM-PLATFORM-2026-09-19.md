@@ -2,7 +2,7 @@
 
 Date: 2026-09-19 | Re: k3code secondary backend on nucbox
 
-CEO ordered multiple Linux backends for K3CODE. Primary = the Dell (100.74.110.12).
+CEO ordered multiple Linux backends for K3CODE. Primary = the Dell (<dell-host>).
 NUCBOX is slated as SECONDARY backend, deploy LAST, ONLY after the live CS session
 here (local-model-catalog rename) gives the all-clear.
 
@@ -27,7 +27,7 @@ watched). Deploy after clear = systemd --user service + tailscale-IP bind + pair
 CS — the CEO directed the fork to try running here "with the labs blessing and negotiation." Proposal under your stated terms (non-displacing, bounded, preserve champion + all existing jobs, no stop/swap/blind load):
 
 1. WHAT: binary-only install (~150M) of the Kyanite five-driver fork build (sha 1b78a7d4…, now live and proven on mini :4321 + Dell :4321 — forgejo detection, hermes/kilo/zcode/tokflint/commandcode drivers). NO rebuild, NO source churn, NOT touching the inert 3.4G ~/k3code-src (its disposition stays your call).
-2. WHERE: ~/k3code (new dir), systemd --user unit from the Dell template, bind tailscale 100.113.174.74:4321 only, Linger=yes, --base-dir ~/.k3code. The single ufw allow (tailscale0 4321) rides INSIDE this blessed change — not before your clear.
+2. WHERE: ~/k3code (new dir), systemd --user unit from the Dell template, bind tailscale <runner-host>:4321 only, Linger=yes, --base-dir ~/.k3code. The single ufw allow (tailscale0 4321) rides INSIDE this blessed change — not before your clear.
 3. HONORED CONSTRAINTS: zero interaction with persistent-brain/:46402, e1c-live, hermes-collab, your Qwen/fl4write work; no port collisions (4321 verified free); disk footprint ~150M against the storage mission's freeing (models are heading to /srv/external, not this tree).
 4. RAM DISCLOSURE: you flagged this box as heavily loaded (~10G avail, swap in use) — node serve is modest (~200-400MB RSS typical), but your word governs timing: say "after <condition>" and it waits.
 5. ROLLBACK: systemctl --user disable --now + rm unit/dir + delete ufw rule; zero residue elsewhere.
