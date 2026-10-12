@@ -68,6 +68,7 @@ no triage. Curated outcomes live in LEARNINGS.md.
 - 2026-09-05 live verification — model eval used a dummy endpoint; fleet-config tests leaked dummy credentials; nested suite parser rejected zero skips. Real full-suite evaluation now passes. Readiness score existed only in logs; complete issue bodies and one-time legacy refresh are now pinned. LEARNINGS #62; 672 release tests passed with zero skips, 64 added behavioral cases since recovery baseline.
 - 2026-09-05 D4 security — redact_credentials entropy gate let low-entropy 16+ char credential runs leak outside assignment context (e.g. "the value is aaaaaaaaaaaaaaaa"); fixed: any 16+ char alphanumeric run now redacted unless a known code identifier; regression test_low_entropy_run_redacted added; 674 passed / 3 skipped.
 
+- 2026-10-12 SECURITY fork-detection fail-open — a PR row with no usable head repo was classified same-repo, so fork rails (no test execution, comment-only fix lane, fork tone) could be skipped. Fixed fail-closed (unknown head repo = fork) on both adapters; 14 pins
 ## D7-031: split-token redaction swallows assignment key, leaking value
 
 **File:** `fl4write/scrub.py`, `redact_credentials()`
