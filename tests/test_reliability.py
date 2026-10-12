@@ -92,6 +92,33 @@ class TestCorpus:
                 assert (1, n_lines) in spans.get(path, []), \
                     f"{case['id']}/{path}: spans {spans.get(path)} vs {n_lines} lines"
 
+    def test_clean_cases_pass_their_own_tests(self, tmp_path):
+        """'Clean by construction' is checked, not asserted: every clean case
+        ships tests (org law), and those tests must pass on the case's code —
+        otherwise a finding on it is not a false positive at all."""
+        import subprocess
+        import sys
+        failures = []
+        for case in corpus.CLEAN_CASES:
+            case_dir = tmp_path / case["id"]
+            case_dir.mkdir()
+            assert any(Path(p).name.startswith("test_") for p in case["files"]), case["id"]
+            for path, code in case["files"].items():
+                (case_dir / path).write_text(code, encoding="utf-8")
+            run = subprocess.run(
+                [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+                cwd=case_dir, capture_output=True, text=True,
+                stdin=subprocess.DEVNULL, timeout=120)
+            if run.returncode != 0:
+                failures.append(f"{case['id']}: {run.stdout[-300:]}")
+        assert not failures, "clean cases whose own tests fail:\n" + "\n".join(failures)
+
+    def test_corpus_size_supports_meaningful_rates(self):
+        # one false positive in 5 clean cases moved the FP rate 20 points;
+        # keep the denominators large enough that a rate means something
+        assert len(corpus.DEFECT_CASES) >= 20
+        assert len(corpus.CLEAN_CASES) >= 20
+
     def test_corpus_carries_no_calendar_dates(self):
         """LEARNINGS #63 discipline, extended to eval fixture data: the
         corpus is pure code and must survive any calendar rotation."""
@@ -188,6 +215,18 @@ class TestFpMetrics:
         assert m["noise_fp_rate"] == pytest.approx(0.5)
         assert m["actionable_fp_rate"] == pytest.approx(0.25)
         assert m["flagged_case_ids"] == ["k2", "k3"]
+        assert m["noise_by_rule"] == {}  # records carry no findings
+
+    def test_noise_by_rule_counts_cases_not_findings(self):
+        def f(rule):
+            return {"rule_id": rule, "severity": "Minor", "path": "a.py", "line": 1, "message": ""}
+        r1 = _rec("k1", "", SIG_B, "defect", False, {"Minor": 2})
+        r1["findings"] = [f("testing-quality"), f("testing-quality")]
+        r1b = dict(r1)  # second run of the same case repeats the rule
+        r2 = _rec("k2", "", SIG_B, "defect", False, {"Minor": 2})
+        r2["findings"] = [f("testing-quality"), f("general")]
+        m = fp_metrics([r1, r1b, r2, _rec("k3", "", SIG_C, "clean", False, {})])
+        assert m["noise_by_rule"] == {"general": 1, "testing-quality": 2}
 
 
 class TestSeverityCalibration:
