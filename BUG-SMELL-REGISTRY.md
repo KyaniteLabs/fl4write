@@ -69,6 +69,8 @@ no triage. Curated outcomes live in LEARNINGS.md.
 - 2026-09-05 D4 security — redact_credentials entropy gate let low-entropy 16+ char credential runs leak outside assignment context (e.g. "the value is aaaaaaaaaaaaaaaa"); fixed: any 16+ char alphanumeric run now redacted unless a known code identifier; regression test_low_entropy_run_redacted added; 674 passed / 3 skipped.
 
 - 2026-10-12 SECURITY fork-detection fail-open — a PR row with no usable head repo was classified same-repo, so fork rails (no test execution, comment-only fix lane, fork tone) could be skipped. Fixed fail-closed (unknown head repo = fork) on both adapters; 14 pins
+- 2026-10-12 SECURITY executed-code isolation — verify gate (82 live GitHub repos) and fix lane (36 repos) ran untrusted test code as the runner user (documented residual: absolute-path reads of host secrets, open network). Now routed through the reviewed Docker runtime (exhaustive_sandbox.run_isolated); fail closed without FL4WRITE_TEST_IMAGE; FL4WRITE_TEST_ISOLATION=host is the explicit opt-out. E2E-probed on real Docker: host secret invisible, no network, read-only source, non-root, os._exit(0) fake refused; 16 pins
+
 ## D7-031: split-token redaction swallows assignment key, leaking value
 
 **File:** `fl4write/scrub.py`, `redact_credentials()`
