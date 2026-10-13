@@ -733,7 +733,7 @@ def _save_artifact(content, path):
     return hashlib.sha256(data).hexdigest()
 
 
-def gather_serving_state():
+def _gather_local_serving_state():
     """Gather live serving state from the local machine.
 
     Reads systemd unit files, /proc, and the CHAMPION-ROUTE-HASH to
@@ -818,6 +818,240 @@ def gather_serving_state():
         'endpoint': endpoint,
         'route_hash': route_hash,
     }
+
+
+def gather_remote_serving_state(host: str) -> dict:
+    """Gather serving state from a remote host via SSH.
+
+    Connects to *host* (must be reachable via ssh with no passphrase),
+    executes the same /proc + systemctl probes that the local path uses,
+    and returns an equivalent dict.  The remote host must be Linux/systemd.
+
+    If the SSH connection fails or the remote probes fail, returns a
+    dict with ``unavailable: True`` and ``reason`` — the receipt contract
+    requires fail-closed on unavailable state.
+
+    Returns dict with the same shape as _gather_local_serving_state(),
+    or ``{'unavailable': True, 'reason': ..., 'host': host}``.
+    """
+    import subprocess
+
+    _CANON = 'watchtower-effective/v1'
+    _UNIT = 'qwen27.service'
+    _ROUTE = '/home/simon/exp/CHAMPION-ROUTE-HASH'
+
+    # Remote probe script — runs on the serving host, outputs JSON.
+    # Collects boot_id, PID, start_ticks, cmdline, exe SHA, env SHA,
+    # route hash/endpoint, and unit file paths + content.
+    _PROBE = r'''
+import hashlib, json, os, re, shlex, subprocess, sys
+from pathlib import Path
+
+try:
+    route_text = Path("''' + _ROUTE + r'''").read_text().strip()
+except Exception as e:
+    json.dump({"unavailable": True, "reason": f"route read failed: {e}"}, sys.stdout)
+    sys.exit(0)
+
+route_hash = route_text.split()[0]
+fields = dict(re.findall(r'(\w+)=([^\s]+)', route_text))
+endpoint = fields.get("route", "unknown")
+
+try:
+    props = subprocess.check_output(
+        ["systemctl", "show", "''' + _UNIT + r'''", "-p", "FragmentPath",
+         "-p", "DropInPaths", "-p", "MainPID"], text=True)
+except Exception as e:
+    json.dump({"unavailable": True, "reason": f"systemctl failed: {e}"}, sys.stdout)
+    sys.exit(0)
+
+props = dict(line.split("=", 1) for line in props.splitlines())
+pid = int(props["MainPID"])
+if pid == 0:
+    json.dump({"unavailable": True, "reason": "unit not running (MainPID=0)"}, sys.stdout)
+    sys.exit(0)
+
+proc = Path("/proc") / str(pid)
+try:
+    cmdline = proc.joinpath("cmdline").read_bytes().rstrip(b"\x00").decode().split("\x00")
+    stat = proc.joinpath("stat").read_text().rsplit(")", 1)[1].split()
+    boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    environ_raw = proc.joinpath("environ").read_bytes().decode().split("\x00")
+except Exception as e:
+    json.dump({"unavailable": True, "reason": f"/proc read failed: {e}"}, sys.stdout)
+    sys.exit(0)
+
+live_env = dict(x.split("=", 1) for x in environ_raw if "=" in x)
+env_keys = ["HOME", "HSA_ENABLE_SDMA", "HSA_XNACK", "LD_LIBRARY_PATH"]
+env = {k: live_env.get(k) for k in env_keys}
+
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+def sha256_json(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                      ensure_ascii=False, allow_nan=False).encode("utf-8")).hexdigest()
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1048576), b""):
+            h.update(block)
+    return h.hexdigest()
+
+runtime = {
+    "boot_id": boot_id,
+    "pid": pid,
+    "start_ticks": int(stat[19]),
+    "argv_sha256": sha256_json(cmdline),
+    "executable_sha256": sha256_file(proc / "exe"),
+    "environment_sha256": sha256_json(env),
+}
+
+# Unit file manifest
+paths = [props["FragmentPath"]] + shlex.split(props.get("DropInPaths", ""))
+files = []
+for p in paths:
+    try:
+        files.append((p, Path(p).read_text()))
+    except Exception:
+        pass
+
+# Model weights from cmdline
+def model_identity(path):
+    p = Path(path)
+    match = re.search(r"/models--([^/]+)/snapshots/([0-9a-f]{40})/([^/]+)$", str(p))
+    if not match or not p.is_file() or p.stat().st_size <= 0:
+        return None
+    return {"repository": match[1], "revision": match[2], "file": match[3], "size": p.stat().st_size}
+
+weights = []
+for flag in ("-m", "--mmproj"):
+    try:
+        idx = cmdline.index(flag)
+        w = model_identity(cmdline[idx + 1])
+        if w:
+            weights.append(w)
+    except (ValueError, IndexError):
+        pass
+
+manifest = {
+    "canonicalization": "''' + _CANON + r'''",
+    "unit": "''' + _UNIT + r'''",
+    "files": [{"path": p, "sha256": sha256_bytes(text.encode())} for p, text in files],
+    "argv": cmdline,
+    "environment": env,
+    "weights": weights,
+    "binary": {"path": cmdline[0], "sha256": sha256_file(cmdline[0])},
+}
+manifest_sha256 = sha256_json(manifest)
+
+json.dump({
+    "runtime": runtime,
+    "manifest": manifest,
+    "manifest_sha256": manifest_sha256,
+    "endpoint": endpoint,
+    "route_hash": route_hash,
+}, sys.stdout)
+'''
+
+    try:
+        result = subprocess.run(
+            ['ssh', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=no',
+             host, 'python3', '-c', _PROBE],
+            capture_output=True, text=True, timeout=30)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return {'unavailable': True,
+                'reason': f'ssh connection failed: {exc}',
+                'host': host}
+
+    if result.returncode != 0:
+        return {'unavailable': True,
+                'reason': f'ssh probe exited {result.returncode}: {result.stderr[:200]}',
+                'host': host}
+
+    try:
+        state = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        return {'unavailable': True,
+                'reason': f'unparseable probe output: {exc}',
+                'host': host}
+
+    if state.get('unavailable'):
+        state['host'] = host
+        return state
+
+    state['collected_from'] = host
+    return state
+
+
+def gather_serving_state(host: str | None = None) -> dict:
+    """Gather serving state from local or remote host.
+
+    *host=None* (default): local /proc+systemd collection — requires
+    Linux with the serving unit running locally.
+    *host* given: SSH-based remote collection from that host.
+
+    Returns dict with runtime, manifest, manifest_sha256, endpoint,
+    route_hash — or ``{'unavailable': True, 'reason': ...}`` if
+    collection failed (fail-closed per receipt contract).
+    """
+    if host is None:
+        return _gather_local_serving_state()
+    return gather_remote_serving_state(host)
+
+
+def check_identity_binding(serving_before: dict,
+                           serving_after: dict) -> dict:
+    """Check that before/after serving identity match (no restart).
+
+    Compares boot_id and pid between before and after snapshots.
+    Returns ``{'ok': True}`` if identity is stable, or
+    ``{'ok': False, 'reason': ..., 'before': ..., 'after': ...}``
+    if identity changed or either snapshot is unavailable.
+
+    This is a pure function — it does not take any action, only
+    reports the binding status for the receipt to carry.
+    """
+    if serving_before.get('unavailable'):
+        return {
+            'ok': False,
+            'reason': f'before state unavailable: {serving_before.get("reason", "unknown")}',
+            'before': serving_before,
+            'after': serving_after,
+        }
+    if serving_after.get('unavailable'):
+        return {
+            'ok': False,
+            'reason': f'after state unavailable: {serving_after.get("reason", "unknown")}',
+            'before': serving_before,
+            'after': serving_after,
+        }
+
+    before_rt = serving_before.get('runtime', {})
+    after_rt = serving_after.get('runtime', {})
+
+    if before_rt.get('boot_id') != after_rt.get('boot_id'):
+        return {
+            'ok': False,
+            'reason': 'boot_id changed (system reboot during measurement)',
+            'before_boot_id': before_rt.get('boot_id'),
+            'after_boot_id': after_rt.get('boot_id'),
+            'before': serving_before,
+            'after': serving_after,
+        }
+
+    if before_rt.get('pid') != after_rt.get('pid'):
+        return {
+            'ok': False,
+            'reason': 'pid changed (serving process restarted during measurement)',
+            'before_pid': before_rt.get('pid'),
+            'after_pid': after_rt.get('pid'),
+            'before': serving_before,
+            'after': serving_after,
+        }
+
+    return {'ok': True}
 
 
 def build_receipt_row(report, report_path, serving_state_before,
@@ -935,13 +1169,24 @@ def build_receipt_row(report, report_path, serving_state_before,
             'error': tr.get('error', ''),
         })
 
+    # --- identity binding check (fail-closed on changed identity) ---
+    identity_check = check_identity_binding(
+        serving_state_before, serving_state_after)
+
+    # Gracefully handle unavailable serving states — the identity_binding
+    # field carries the failure; the receipt builder must not crash.
+    _UNAVAIL_MANIFEST = {'canonicalization': 'unavailable',
+                         'unit': 'unavailable'}
+    _UNAVAIL_RUNTIME = {'boot_id': 'unavailable', 'pid': 0}
+
     evidence_artifact = {
         'run_id': run_id,
         'inputs_sha256': inputs_sha,
         'report_sha256': report_sha,
-        'manifest': serving_state_before['manifest'],
-        'before_runtime': serving_state_before['runtime'],
-        'after_runtime': serving_state_after['runtime'],
+        'manifest': serving_state_before.get('manifest', _UNAVAIL_MANIFEST),
+        'before_runtime': serving_state_before.get('runtime', _UNAVAIL_RUNTIME),
+        'after_runtime': serving_state_after.get('runtime', _UNAVAIL_RUNTIME),
+        'identity_binding': identity_check,
         'requests': requests,
         'transport_summary': {
             'total_calls': len(requests),
@@ -960,15 +1205,18 @@ def build_receipt_row(report, report_path, serving_state_before,
         str(artifacts_dir / ('evidence-%s.json' % run_id[:12])))
 
     # --- trend row (minus payload_sha256) ---
+    # Use .get() for serving_state_before fields — unavailable state
+    # has no route_hash/endpoint/manifest fields.
     row = {
         'schema': _SCHEMA,
         'outcome': 'success',
         'run_id': run_id,
         'producer': 'fl4write-reliability',
-        'route_hash': serving_state_before['route_hash'],
-        'endpoint': serving_state_before['endpoint'],
-        'serving_manifest_sha256': serving_state_before['manifest_sha256'],
-        'runtime': serving_state_before['runtime'],
+        'route_hash': serving_state_before.get('route_hash', 'unavailable'),
+        'endpoint': serving_state_before.get('endpoint', 'unavailable'),
+        'serving_manifest_sha256': serving_state_before.get(
+            'manifest_sha256', 'unavailable'),
+        'runtime': serving_state_before.get('runtime', _UNAVAIL_RUNTIME),
         'started_at': ts,
         'ts': ts,
         'evaluator': evaluator,
