@@ -37,6 +37,8 @@ import datetime
 import hashlib
 import json
 import sys
+import time
+import urllib.request
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
@@ -306,8 +308,6 @@ def trend_row(report: dict, report_path: str = "") -> dict:
     Keeps recall math in one place so metric fixes never need parallel
     edits in shell-embedded Python.
     """
-    import time
-
     det = report.get("determinism", {})
     rec = report.get("recall", {})
     fp = report.get("false_positives", {})
@@ -454,36 +454,43 @@ def run_measurement(config: RepoConfig, runs: int = 5,
     """Full measurement. Determinism lane: N FRESH calls per sample case,
     completely outside the cache (repeats must be independent samples —
     a cached repeat would fabricate stability). Recall/clean lanes: one
-    cached call per case (parse + gates always re-run in-process)."""
+    cached call per case (parse + gates always re-run in-process).
+
+    TransportCollector wraps the measurement to capture per-request
+    transport evidence from every actual HTTP call.  Cache hits produce
+    no transport record — only real HTTP exchanges are observed.
+    """
     sample_ids = determinism_ids or corpus.DETERMINISM_SAMPLE
     cache = ResponseCache(cache_dir)
+    collector = TransportCollector()
 
-    # --- determinism lane: bare calls, no wrapper installed at all ---
-    det_records: list[dict] = []
-    for cid in sample_ids:
+    with collector:
+        # --- determinism lane: bare calls, no wrapper installed at all ---
+        det_records: list[dict] = []
+        for cid in sample_ids:
+            try:
+                case = corpus.case_by_id(cid)
+            except KeyError:
+                # Cycle-3: a stale sample id must fail closed as error records,
+                # not crash the whole measurement out of _guarded_run's belt.
+                det_records.extend({
+                    "case_id": cid, "defect_class": "", "kind": "clean",
+                    "signature": [], "flag": "error", "actionable": False,
+                    "severity_counts": {}, "findings": [],
+                    "error": f"unknown determinism case id: {cid}",
+                } for _ in range(runs))
+                continue
+            for _ in range(runs):
+                det_records.append(_guarded_run(case, config))
+        det = determinism_metrics(det_records)
+
+        # --- recall + clean lanes: honest cache ---
+        uninstall = install_cached_call(cache)
         try:
-            case = corpus.case_by_id(cid)
-        except KeyError:
-            # Cycle-3: a stale sample id must fail closed as error records,
-            # not crash the whole measurement out of _guarded_run's belt.
-            det_records.extend({
-                "case_id": cid, "defect_class": "", "kind": "clean",
-                "signature": [], "flag": "error", "actionable": False,
-                "severity_counts": {}, "findings": [],
-                "error": f"unknown determinism case id: {cid}",
-            } for _ in range(runs))
-            continue
-        for _ in range(runs):
-            det_records.append(_guarded_run(case, config))
-    det = determinism_metrics(det_records)
-
-    # --- recall + clean lanes: honest cache ---
-    uninstall = install_cached_call(cache)
-    try:
-        recall_records = [_guarded_run(c, config) for c in corpus.DEFECT_CASES]
-        clean_records = [_guarded_run(c, config) for c in corpus.CLEAN_CASES]
-    finally:
-        uninstall()
+            recall_records = [_guarded_run(c, config) for c in corpus.DEFECT_CASES]
+            clean_records = [_guarded_run(c, config) for c in corpus.CLEAN_CASES]
+        finally:
+            uninstall()
 
     report = {
         "measured_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -504,6 +511,8 @@ def run_measurement(config: RepoConfig, runs: int = 5,
                         "cache_hits": cache.hits, "cache_misses": cache.misses},
         "records": {"determinism": det_records, "recall": recall_records,
                     "clean": clean_records},
+        # Transport-real evidence: one record per actual HTTP call observed.
+        "transport_records": collector.records,
     }
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -606,6 +615,394 @@ def main(argv: list[str] | None = None) -> int:
         print("RELIABILITY GATES FAILED: " + "; ".join(failed_gates), file=sys.stderr)
         return 1
     return 0
+
+
+# ---------------------------------------------------------------------------
+# transport observation — per-request evidence from actual HTTP calls
+# ---------------------------------------------------------------------------
+
+class TransportCollector:
+    """Collects per-request transport observations from actual HTTP calls.
+
+    Each record represents one real HTTP exchange that actually happened
+    during the measurement run.  Records are never fabricated or
+    synthesized post-hoc.  The collector intercepts urllib.request.urlopen
+    to capture HTTP-level observables (status code, response Date header)
+    alongside timing data.
+
+    Usage::
+
+        collector = TransportCollector()
+        with collector:
+            # ... run measurement (any urllib HTTP calls are captured) ...
+        print(len(collector.records))  # one per actual HTTP exchange
+    """
+
+    def __init__(self):
+        self.records: list[dict] = []
+        self._seq: int = 0
+        self._original_urlopen = None
+
+    def __enter__(self):
+        self._original_urlopen = urllib.request.urlopen
+        urllib.request.urlopen = self._intercept
+        return self
+
+    def __exit__(self, *exc_info):
+        if self._original_urlopen is not None:
+            urllib.request.urlopen = self._original_urlopen
+            self._original_urlopen = None
+
+    def _intercept(self, req, *args, **kwargs):
+        """Intercept urllib.request.urlopen to capture transport evidence."""
+        import uuid
+
+        self._seq += 1
+        call_seq = self._seq
+        trace_id = str(uuid.uuid4())
+        request_ts = (datetime.datetime.now(datetime.timezone.utc)
+                      .isoformat())
+        t0 = time.time()
+        endpoint = getattr(req, 'full_url', str(req))
+
+        record: dict[str, Any] = {
+            "trace_id": trace_id,
+            "call_seq": call_seq,
+            "request_ts": request_ts,
+            "endpoint": endpoint,
+        }
+
+        try:
+            original = self._original_urlopen
+            if original is None:
+                raise RuntimeError("TransportCollector not entered")
+            resp = original(req, *args, **kwargs)
+            record["http_status"] = resp.status
+            # Capture a small set of response headers for evidence.
+            # Date proves server-observed time; others are useful context.
+            _EVIDENCE_HEADERS = {'date', 'server', 'content-type',
+                                 'x-request-id', 'x-trace-id'}
+            record["response_headers"] = {
+                k: v for k, v in resp.headers.items()
+                if k.lower() in _EVIDENCE_HEADERS
+            }
+            record["success"] = True
+            record["error"] = ""
+            return resp
+        except Exception as exc:
+            record["success"] = False
+            record["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+            raise
+        finally:
+            record["response_ts"] = (datetime.datetime.now(
+                datetime.timezone.utc).isoformat())
+            record["latency_s"] = round(time.time() - t0, 4)
+            self.records.append(record)
+
+
+# ---------------------------------------------------------------------------
+# watchtower-route-receipt/v1 row builder (CS binding contract)
+# ---------------------------------------------------------------------------
+
+def _canonical_json_bytes(value):
+    """watchtower-effective/v1 canonical JSON bytes (sorted keys, compact, UTF-8)."""
+    return json.dumps(value, sort_keys=True, separators=(',', ':'),
+                      ensure_ascii=False, allow_nan=False).encode('utf-8')
+
+
+def _sha256_dict(value):
+    """SHA-256 of canonical JSON of a value."""
+    return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
+def _sha256_file(path):
+    """SHA-256 of a file (streamed, 1 MiB blocks)."""
+    h = hashlib.sha256()
+    with open(path, 'rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _save_artifact(content, path):
+    """Write canonical JSON artifact to path; return its sha256 hex digest."""
+    data = _canonical_json_bytes(content)
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+    return hashlib.sha256(data).hexdigest()
+
+
+def gather_serving_state():
+    """Gather live serving state from the local machine.
+
+    Reads systemd unit files, /proc, and the CHAMPION-ROUTE-HASH to
+    produce the fields the watchtower detector requires.  Linux/systemd
+    only — will raise on macOS or if the unit is inactive.
+
+    Returns dict with: runtime, manifest, manifest_sha256, endpoint,
+    route_hash.
+    """
+    import re
+    import shlex
+    import subprocess
+
+    _CANON = 'watchtower-effective/v1'
+    _UNIT = 'qwen27.service'
+    _ROUTE = Path('/home/simon/exp/CHAMPION-ROUTE-HASH')
+
+    route_text = _ROUTE.read_text().strip()
+    route_hash = route_text.split()[0]
+    fields = dict(re.findall(r'(\w+)=([^\s]+)', route_text))
+    endpoint = fields['route']
+
+    props = subprocess.check_output(
+        ['systemctl', 'show', _UNIT, '-p', 'FragmentPath',
+         '-p', 'DropInPaths', '-p', 'MainPID'], text=True)
+    props = dict(line.split('=', 1) for line in props.splitlines())
+    paths = [props['FragmentPath']] + shlex.split(props['DropInPaths'])
+    files = [(p, Path(p).read_text()) for p in paths]
+
+    pid = int(props['MainPID'])
+    proc = Path('/proc') / str(pid)
+    live = (proc.joinpath('cmdline').read_bytes()
+            .rstrip(b'\x00').decode().split('\x00'))
+    stat = proc.joinpath('stat').read_text().rsplit(')', 1)[1].split()
+    boot_id = (Path('/proc/sys/kernel/random/boot_id')
+               .read_text().strip())
+    live_env = dict(
+        x.split('=', 1)
+        for x in proc.joinpath('environ').read_bytes()
+               .decode().split('\x00') if '=' in x)
+    env_keys = ['HOME', 'HSA_ENABLE_SDMA', 'HSA_XNACK',
+                'LD_LIBRARY_PATH']
+    env = {k: live_env.get(k) for k in env_keys}
+
+    runtime = {
+        'boot_id': boot_id,
+        'pid': pid,
+        'start_ticks': int(stat[19]),
+        'argv_sha256': _sha256_dict(live),
+        'executable_sha256': _sha256_file(proc / 'exe'),
+        'environment_sha256': _sha256_dict(env),
+    }
+
+    def _model_identity(path):
+        p = Path(path)
+        match = re.search(
+            r'/models--([^/]+)/snapshots/([0-9a-f]{40})/([^/]+)$',
+            str(p))
+        if not match or not p.is_file() or p.stat().st_size <= 0:
+            raise ValueError('unresolved immutable model identity')
+        return {'repository': match[1], 'revision': match[2],
+                'file': match[3], 'size': p.stat().st_size}
+
+    weights = []
+    for flag in ('-m', '--mmproj'):
+        weights.append(_model_identity(live[live.index(flag) + 1]))
+
+    manifest = {
+        'canonicalization': _CANON, 'unit': _UNIT,
+        'files': [{'path': p, 'sha256': hashlib.sha256(
+            text.encode()).hexdigest()} for p, text in files],
+        'argv': live, 'environment': env, 'weights': weights,
+        'binary': {'path': live[0],
+                    'sha256': _sha256_file(live[0])},
+    }
+    manifest_sha256 = _sha256_dict(manifest)
+
+    return {
+        'runtime': runtime,
+        'manifest': manifest,
+        'manifest_sha256': manifest_sha256,
+        'endpoint': endpoint,
+        'route_hash': route_hash,
+    }
+
+
+def build_receipt_row(report, report_path, serving_state_before,
+                      serving_state_after, transport_records,
+                      out_dir='', is_dry_run=False):
+    """Build a watchtower-route-receipt/v1 compliant row plus artifacts.
+
+    *report* is the dict produced by run_measurement().
+    *serving_state_before* is the dict from gather_serving_state()
+    captured BEFORE the measurement run began.
+    *serving_state_after* is the dict from gather_serving_state()
+    captured AFTER the measurement run completed.
+    *transport_records* is the list of TransportCollector.records —
+    one per actual HTTP call that happened during the run.
+    *out_dir* controls where artifacts are written (default: beside
+    *report_path*).  Artifacts land under ARTIFACT_ROOTS so the
+    detector can load them.
+
+    Returns (row_dict, artifact_paths_dict).
+
+    Evidence contract:
+    - Each request in evidence.requests corresponds to one actual HTTP
+      call observed during the run (transport_records entries).
+    - request_id is the trace_id generated at call initiation, bound to
+      the actual HTTP exchange — never synthesized from run_id.
+    - before_runtime and after_runtime are independently sampled serving
+      identity snapshots, not duplicates of a single sample.
+    """
+    import time as _time
+    import uuid as _uuid
+
+    _SCHEMA = 'watchtower-route-receipt/v1'
+
+    run_id = str(_uuid.uuid4())
+    ts = _time.strftime('%Y-%m-%dT%H:%M:%SZ', _time.gmtime())
+    evaluator = {'name': 'fl4write-reliability', 'version': 'cycle-5'}
+    artifacts_dir = (Path(out_dir) if out_dir
+                     else Path(report_path).parent)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- scores (full report scores for the report artifact) ---
+    scores = {}
+    for k in ('determinism', 'recall', 'false_positives',
+              'calibration', 'call_budget'):
+        if k in report:
+            scores[k] = report[k]
+
+    # --- report artifact ---
+    report_artifact = {
+        'run_id': run_id,
+        'evaluator': evaluator,
+        'outcome': 'success',
+        'scores': scores,
+        'measured_at': report.get('measured_at', ts),
+        'route': report.get('route', {}),
+    }
+    report_sha = _save_artifact(
+        report_artifact,
+        str(artifacts_dir / ('report-%s.json' % run_id[:12])))
+
+    # --- corpus artifact ---
+    from . import reliability_corpus as corpus
+    corpus_data = {
+        'defect_cases': [
+            {'id': c['id'], 'title': c['title'],
+             'defect_class': c.get('defect_class', '')}
+            for c in corpus.DEFECT_CASES],
+        'clean_cases': [
+            {'id': c['id'], 'title': c['title']}
+            for c in corpus.CLEAN_CASES],
+    }
+    corpus_sha = _save_artifact(
+        corpus_data,
+        str(artifacts_dir / ('corpus-%s.json' % run_id[:12])))
+
+    # --- inputs artifact ---
+    inputs_artifact = {
+        'suite': {'name': 'fl4write-reliability', 'revision': 'main'},
+        'parameters': {
+            'runs': report.get('determinism', {}).get('total_runs', 0),
+            'endpoint': report.get('route', {}).get('endpoint', ''),
+            'model': report.get('route', {}).get('model', ''),
+            'temperature': report.get('route', {}).get('temperature', 0),
+        },
+        'corpus_sha256': corpus_sha,
+        'corpus': {
+            'path': str(artifacts_dir
+                         / ('corpus-%s.json' % run_id[:12])),
+            'sha256': corpus_sha,
+        },
+    }
+    inputs_sha = _save_artifact(
+        inputs_artifact,
+        str(artifacts_dir / ('inputs-%s.json' % run_id[:12])))
+
+    # --- evidence artifact (transport-real, not synthesized) ---
+    #
+    # Build request records from actual transport observations.
+    # Each entry in transport_records is one real HTTP call that happened
+    # during the measurement run.  The trace_id was generated at call
+    # initiation and is bound to the actual HTTP exchange — not derived
+    # from the run_id.
+    requests = []
+    for tr in transport_records:
+        requests.append({
+            'request_id': tr['trace_id'],
+            'call_seq': tr['call_seq'],
+            'endpoint': tr['endpoint'],
+            'request_ts': tr['request_ts'],
+            'response_ts': tr['response_ts'],
+            'latency_s': tr['latency_s'],
+            'http_status': tr.get('http_status'),
+            'response_headers': tr.get('response_headers', {}),
+            'success': tr['success'],
+            'error': tr.get('error', ''),
+        })
+
+    evidence_artifact = {
+        'run_id': run_id,
+        'inputs_sha256': inputs_sha,
+        'report_sha256': report_sha,
+        'manifest': serving_state_before['manifest'],
+        'before_runtime': serving_state_before['runtime'],
+        'after_runtime': serving_state_after['runtime'],
+        'requests': requests,
+        'transport_summary': {
+            'total_calls': len(requests),
+            'successful_calls': sum(1 for r in requests if r['success']),
+            'failed_calls': sum(1 for r in requests if not r['success']),
+            'distinct_endpoints': sorted(set(
+                r['endpoint'] for r in requests)),
+            'first_request_ts': (requests[0]['request_ts']
+                                 if requests else None),
+            'last_response_ts': (requests[-1]['response_ts']
+                                 if requests else None),
+        },
+    }
+    evidence_sha = _save_artifact(
+        evidence_artifact,
+        str(artifacts_dir / ('evidence-%s.json' % run_id[:12])))
+
+    # --- trend row (minus payload_sha256) ---
+    row = {
+        'schema': _SCHEMA,
+        'outcome': 'success',
+        'run_id': run_id,
+        'producer': 'fl4write-reliability',
+        'route_hash': serving_state_before['route_hash'],
+        'endpoint': serving_state_before['endpoint'],
+        'serving_manifest_sha256': serving_state_before['manifest_sha256'],
+        'runtime': serving_state_before['runtime'],
+        'started_at': ts,
+        'ts': ts,
+        'evaluator': evaluator,
+        'report': {
+            'path': str(artifacts_dir
+                         / ('report-%s.json' % run_id[:12])),
+            'sha256': report_sha,
+        },
+        'inputs': {
+            'path': str(artifacts_dir
+                         / ('inputs-%s.json' % run_id[:12])),
+            'sha256': inputs_sha,
+        },
+        'evidence': {
+            'path': str(artifacts_dir
+                         / ('evidence-%s.json' % run_id[:12])),
+            'sha256': evidence_sha,
+        },
+    }
+    # payload_sha256 = canonical SHA-256 of the row without itself
+    row['payload_sha256'] = _sha256_dict(
+        {k: v for k, v in row.items() if k != 'payload_sha256'})
+
+    artifact_paths = {
+        'report': str(artifacts_dir
+                       / ('report-%s.json' % run_id[:12])),
+        'inputs': str(artifacts_dir
+                       / ('inputs-%s.json' % run_id[:12])),
+        'evidence': str(artifacts_dir
+                        / ('evidence-%s.json' % run_id[:12])),
+        'corpus': str(artifacts_dir
+                       / ('corpus-%s.json' % run_id[:12])),
+    }
+    return row, artifact_paths
 
 
 if __name__ == "__main__":
