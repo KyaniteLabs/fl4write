@@ -525,3 +525,57 @@ Action taken (Head of Product, PM-fleet spawn authority):
 - Standing orders unchanged: chain gates stay CLOSED; local commits only; push/merge is a Head-of-Product call.
 
 — Head of Product, session t_8ca9a006
+
+## INTAKE + RUNTIME ACCEPTANCE — pm-fl4write session 1 (2026-10-14 23:52 – 2026-10-15 00:45 PT; kanban t_0267c240)
+
+Standing law honored: no push, no merge, no remote configured; local commit only; chain gates stay CLOSED.
+
+### 1. Desk reconciliation (acceptance criterion 1)
+
+- **2026-10-07 ~18:38 PT — clone re-created from a git bundle.** Evidence: `git reflog` HEAD@{4} "branch: Created from refs/bundle/remotes/origin/main"; `git remote -v` empty. All file mtimes of that checkout are artifacts, not activity signals (this is what made the desk look 7 days stale).
+- **2026-10-13 12:19 PT — `4bc81fa` "chore: checkpoint approved reliability transport receipts".** Evidence (commit body): Product-authorized source preserved from t_6ce2f86e with four mechanical lint repairs by t_24df25a5; full isolated regression **1489 passed + 4 skipped**; Ruff and exact-file Gitleaks passed; local-only checkpoint for t_6297a21b.
+- **2026-10-13 12:42 PT — `c8c2e68` "fix: repair cadence pre/post serving identity binding".** Evidence (commit body + diffstat): defect = both `gather_serving_state()` calls ran AFTER measurement (two post-run samples labeled before/after) and read local /proc while the endpoint is remote nucbox; fix = separate before/after shell steps, `gather_remote_serving_state(host)` fail-closed, `check_identity_binding()` boot_id/pid comparison, identity binding integrated into `build_receipt_row`, `--serving-host` flag + host auto-derivation; 23 new tests (7 binding / 7 SSH fail-closed / 3 receipt / 6 orchestration). Source acceptance **1512 passed + 4 skipped**, Ruff clean. Runtime acceptance was NOT claimed at commit time — this session's receipt (section 3) addresses exactly that.
+- **2026-10-14 — SILENT-DEATH ASSESSMENT + PM PROFILE BIRTH block verified**: reads correctly at 5794f19 (desk lines 512–527), consistent with the t_8ca9a006 handoff; no edits made to it.
+- **2026-10-14 23:52 PT** — pm-fl4write profile birthed and this intake dispatched (parent t_8ca9a006, verdict ACTIVE).
+
+### 2. Host + clone map (probed live 2026-10-15 00:0x–00:4x PT)
+
+This host = **simons-mac-mini** (Tailscale 100.115.175.18; macOS hostname `Mac.lan`). The "mini clone" of the standing reconciliation note IS this working clone — no rsync needed; per the diff-first law the **MBA (simons-macbook-air)** was checked instead. Four lineages diverged after `9f897ce`:
+
+| Lineage | Tip | State |
+|---|---|---|
+| Working clone (here) | `5794f19` (= 9f897ce + 4bc81fa + c8c2e68 + 5794f19) | no git remote; PM line of record for this desk |
+| Loop clone (here, `~/workspaces/fl4write-autoloop/repo`) | `7375fad` ("autoloop(cycle 4): fix from finding cycle-01-git-hardening.md") on `253c3d0` | + uncommitted `tools/reliability-cadence.sh` mod (left as found) |
+| Nucbox serving checkout (`ssh nucbox ~/workspaces/fl4write`) | `530005d` (mainline: PR #47 zero-loop round-4 code + PR #48 Apache-2.0 license per CEO ruling 2026-10-09 + docs M-20261008-10/11/15) | + UNCOMMITTED earlier variant of the transport-receipts work (reliability.py +262, cadence script modified) |
+| MBA clone (`ssh simons-macbook-air ~/workspaces/fl4write`) | `aa36dec` | + UNCOMMITTED desk/registry deltas (+112 lines incl. M-20261009-01 autoloop lane-repair + certification re-arm record) |
+
+Consequences (facts, not actions): this clone's desk lacks mainline desk entries M-20261008-10/11/15 (~88 lines) and the uncommitted M-20261009-01 record; mainline lacks 4bc81fa/c8c2e68 and this record. **Reconciling the lineages is a Head-of-Product decision (push/merge authority) — escalated via follow-up card.** Preservation: the MBA's uncommitted desk/registry deltas saved verbatim as `mba-uncommitted-desk-registry-20261015.patch` (attached to t_0267c240) before any local edits.
+
+**Mini autoloop status:** STOPPED — STOP file 2026-10-11 15:09, `autoloop-state.json` frozen at 2026-10-10 (0 cycles). Not alive; do not assume otherwise. Any re-arm must honor LAW 18 (never delete a live lockfile) and inherit autoloop.sh v6 (pre-apply ruff gate, env-failure classification — M-20261009-01).
+
+### 3. RUNTIME ACCEPTANCE RECEIPT — cadence identity-binding fix (c8c2e68; criterion 3)
+
+Environment: fixed code (5794f19 tree) staged to `nucbox:/tmp/fl4write-cadence-verify/repo` (scratch; production checkouts untouched, production `~/.fl4write/reliability/trend.jsonl` untouched — HOME redirected to scratch). Serving state = REAL `qwen27.service` on nucbox (boot `3c244195-c78d-4014-b157-16fcae944cab`, MainPID 793048, CHAMPION-ROUTE-HASH route=127.0.0.1:46377, weights Qwen3.8-27B-UD-Q4_K_XL.gguf + mmproj-F16.gguf).
+
+**RUNTIME-ACCEPTED (verified this session, real serving state):**
+1. **Ordering** — before-state captured BEFORE measurement in a separate script step, twice (run dirs `run-20261015T071157Z`, `run-20261015T072303Z`; `serving-state-before.json` 07:23:03.343Z < measurement log writes through 07:38:03Z).
+2. **Local collection path** on the serving host — real /proc+systemd+route-hash read: boot_id/pid/start_ticks/manifest_sha256 `394b57e2508bd1dac986ca6670dccf10c06f930717dac2a0bf7efdaede65d292`.
+3. **Identity binding positive pair** — two independent samples 6 s apart → `check_identity_binding` = `{"ok": true}` (same boot_id + pid).
+4. **Fail-closed**, three ways: (a) `gather_serving_state('nonexistent-host-…')` → `{unavailable: true, reason: "ssh probe exited 255: Could not resolve hostname…"}`; (b) `check_identity_binding` on unavailable input → ok:false with reason; (c) script-level `tools/reliability-cadence.sh --quick --serving-host nonexistent-host-…` → "FAIL CLOSED: before state unavailable…", **exit 1**, no receipt written (exit captured un-gated).
+
+**REJECTED / NOT achieved (honest gaps):**
+5. **Remote SSH collection (`gather_remote_serving_state`) — RUNTIME DEFECT.** `ssh host python3 -c <probe-body>` is re-parsed by the remote shell: `ssh probe exited 2: Argument expected for the -c option … /bin/bash: line 2: import: command not found`. Cause named after three probes (LAW 16): single-line argv repro also breaks (`python3 -c print(123)` → bash syntax error); multi-line body splits into shell lines; the SAME body piped via stdin (`ssh host python3 -`) returns real state (rc=0, boot 3c244195… pid 793048). This is the previously unadopted **LAW 22 (SSH quoting)** — fix shape proven, not landed. Fail-closed contains the defect.
+6. **End-to-end receipt row (measurement + receipt binding) — NOT achieved; environmentally blocked.** Champion route starved by shared-floor load: both parallel slots held by platform-seat workers' agentic traffic through `nucbox:8908` (task 5412/5425 processing 26k–47k-token multi-turn prompts; task 5304 generating 0.33–0.37 t/s); raw `curl "Say OK"` got no response in 120 s (and none in 25 s at 07:36Z); harness call patience is 180 s (`analyzer.py:306`) — eval cases logged `failed for eval/reliability#1: timed out` ×3. Connection holders (lsof): platform hermes workers PIDs 24643/26328/26329 + long-running tool process 51283 on this mini. Nothing was killed (other lanes' work); my own churning run was stopped after 3 timed-out attempts to relieve queue pressure. Retry belongs to the follow-up card when slots free.
+7. **PRODUCTION acceptance: NOT claimed.** Production cadence = nucbox crontab `30 5 * * 0 ~/workspaces/fl4write/tools/reliability-cadence.sh`, which runs nucbox's checkout — an OLD uncommitted variant with a single post-measurement `gather_serving_state()` call (no ordering fix, no identity binding). The fix is not deployed there; deploy is gated on lineage reconciliation (Head of Product). Also noted for the fix lane: the bare crontab line exports no `FL4WRITE_MODEL_ENDPOINT` while `fl4write.fl4write.yaml` references `${FL4WRITE_MODEL_ENDPOINT}` (run-cycle.sh exports it; a bare-cron run fails at config load — reproduced: `ValueError: config references unset environment variable 'FL4WRITE_MODEL_ENDPOINT'`). Production trend.jsonl last row 2026-10-13T12:49:48Z (watchtower-route-receipt/v1 success); `~/.fl4write/reliability/cron.log` empty.
+
+**Acceptance level of record for c8c2e68: SOURCE-accepted (1512+4, prior) + ISOLATED-RUNTIME-accepted for ordering, identity binding and fail-closed on real serving state (this receipt). Remote-collection path REJECTED (defect found; fix shape proven). End-to-end receipt row + PRODUCTION acceptance NOT claimed.**
+
+### 4. Ancestors adoption (criterion 2)
+
+`pm-fl4write-ancestors.md` authored in the ancestors-startup-hook `references/` directory (8,022 bytes, verified). Base = `product-lessons-learned.md`; 14 applicable lessons carry FL4WRITE-specific adoption status + verification (LAW 16 adopted+verified this session; **LAW 22 gap caught live** — see §3.5; LAW 15 gap evidenced — §2/§3.7). Note: `skill_manage` refused the cross-profile write ("Skill 'ancestors-startup-hook' not found in active profile 'pm-fl4write' … edit the file directly"); the file was written directly to the resolved skills tree (`~/.hermes/skills/product/ancestors-startup-hook/references/`), where the hook's step 3 expects it. No skill or profile configuration was changed.
+
+### 5. Follow-up cards (criterion 4 + findings)
+
+Minted with this intake as parent (ids recorded in the t_0267c240 completion metadata): (1) fix lane — LAW-22 SSH transport defect + endpoint/host-derivation gaps + preflight laws; (2) reliability queue — anchor signature-vote determinism, honest-uncertainty confidence emission, corpus hardening, plus retry of the end-to-end cadence receipt; (3) Head-of-Product escalation — four-lineage divergence + serving-host deploy gate + production cron env gap + shared-floor contention note.
+
+— pm-fl4write, session 1 (t_0267c240), 2026-10-15 00:45 PT
