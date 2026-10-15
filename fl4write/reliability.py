@@ -11,23 +11,32 @@ reflects the shipped behavior, not the model in isolation:
 2. PLANTED-DEFECT RECALL — labeled corpus (reliability_corpus), catch
    rate per defect class at two bars: any-finding and actionable
    (Critical/Major). False-positive rate on clean diffs at the same bars.
-3. HONEST UNCERTAINTY — the product schema emits NO numeric confidence
-   (Finding has no confidence field); severity is the only ordinal claim
-   strength. Calibration is therefore measured as per-severity precision
-   on labeled fixtures: P(finding is on truly-defective code | severity).
-   Path-level labeling caveat: every grounded finding on a defect-case
-   file counts TP, every finding on a clean-case file counts FP — an
-   upper bound on precision for Nit/Minor style claims.
+3. HONEST UNCERTAINTY — the product schema emits an OPTIONAL numeric
+   confidence per finding (Finding.confidence: the model's own probability
+   [0,1] that the finding is a real defect; absent = no calibrated claim).
+   Calibration is measured two ways: per-severity precision (P(finding is on
+   truly-defective code | severity)) and, when confidence is emitted, a
+   binned ECE against path-level labels. Path-level labeling caveat: every
+   grounded finding on a defect-case file counts TP, every finding on a
+   clean-case file counts FP — an upper bound on precision for Nit/Minor
+   style claims.
+
+Posted findings are signature-voted (analyzer.analyze: best-of-N modal over
+config.signature_vote_n samples) — the determinism lane measures the POSTED
+verdict, so the anchor-flip class (2026-09-17 baseline) is killed engine-
+side, not papered over in the metric.
 
 Re-usability: `python -m fl4write.reliability --config <yaml> [route
 overrides] --runs 5` re-measures any time; recall/clean lanes cache
-honestly (key = exact prompt + route params; parse + gates always re-run
-locally), determinism lanes never cache. Optional regression gates
-(--min-determinism/--min-recall/--max-actionable-fp) make reliability a
-CI-able property once thresholds are set from a recorded baseline.
+honestly (key = exact prompt + route params + vote slot; parse + gates
+always re-run locally), determinism lanes never cache. Optional regression
+gates (--min-determinism/--min-recall/--max-actionable-fp/--max-ece) make
+reliability a CI-able property once thresholds are set from a recorded
+baseline.
 
-Call-budget law: determinism = len(DETERMINISM_SAMPLE) * runs fresh
-calls; recall/clean = one call per case (cache-served after first run).
+Call-budget law: determinism = len(DETERMINISM_SAMPLE) * runs * vote_n
+fresh calls; recall/clean = vote_n calls per case (cache-served per slot
+after first run).
 """
 
 from __future__ import annotations
@@ -44,9 +53,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import reliability_corpus as corpus
-from .analyzer import ModelUnavailable, _system_prompt, analyze
+from .analyzer import ModelUnavailable, _failure_claimed, _system_prompt, analyze
+from .analyzer import verdict_signature  # canonical home: analyzer (re-export)
 from .config import ModelRoute, RepoConfig, load_config
-from .models import Finding, PullRequest
+from .models import PullRequest
 
 SEVERITY_ORDER = ["Critical", "Major", "Minor", "Nit"]
 ACTIONABLE = ("Critical", "Major")
@@ -80,17 +90,15 @@ def run_case(case: dict, config: RepoConfig) -> dict:
         "severity_counts": dict(Counter(f.severity for f in findings)),
         "findings": [
             {"rule_id": f.rule_id, "severity": f.severity, "path": f.path,
-             "line": f.line, "message": f.message[:160]}
+             "line": f.line, "message": f.message[:160],
+             "confidence": f.confidence}
             for f in findings
         ],
     }
 
 
-def verdict_signature(findings: list[Finding]) -> list[tuple[str, str, str, int]]:
-    """The stable verdict identity: which findings, at what severity,
-    anchored where. Message text is EXCLUDED (prose wording varies;
-    the verdict a maintainer acts on is rule+severity+path+line)."""
-    return sorted((f.rule_id, f.severity, f.path, f.line) for f in findings)
+# verdict_signature lives in analyzer (the post-time signature-vote needs
+# the same identity); it is re-exported above for harness callers.
 
 
 # ---------------------------------------------------------------------------
@@ -137,36 +145,59 @@ class ResponseCache:
 
 
 def install_cached_call(cache: ResponseCache | None) -> Callable[[], None]:
-    """Wrap analyzer._call_model with the cache (None = pass-through).
-    Returns an uninstall callable. Real-call accounting is exposed via
-    cache.real_calls for budget receipts."""
+    """Wrap analyzer._call_model/_call_sample with the cache (None =
+    pass-through). Returns an uninstall callable. Real-call accounting is
+    exposed via cache.real_calls for budget receipts.
+
+    Signature-vote samples key by ``key#slot``: N vote samples are N
+    INDEPENDENT recorded responses. Slot-blind caching would serve sample
+    1's content N times and fabricate a unanimous vote (the same defect as
+    a cached determinism repeat)."""
     from . import analyzer as _an
 
     real = _an._call_model
+    real_sample = _an._call_sample
     if cache is None:
         cache = ResponseCache(None)
     cache.real_calls = 0
     cache.hits = 0
     cache.misses = 0
 
-    def cached(route: ModelRoute, prompt: str, mode: str = "pr",
-               system: str | None = None) -> str:
-        sys_prompt = system if system is not None else _system_prompt(mode)
-        key = ResponseCache.key(route, sys_prompt, prompt)
+    def _fetch(key: str, produce) -> str:
         hit = cache.get(key)
         if hit is not None:
             cache.hits += 1
             return hit
         cache.misses += 1
         cache.real_calls += 1
-        content = real(route, prompt, mode, system)
+        content = produce()
         cache.put(key, content)
         return content
 
+    def _produce(route: ModelRoute, prompt: str, mode: str, system: str | None):
+        # arity guard: 3-arg monkeypatched stubs must keep working
+        if system is None:
+            return real(route, prompt, mode)
+        return real(route, prompt, mode, system)
+
+    def cached(route: ModelRoute, prompt: str, mode: str = "pr",
+               system: str | None = None) -> str:
+        sys_prompt = system if system is not None else _system_prompt(mode)
+        key = ResponseCache.key(route, sys_prompt, prompt)
+        return _fetch(key, lambda: _produce(route, prompt, mode, system))
+
+    def cached_sample(route: ModelRoute, prompt: str, mode: str = "pr",
+                      system: str | None = None, slot: int = 0) -> str:
+        sys_prompt = system if system is not None else _system_prompt(mode)
+        key = ResponseCache.key(route, sys_prompt, prompt) + f"#{slot}"
+        return _fetch(key, lambda: _produce(route, prompt, mode, system))
+
     _an._call_model = cached
+    _an._call_sample = cached_sample
 
     def uninstall() -> None:
         _an._call_model = real
+        _an._call_sample = real_sample
 
     return uninstall
 
@@ -338,12 +369,48 @@ def trend_row(report: dict, report_path: str = "") -> dict:
         "recall_actionable": f"{caught_a}/{tot}",
         "actionable_fp": fp.get("actionable_fp_rate", 0.0),
         "noise_fp": fp.get("noise_fp_rate", 0.0),
+        # FP split (queue item 3): coverage-only law notes ride their own bar
+        "law_note_fp": fp.get("law_note_rate", 0.0),
+        # honest uncertainty: confidence ECE (null = no confidence data)
+        "ece": (report.get("confidence_calibration") or {}).get("ece"),
         "severity_precision": round(tp / (tp + fpn), 4) if tp + fpn else None,
         # Cycle-5: the aggregate above can hide a per-severity inversion
         # (Critical 1/1 + Nit 0/10 reads ~0.09); the worst bar rides along.
         "worst_severity_precision": round(min(precisions), 4) if precisions else None,
         "report": report_path,
     }
+
+
+_LAW_NOTE_RULES = ("tests", "testing-quality")
+
+
+def _is_law_note(finding: dict) -> bool:
+    """Coverage-only testing-law note: a tests-family finding asserting
+    missing/weak coverage WITHOUT a failure claim. These are law-reading
+    noise, not defect claims — they ride their own bar (law_note_rate) so
+    actionable_fp_rate measures DEFECT-FINDING ERROR (reliability queue
+    item 3: both actionable FPs in the 09-17 baseline were coverage claims
+    and inflated the defect-error signal)."""
+    if finding.get("rule_id") not in _LAW_NOTE_RULES:
+        return False
+    return not _failure_claimed(finding.get("message", ""))
+
+
+def _actionable_defect_claim(runs: list[dict]) -> bool:
+    """Case-level actionable-FP bar: any run posts an actionable-severity
+    finding that is NOT a coverage-only law note. Records without a
+    findings list (pre-split synthetic records) fall back to the record's
+    own actionable flag — same bar as before the split."""
+    for r in runs:
+        findings = r.get("findings") or []
+        if not findings:
+            if r.get("actionable"):
+                return True
+            continue
+        for f in findings:
+            if f.get("severity") in ACTIONABLE and not _is_law_note(f):
+                return True
+    return False
 
 
 def fp_metrics(clean_records: list[dict]) -> dict:
@@ -354,7 +421,11 @@ def fp_metrics(clean_records: list[dict]) -> dict:
     data, not a clean review, so dead-route clean lanes no longer score a
     0.0 false-positive rate on reviews that never happened. The excluded
     count is reported as ``errors``.
-    """
+
+    Two FP bars (queue item 3 split): ``actionable_fp_rate`` counts only
+    ACTIONABLE DEFECT CLAIMS on clean fixtures — the defect-finding error;
+    coverage-only testing-law notes are counted on ``law_note_rate``
+    instead. ``noise_fp_rate`` keeps its original any-finding meaning."""
     by_case: dict[str, list[dict]] = {}
     for r in clean_records:
         by_case.setdefault(r["case_id"], []).append(r)
@@ -364,23 +435,26 @@ def fp_metrics(clean_records: list[dict]) -> dict:
     measured = {cid: runs for cid, runs in measured.items() if runs}
     n = len(measured)
     noise = sum(any(r["flag"] == "defect" for r in runs) for runs in measured.values())
-    actionable = sum(any(r["actionable"] for r in runs) for runs in measured.values())
+    actionable = sum(_actionable_defect_claim(runs) for runs in measured.values())
+    law_note = sum(any(_is_law_note(f) for r in runs for f in (r.get("findings") or []))
+                   for runs in measured.values())
     return {
         "clean_cases": n,
         "errors": errors,
         "noise_fp_rate": noise / n if n else 0.0,
         "actionable_fp_rate": actionable / n if n else 0.0,
+        "law_note_rate": law_note / n if n else 0.0,
         "flagged_case_ids": sorted(cid for cid, runs in measured.items()
                                    if any(r["flag"] == "defect" for r in runs)),
     }
 
 
 def severity_calibration(records: list[dict]) -> dict:
-    """Honest-uncertainty table. The product emits NO numeric confidence
-    (Finding has no confidence field — that absence is finding #1).
-    Severity is the claim-strength signal; its calibration = per-severity
-    precision on labeled fixtures (defect-case finding = TP, clean-case
-    finding = FP; path-level labeling, upper bound for Nit/Minor)."""
+    """Honest-uncertainty table. Severity is the ordinal claim-strength
+    signal; its calibration = per-severity precision on labeled fixtures
+    (defect-case finding = TP, clean-case finding = FP; path-level labeling,
+    upper bound for Nit/Minor). Numeric confidence (Finding.confidence) is
+    calibrated separately — see confidence_calibration() (ECE)."""
     rows: dict[str, dict[str, int]] = {}
     for r in records:
         label = "tp" if r["kind"] == "defect" else "fp"
@@ -392,11 +466,62 @@ def severity_calibration(records: list[dict]) -> dict:
     for sev, row in sorted(rows.items(), key=lambda kv: SEVERITY_ORDER.index(kv[0])
                            if kv[0] in SEVERITY_ORDER else 99):
         table[sev] = {**row, "precision": row["tp"] / row["n"] if row["n"] else None}
+    emitted = any(f.get("confidence") is not None
+                  for r in records for f in (r.get("findings") or []))
     return {
-        "confidence_field_emitted": False,
+        "confidence_field_emitted": emitted,
         "proxy": "severity",
         "labeling": "path-level: defect-case finding = TP, clean-case finding = FP",
         "table": table,
+    }
+
+
+ECE_BINS = ((0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0))
+
+
+def confidence_calibration(records: list[dict]) -> dict:
+    """Numeric-confidence calibration (the CEO's honest-uncertainty bar,
+    answered with a number): ECE over the findings that carry
+    Finding.confidence, labeled path-level (defect-case finding = 1,
+    clean-case finding = 0).
+
+    ECE = sum_b (n_b / N) * |empirical_precision_b - mean_confidence_b|
+    over 5 fixed bins. A model that emits 0.9 on claims that turn out true
+    90% of the time scores near 0. ``emitted_rate`` is the share of findings
+    carrying any confidence claim — honest ABSSENCE is fine (optional
+    field), but a gate on ECE cannot pass without data (fail-closed)."""
+    points: list[tuple[float, int]] = []
+    total = 0
+    for r in records:
+        label = 1 if r["kind"] == "defect" else 0
+        for f in (r.get("findings") or []):
+            total += 1
+            conf = f.get("confidence")
+            if conf is None:
+                continue
+            points.append((float(conf), label))
+    bins = []
+    ece = 0.0
+    n = len(points)
+    for lo, hi in ECE_BINS:
+        in_bin = [(c, y) for c, y in points
+                  if (lo <= c < hi) or (hi == 1.0 and c == 1.0)]
+        if not in_bin:
+            bins.append({"lo": lo, "hi": hi, "n": 0,
+                         "mean_confidence": None, "empirical_precision": None})
+            continue
+        mean_conf = sum(c for c, _ in in_bin) / len(in_bin)
+        precision = sum(y for _, y in in_bin) / len(in_bin)
+        ece += (len(in_bin) / n) * abs(precision - mean_conf)
+        bins.append({"lo": lo, "hi": hi, "n": len(in_bin),
+                     "mean_confidence": round(mean_conf, 4),
+                     "empirical_precision": round(precision, 4)})
+    return {
+        "n_findings": total,
+        "n_with_confidence": n,
+        "emitted_rate": (n / total) if total else 0.0,
+        "ece": round(ece, 4) if n else None,
+        "bins": bins,
     }
 
 
@@ -461,6 +586,7 @@ def run_measurement(config: RepoConfig, runs: int = 5,
     no transport record — only real HTTP exchanges are observed.
     """
     sample_ids = determinism_ids or corpus.DETERMINISM_SAMPLE
+    vote_n = max(1, min(9, int(getattr(config, "signature_vote_n", 1) or 1)))
     cache = ResponseCache(cache_dir)
     collector = TransportCollector()
 
@@ -502,12 +628,20 @@ def run_measurement(config: RepoConfig, runs: int = 5,
         "false_positives": fp_metrics(clean_records),
         "calibration": severity_calibration(
             [r for r in recall_records + clean_records if not r.get("error")]),
+        "confidence_calibration": confidence_calibration(
+            [r for r in recall_records + clean_records if not r.get("error")]),
         # Cycle-1: real_calls counts attempted model calls (failed attempts
         # still cost sockets/time); failed_calls breaks out the error share
-        # so a dead route no longer reads as full-measure spend.
-        "call_budget": {"real_calls": cache.real_calls + runs * len(sample_ids),
-                        "failed_calls": det["errors"] + sum(
-                            1 for r in recall_records + clean_records if r.get("error")),
+        # so a dead route no longer reads as full-measure spend. Vote-aware:
+        # every sample is a real call (determinism lane = runs * cases *
+        # vote_n, cache lane counts per slot); a fully failed record cost
+        # all vote_n of its samples (partial sample failures inside a
+        # successful vote are invisible here — the same approximation class
+        # as multi-route fallback attempts).
+        "call_budget": {"real_calls": cache.real_calls + runs * len(sample_ids) * vote_n,
+                        "failed_calls": (det["errors"] + sum(
+                            1 for r in recall_records + clean_records
+                            if r.get("error"))) * vote_n,
                         "cache_hits": cache.hits, "cache_misses": cache.misses},
         "records": {"determinism": det_records, "recall": recall_records,
                     "clean": clean_records},
@@ -544,11 +678,27 @@ def format_summary(report: dict) -> str:
                      f"actionable={act_n}/{c.get('cases', 0)}")
     fp = report["false_positives"]
     lines.append(f"\n## False positives (clean diffs)\n- noise: {fp['noise_fp_rate']:.1%}  "
-                 f"actionable: {fp['actionable_fp_rate']:.1%} "
+                 f"actionable defect-claims: {fp['actionable_fp_rate']:.1%} "
                  f"({fp['clean_cases']} clean cases; flagged: {', '.join(fp['flagged_case_ids']) or 'none'})")
+    if fp.get("law_note_rate") is not None:
+        lines.append(f"- coverage-only law notes (excluded from actionable bar): "
+                     f"{fp['law_note_rate']:.1%}")
     cal = report["calibration"]
     lines.append(f"\n## Honest uncertainty\n- numeric confidence emitted by product: "
-                 f"{cal['confidence_field_emitted']} (severity is the only claim-strength signal)")
+                 f"{cal['confidence_field_emitted']}")
+    cc = report.get("confidence_calibration") or {}
+    if cc.get("n_with_confidence"):
+        lines.append(f"- confidence ECE (5 bins, path-level labels): {cc['ece']}  "
+                     f"(emitted on {cc['n_with_confidence']}/{cc['n_findings']} "
+                     f"findings, rate {cc['emitted_rate']:.1%})")
+        for b in cc.get("bins", []):
+            if b["n"]:
+                lines.append(f"  - [{b['lo']:.1f},{b['hi']:.1f}]: n={b['n']} "
+                             f"mean_conf={b['mean_confidence']} "
+                             f"precision={b['empirical_precision']}")
+    else:
+        lines.append("- confidence ECE: NO confidence data (a --max-ece gate "
+                     "cannot pass without it)")
     lines.append(f"- labeling: {cal['labeling']}")
     for sev, row in cal["table"].items():
         p = f"{row['precision']:.1%}" if row["precision"] is not None else "n/a"
@@ -570,6 +720,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-tokens", type=int, help="override max_tokens")
     ap.add_argument("--seed", type=int, help="set a generation seed")
     ap.add_argument("--runs", type=int, default=5, help="determinism runs per case (>=2)")
+    ap.add_argument("--vote-n", type=int, default=None,
+                    help="override config.signature_vote_n (posted-findings "
+                    "best-of-N modal; 1 = single-shot)")
     ap.add_argument("--out", default=None, help="report output dir (default "
                     "~/.fl4write/reliability)")
     ap.add_argument("--cache-dir", default=None, help="response cache dir "
@@ -580,11 +733,17 @@ def main(argv: list[str] | None = None) -> int:
                     help="regression gate: fail exit 1 below this actionable recall")
     ap.add_argument("--max-actionable-fp", type=float, default=None,
                     help="regression gate: fail exit 1 above this actionable FP rate")
+    ap.add_argument("--max-ece", type=float, default=None,
+                    help="regression gate: fail exit 1 above this confidence ECE "
+                    "(fail-closed: no confidence data = gate fails)")
     args = ap.parse_args(argv)
     if args.runs < 2:
         ap.error("--runs must be >= 2 (stability needs repeats)")
 
     config = build_config(args.config, _route_overrides(args))
+    if args.vote_n is not None:
+        config = config.model_copy(
+            update={"signature_vote_n": max(1, min(9, args.vote_n))})
     out_dir = Path(args.out) if args.out else Path.home() / ".fl4write" / "reliability"
     cache_dir = None if (args.cache_dir == "none") else (
         Path(args.cache_dir) if args.cache_dir else Path.home() / ".fl4write" / "rel-cache")
@@ -611,6 +770,13 @@ def main(argv: list[str] | None = None) -> int:
             and report["false_positives"]["actionable_fp_rate"] > args.max_actionable_fp:
         failed_gates.append(f"actionable-FP {report['false_positives']['actionable_fp_rate']:.1%} "
                             f"> {args.max_actionable_fp:.1%}")
+    if args.max_ece is not None:
+        _ece = (report.get("confidence_calibration") or {}).get("ece")
+        if _ece is None:
+            failed_gates.append(f"confidence ECE: no confidence data "
+                                f"(gate {args.max_ece} cannot pass fail-closed)")
+        elif _ece > args.max_ece:
+            failed_gates.append(f"confidence ECE {_ece} > {args.max_ece}")
     if failed_gates:
         print("RELIABILITY GATES FAILED: " + "; ".join(failed_gates), file=sys.stderr)
         return 1

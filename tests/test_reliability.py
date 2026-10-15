@@ -20,6 +20,7 @@ from fl4write import reliability as rel
 from fl4write import reliability_corpus as corpus
 from fl4write.reliability import (
     ResponseCache,
+    confidence_calibration,
     determinism_metrics,
     fp_metrics,
     install_cached_call,
@@ -388,12 +389,39 @@ class TestSeverityCalibration:
         assert t["Nit"]["precision"] == pytest.approx(2 / 3)
         assert list(t.keys()) == ["Critical", "Major", "Minor", "Nit"]
 
-    def test_no_confidence_field_in_product_schema(self):
-        """Honest-uncertainty precondition, pinned: the Finding schema has
-        no confidence field — severity is the only claim-strength signal
-        the product emits, which is exactly what calibration measures."""
+    def test_confidence_field_optional_and_bounded(self):
+        """Honest-uncertainty surface (reliability queue 2026-09-17 item 2).
+        REGRESSION pin — FAILS PRE-FIX: the Finding schema carried NO
+        confidence field. Optional: absent means "no calibrated claim",
+        never an invented default; bounds [0,1] enforced by the model."""
         from fl4write.models import Finding
-        assert "confidence" not in Finding.model_fields
+        assert "confidence" in Finding.model_fields
+        f = Finding(rule_id="general", severity="Major", path="a.py", line=1,
+                    message="m")
+        assert f.confidence is None  # absent, not 0.0 / 0.5 / 1.0
+        f2 = Finding(rule_id="general", severity="Major", path="a.py", line=1,
+                     message="m", confidence=0.9)
+        assert f2.confidence == pytest.approx(0.9)
+        with pytest.raises(Exception):
+            Finding(rule_id="general", severity="Major", path="a.py", line=1,
+                    message="m", confidence=1.5)
+        with pytest.raises(Exception):
+            Finding(rule_id="general", severity="Major", path="a.py", line=1,
+                    message="m", confidence=-0.1)
+
+    def test_confidence_not_part_of_verdict_identity(self):
+        """Confidence is claim STRENGTH, not verdict identity — the
+        signature-vote must not treat a confidence flip as a different
+        verdict (that would re-introduce instability the vote exists to
+        kill)."""
+        from fl4write.models import Finding
+        f1 = [Finding(rule_id="general", severity="Major", path="a.py", line=2,
+                      message="m", confidence=0.9)]
+        f2 = [Finding(rule_id="general", severity="Major", path="a.py", line=2,
+                      message="m", confidence=0.4)]
+        f3 = [Finding(rule_id="general", severity="Major", path="a.py", line=2,
+                      message="m")]
+        assert verdict_signature(f1) == verdict_signature(f2) == verdict_signature(f3)
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +541,10 @@ class TestRunnerOffline:
             return _CANNED.format(path=m.group(1))
 
         monkeypatch.setattr(an, "_call_model", fake)
-        config = _offline_config()
+        # single-shot here: this test pins the BUDGET LAW arithmetic
+        # (runs x samples + cases), which the vote multiplies — the
+        # vote-aware version is pinned in test_vote_budget_and_slot_cache
+        config = _offline_config().model_copy(update={"signature_vote_n": 1})
         cache_dir = tmp_path / "rel-cache"
         det_ids = corpus.DETERMINISM_SAMPLE
         n_cases = len(corpus.DEFECT_CASES) + len(corpus.CLEAN_CASES)
@@ -674,6 +705,340 @@ class TestConfigAndGates:
     def test_cli_rejects_single_run(self, capsys):
         with pytest.raises(SystemExit):
             rel.main(["--config", "x.yaml", "--runs", "1"])
+
+
+# ---------------------------------------------------------------------------
+# signature-vote (reliability queue item 1) — anchor-flip class killed
+# ---------------------------------------------------------------------------
+
+_VOTE_DIFF = (
+    "diff --git a/impl.py b/impl.py\n"
+    "@@ -0,0 +1,3 @@\n"
+    "+def f(x):\n"
+    "+    return x\n"
+    "+\n"
+    "diff --git a/test_impl.py b/test_impl.py\n"
+    "@@ -0,0 +1,3 @@\n"
+    "+def test_f():\n"
+    "+    assert f(1) == 1\n"
+    "+\n"
+)
+_VOTE_FILES = {"impl.py", "test_impl.py"}
+
+
+def _anchor_canned(path):
+    return _CANNED.format(path=path)
+
+
+class TestSignatureVote:
+    """REGRESSION pins — FAIL PRE-FIX (analyze() was single-shot and posted
+    whatever sample came first; there was no vote_n). The measured 09-17
+    anchor-flip class: same rule+severity, path flipping between impl and
+    test files at T=0.0 (4/5 vs 1/5). Best-of-N modal posting must kill it
+    deterministically."""
+
+    @staticmethod
+    def _scripted(script):
+        state = {"i": 0}
+
+        def fake(route, prompt, mode="pr", system=None):
+            resp = script[state["i"] % len(script)]
+            state["i"] += 1
+            if isinstance(resp, Exception):
+                raise resp
+            return resp
+
+        return fake
+
+    @staticmethod
+    def _pr():
+        from fl4write.models import PullRequest
+        return PullRequest(forge="forgejo", number=1, repo="eval/reliability",
+                           head_sha="0" * 40)
+
+    def test_modal_anchor_wins_over_flip_class(self, monkeypatch, tmp_path):
+        """The measured 4/5-vs-1/5 flip, replayed: every posted verdict must
+        carry the MODAL anchor (4/5 = the test file), across repeated
+        voted calls. Single-shot analyze alternates and fails this."""
+        import fl4write.analyzer as an
+        import fl4write.telemetry as telemetry
+        monkeypatch.setenv("FL4WRITE_TELEMETRY", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(telemetry, "_STREAM", tmp_path / "tel.jsonl")
+        script = [_anchor_canned("test_impl.py")] * 4 + [_anchor_canned("impl.py")]
+        monkeypatch.setattr(an, "_call_model", self._scripted(script))
+        config = _offline_config().model_copy(update={"signature_vote_n": 5})
+        sigs = []
+        for _ in range(5):
+            doc = an.analyze(self._pr(), _VOTE_FILES, _VOTE_DIFF, config)
+            sigs.append(verdict_signature(doc.findings))
+        assert all(s == sigs[0] for s in sigs), "voted posting must be deterministic"
+        assert [s[0][2] for s in sigs] == ["test_impl.py"] * 5  # modal anchor
+
+    def test_tie_breaks_deterministically(self, monkeypatch, tmp_path):
+        """2-vs-2 split inside one vote (vote_n=4): the tie must break the
+        same way every time (lexicographically smallest signature) — a
+        non-deterministic tie-break would move the instability, not kill
+        it."""
+        import fl4write.analyzer as an
+        import fl4write.telemetry as telemetry
+        monkeypatch.setenv("FL4WRITE_TELEMETRY", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(telemetry, "_STREAM", str(tmp_path / "tel.jsonl"))
+        script = [_anchor_canned("impl.py"), _anchor_canned("test_impl.py")]
+        monkeypatch.setattr(an, "_call_model", self._scripted(script))
+        config = _offline_config().model_copy(update={"signature_vote_n": 4})
+        sigs = []
+        for _ in range(3):
+            doc = an.analyze(self._pr(), _VOTE_FILES, _VOTE_DIFF, config)
+            sigs.append(verdict_signature(doc.findings))
+        assert all(s == sigs[0] for s in sigs)
+        assert sigs[0][0][2] == "impl.py"  # lexicographic tie-break
+
+    def test_vote_n_1_is_byte_for_byte_single_shot(self, monkeypatch, tmp_path):
+        import fl4write.analyzer as an
+        import fl4write.telemetry as telemetry
+        monkeypatch.setenv("FL4WRITE_TELEMETRY", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(telemetry, "_STREAM", str(tmp_path / "tel.jsonl"))
+        calls = []
+        script = [_anchor_canned("impl.py"), _anchor_canned("test_impl.py")]
+        scripted = self._scripted(script)
+
+        def fake(route, prompt, mode="pr", system=None):
+            calls.append(1)
+            return scripted(route, prompt, mode, system)
+
+        monkeypatch.setattr(an, "_call_model", fake)
+        config = _offline_config().model_copy(update={"signature_vote_n": 1})
+        d1 = an.analyze(self._pr(), _VOTE_FILES, _VOTE_DIFF, config)
+        d2 = an.analyze(self._pr(), _VOTE_FILES, _VOTE_DIFF, config)
+        assert len(calls) == 2  # exactly one sample per analyze
+        assert d1.findings[0].path == "impl.py"
+        assert d2.findings[0].path == "test_impl.py"  # raw sample passes through
+
+    def test_partial_sample_failure_votes_over_survivors(self, monkeypatch, tmp_path):
+        import fl4write.analyzer as an
+        import fl4write.telemetry as telemetry
+        monkeypatch.setenv("FL4WRITE_TELEMETRY", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(telemetry, "_STREAM", str(tmp_path / "tel.jsonl"))
+        script = [RuntimeError("route down"), RuntimeError("route down"),
+                  _anchor_canned("impl.py"), _anchor_canned("impl.py"),
+                  _anchor_canned("impl.py")]
+        monkeypatch.setattr(an, "_call_model", self._scripted(script))
+        config = _offline_config().model_copy(update={"signature_vote_n": 5})
+        doc = an.analyze(self._pr(), _VOTE_FILES, _VOTE_DIFF, config)
+        assert verdict_signature(doc.findings) == [("general", "Major", "impl.py", 1)]
+
+    def test_all_samples_failing_fails_closed(self, monkeypatch, tmp_path):
+        import fl4write.analyzer as an
+        from fl4write.analyzer import ModelUnavailable
+        import fl4write.telemetry as telemetry
+        monkeypatch.setenv("FL4WRITE_TELEMETRY", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(telemetry, "_STREAM", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(an, "_call_model",
+                            self._scripted([RuntimeError("route down")]))
+        config = _offline_config().model_copy(update={"signature_vote_n": 3})
+        with pytest.raises(ModelUnavailable):
+            an.analyze(self._pr(), _VOTE_FILES, _VOTE_DIFF, config)
+
+    def test_vote_budget_and_slot_cache(self, monkeypatch, tmp_path):
+        """Vote-aware call budget + PER-SLOT cache replay: every vote sample
+        is a real call (determinism = runs x samples x vote_n), and a
+        cache re-measure replays N INDEPENDENT recorded samples per case —
+        slot-blind caching would serve sample 1 N times and fabricate a
+        unanimous vote."""
+        import fl4write.analyzer as an
+        import fl4write.telemetry as telemetry
+        monkeypatch.setenv("FL4WRITE_TELEMETRY", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(telemetry, "_STREAM", str(tmp_path / "tel.jsonl"))
+        calls = []
+
+        def fake(route, prompt, mode="pr", system=None):
+            calls.append(1)
+            m = re.search(r"\+\+\+ b/(\S+)", prompt)
+            return _CANNED.format(path=m.group(1))
+
+        monkeypatch.setattr(an, "_call_model", fake)
+        config = _offline_config().model_copy(update={"signature_vote_n": 3})
+        cache_dir = tmp_path / "rel-cache"
+        det_ids = corpus.DETERMINISM_SAMPLE
+        n_cases = len(corpus.DEFECT_CASES) + len(corpus.CLEAN_CASES)
+        per_case_calls = (2 * len(det_ids) + n_cases) * 3
+        r1 = rel.run_measurement(config, runs=2, determinism_ids=det_ids,
+                                 cache_dir=cache_dir, out_dir=tmp_path / "out")
+        assert len(calls) == per_case_calls
+        assert r1["call_budget"]["real_calls"] == per_case_calls
+        assert r1["call_budget"]["cache_hits"] == 0
+        calls.clear()
+        r2 = rel.run_measurement(config, runs=2, determinism_ids=det_ids,
+                                 cache_dir=cache_dir, out_dir=tmp_path / "out2")
+        assert len(calls) == 2 * len(det_ids) * 3  # determinism stays fresh
+        assert r2["call_budget"]["cache_hits"] == n_cases * 3  # per-slot replay
+        assert r2["call_budget"]["real_calls"] == 2 * len(det_ids) * 3
+
+
+# ---------------------------------------------------------------------------
+# honest uncertainty (queue item 2): confidence contract + ECE
+# ---------------------------------------------------------------------------
+
+def _conf_canned(path, conf_json):
+    return ('{"findings": [{"rule_id": "general", "severity": "Major", '
+            f'"path": "{path}", "line": 1, "category": "General", '
+            '"message": "Arbitrary SQL executes from the unsanitized input.", '
+            f'"proposal": "", "confidence": {conf_json}}}]}}')
+
+
+class TestConfidenceContract:
+    def test_prompt_carries_confidence_contract(self, monkeypatch, tmp_path):
+        import fl4write.analyzer as an
+        import fl4write.telemetry as telemetry
+        monkeypatch.setenv("FL4WRITE_TELEMETRY", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(telemetry, "_STREAM", str(tmp_path / "tel.jsonl"))
+        prompts = []
+
+        def fake(route, prompt, mode="pr", system=None):
+            prompts.append(prompt)
+            return '{"findings": []}'
+
+        monkeypatch.setattr(an, "_call_model", fake)
+        an.analyze(TestSignatureVote._pr(), _VOTE_FILES, _VOTE_DIFF,
+                   _offline_config(), vote_n=1)
+        assert any("CONFIDENCE CONTRACT" in p for p in prompts)
+        assert any("honest probability" in p for p in prompts)
+
+    def test_valid_confidence_preserved(self, monkeypatch, tmp_path):
+        import fl4write.analyzer as an
+        import fl4write.telemetry as telemetry
+        monkeypatch.setenv("FL4WRITE_TELEMETRY", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(telemetry, "_STREAM", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(an, "_call_model",
+                            lambda r, p, mode="pr", system=None:
+                            _conf_canned("impl.py", "0.85"))
+        doc = an.analyze(TestSignatureVote._pr(), _VOTE_FILES, _VOTE_DIFF,
+                         _offline_config(), vote_n=1)
+        assert doc.findings[0].confidence == pytest.approx(0.85)
+
+    @pytest.mark.parametrize("bad", ['"high"', "true", "1.5", "-0.2", "null"])
+    def test_malformed_confidence_stripped_not_coerced(self, monkeypatch, tmp_path, bad):
+        """A malformed confidence claim degrades to ABSENT — never coerced
+        (bool True would silently become 1.0; '"high"' would crash or
+        invent). The finding itself stays, judged on grounding alone."""
+        import fl4write.analyzer as an
+        import fl4write.telemetry as telemetry
+        monkeypatch.setenv("FL4WRITE_TELEMETRY", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(telemetry, "_STREAM", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(an, "_call_model",
+                            lambda r, p, mode="pr", system=None:
+                            _conf_canned("impl.py", bad))
+        doc = an.analyze(TestSignatureVote._pr(), _VOTE_FILES, _VOTE_DIFF,
+                         _offline_config(), vote_n=1)
+        assert len(doc.findings) == 1  # grounding kept it
+        assert doc.findings[0].confidence is None
+
+    def test_run_case_records_confidence(self, monkeypatch, tmp_path):
+        import fl4write.analyzer as an
+        import fl4write.telemetry as telemetry
+        monkeypatch.setenv("FL4WRITE_TELEMETRY", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(telemetry, "_STREAM", str(tmp_path / "tel.jsonl"))
+        monkeypatch.setattr(an, "_call_model",
+                            lambda r, p, mode="pr", system=None:
+                            _conf_canned("users_query.py", "0.7"))
+        rec = run_case(corpus.case_by_id("sql-string-concat"), _offline_config())
+        assert rec["findings"][0]["confidence"] == pytest.approx(0.7)
+
+
+class TestConfidenceCalibration:
+    """ECE math, pinned on synthetic records (queue item 2: the CEO's
+    honest-uncertainty bar becomes a NUMBER with a regression gate)."""
+
+    def _rec(self, kind, confs):
+        return {"kind": kind, "case_id": "x", "flag": "defect",
+                "severity_counts": {"Major": len(confs)},
+                "findings": [{"rule_id": "general", "severity": "Major",
+                              "path": "a.py", "line": 1, "message": "m",
+                              "confidence": c} for c in confs]}
+
+    def test_ece_math(self):
+        # two claims at 0.9: one true, one false -> bin precision 0.5
+        # ECE = |0.5 - 0.9| = 0.4
+        cc = confidence_calibration([self._rec("defect", [0.9]),
+                                     self._rec("clean", [0.9])])
+        assert cc["ece"] == pytest.approx(0.4)
+        assert cc["n_with_confidence"] == 2 and cc["n_findings"] == 2
+        assert cc["emitted_rate"] == 1.0
+        top = cc["bins"][-1]
+        assert top["n"] == 2 and top["mean_confidence"] == pytest.approx(0.9)
+        assert top["empirical_precision"] == pytest.approx(0.5)
+
+    def test_calibrated_claims_score_low_ece(self):
+        # 0.9-confident claims true 9/10 times, 0.2-confident claims true
+        # 1/5 times -> near-zero ECE (the definition of honest uncertainty)
+        recs = [self._rec("defect", [0.9] * 9), self._rec("clean", [0.9]),
+                self._rec("defect", [0.2]), self._rec("clean", [0.2] * 4)]
+        cc = confidence_calibration(recs)
+        assert cc["ece"] == pytest.approx(0.0)
+
+    def test_absent_confidence_is_honest_gap_not_default(self):
+        cc = confidence_calibration([self._rec("defect", [None, None])])
+        assert cc["ece"] is None  # no data — never invented
+        assert cc["emitted_rate"] == 0.0
+        assert cc["n_findings"] == 2
+
+    def test_confidence_one_lands_in_top_bin(self):
+        cc = confidence_calibration([self._rec("defect", [1.0])])
+        assert cc["bins"][-1]["n"] == 1
+        # one claim at 1.0 that is true: precision 1/1 = 1.0, conf 1.0 -> ECE 0.0
+        assert cc["ece"] == pytest.approx(0.0)
+        assert cc["bins"][-1]["empirical_precision"] == 1.0
+
+    def test_severity_calibration_reports_emission(self):
+        recs = [self._rec("defect", [0.9])]
+        assert severity_calibration(recs)["confidence_field_emitted"] is True
+        assert severity_calibration([self._rec("defect", [None])])[
+            "confidence_field_emitted"] is False
+
+
+class TestFpLawNoteSplit:
+    """Queue item 3 — actionable_fp_rate must measure DEFECT-FINDING ERROR;
+    coverage-only testing-law claims ride their own bar (both actionable
+    FPs in the 09-17 baseline were coverage claims on law-dirty fixtures)."""
+
+    def _clean_rec(self, findings):
+        return {"case_id": "k", "defect_class": "", "kind": "clean",
+                "signature": [], "flag": "defect",
+                "actionable": any(f.get("severity") in ("Critical", "Major")
+                                  for f in findings),
+                "severity_counts": {}, "findings": findings, "error": ""}
+
+    def test_coverage_law_note_rides_own_bar(self):
+        note = {"rule_id": "tests", "severity": "Major", "path": "a.py",
+                "line": 1, "message": "No tests exercise this new logic."}
+        m = fp_metrics([self._clean_rec([note])])
+        assert m["actionable_fp_rate"] == 0.0   # not defect-finding error
+        assert m["law_note_rate"] == 1.0
+        assert m["noise_fp_rate"] == 1.0        # still a finding (any-severity bar)
+
+    def test_defect_claim_still_counts(self):
+        defect = {"rule_id": "general", "severity": "Major", "path": "a.py",
+                  "line": 1,
+                  "message": "Arbitrary SQL executes from the unsanitized input."}
+        note = {"rule_id": "tests", "severity": "Major", "path": "a.py",
+                "line": 1, "message": "No tests exercise this new logic."}
+        m = fp_metrics([self._clean_rec([defect, note])])
+        assert m["actionable_fp_rate"] == 1.0
+        assert m["law_note_rate"] == 1.0
+
+    def test_failing_test_claim_is_a_defect_claim(self):
+        claim = {"rule_id": "tests", "severity": "Major", "path": "a.py",
+                 "line": 1, "message": "The new test fails when the helper is called."}
+        m = fp_metrics([self._clean_rec([claim])])
+        assert m["actionable_fp_rate"] == 1.0
+        assert m["law_note_rate"] == 0.0
+
+    def test_legacy_records_without_findings_keep_old_bar(self):
+        legacy = {"case_id": "k", "defect_class": "", "kind": "clean",
+                  "signature": [], "flag": "defect", "actionable": True,
+                  "severity_counts": {"Major": 1}, "findings": [], "error": ""}
+        m = fp_metrics([legacy])
+        assert m["actionable_fp_rate"] == 1.0
 
 
 # ---------------------------------------------------------------------------
