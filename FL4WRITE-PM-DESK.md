@@ -579,3 +579,35 @@ Environment: fixed code (5794f19 tree) staged to `nucbox:/tmp/fl4write-cadence-v
 Minted with this intake as parent (ids recorded in the t_0267c240 completion metadata): (1) fix lane — LAW-22 SSH transport defect + endpoint/host-derivation gaps + preflight laws; (2) reliability queue — anchor signature-vote determinism, honest-uncertainty confidence emission, corpus hardening, plus retry of the end-to-end cadence receipt; (3) Head-of-Product escalation — four-lineage divergence + serving-host deploy gate + production cron env gap + shared-floor contention note.
 
 — pm-fl4write, session 1 (t_0267c240), 2026-10-15 00:45 PT
+
+---
+
+## 2026-10-15 — Session 2: fix lane t_69974fc6 — LAW-22 transport + cadence preflight (commit `27b5cdb`)
+
+### 1. What landed
+
+Local-only commit **`27b5cdb`** "fix: LAW-22 SSH stdin transport + fail-closed local serving state + cadence preflight" (on `ca09e79`; push/merge remains gated). Five files, 244+/54−:
+
+1. **LAW-22 transport (defect 1)** — `fl4write/reliability.py::gather_remote_serving_state` now ships the probe over **stdin** (`ssh … python3 -`, `input=_PROBE`); `python3 -c <body>` over ssh is gone (module-level static guard test pins this). Fail-closed branches unchanged.
+2. **Local fail-closed parity (gap found live this session, fixed same-class)** — `_gather_local_serving_state` previously **raised** (e.g. `FileNotFoundError` on a missing CHAMPION-ROUTE-HASH) instead of returning its documented `{unavailable: true}`; now stage failures (route read / systemctl / MainPID=0 / /proc / manifest) return `{unavailable: true, reason, collected_from: local}` with the same stage reasons as the remote probe, and weight resolution is lenient exactly like the remote probe.
+3. **Derivation + `--serving-host` semantics (defect 2)** — flag given ⇒ authoritative (`''` = LOCAL collection, pinned); omitted ⇒ derived from endpoint: loopback/this-machine ⇒ local; `100.113.174.74|nucbox` ⇒ authorized alias `nucbox` (overridable `FL4WRITE_SERVING_SSH`) with a same-IP check that forces local on the serving host itself; anything else ⇒ fail with an actionable message (never a bare tailnet IP — LAW 20). Default endpoint changed to the champion loopback route `http://127.0.0.1:46377/v1/chat/completions` (CHAMPION-ROUTE-HASH `route=127.0.0.1:46377`; the server binds 127.0.0.1, so the tailnet-IP form is refused from every host — verified).
+4. **Preflights (defect 3 + more), all BEFORE any state capture** — (a) config env: `FL4WRITE_MODEL_ENDPOINT` defaults to the measured endpoint (champion), then every `${VAR}` referenced by `fl4write.fl4write.yaml` is checked and missing ones are NAMED in a fail-fast message; (b) endpoint reachability (curl; `000` ⇒ fail fast with the loopback hint); (c) remote ssh alias reachability/authorization (BatchMode).
+
+### 2. Verification receipts
+
+- **Source acceptance (fix-lane scope, isolated tree = `ca09e79` + fix-lane hunks only): 1518 passed + 4 skipped, Ruff clean; doc-truth verifier GREEN (nested run rc=0)** — README restamped 1518 by the verifier's derived claim, then committed.
+- **AC1 LIVE-RUNTIME-ACCEPTED**: `gather_serving_state('nucbox')` from the mini over the stdin transport returns real state: boot `3c244195-c78d-4014-b157-16fcae944cab`, pid 793048, start_ticks 15411963, manifest_sha256 `394b57e2508b…`, endpoint `127.0.0.1:46377`, route_hash `8212798cab87…` (= CHAMPION-ROUTE-HASH).
+- **AC2 PRESERVED + EXTENDED (live)**: unresolvable host ⇒ `{unavailable: true, reason: "ssh probe exited 255…"}`; script-level fail-closed ⇒ exit 1, no receipt/trend file written (probe E: answering endpoint + unavailable local state on macOS). Local path now honors the same contract (regression-tested: `TestLocalServingStateFailClosed`).
+- **AC3 LIVE-VERIFIED** (four probes): unmapped host ⇒ derivation refusal (exit 1); old tailnet default ⇒ ssh-alias derivation succeeds then endpoint preflight fails fast `curl http_code '000'` with the loopback hint (exit 1); `--serving-host ''` ⇒ skips derivation, local path; serving-host self-IP ⇒ local collection.
+- **AC4 LIVE-VERIFIED**: config referencing `${MISSING_VAR_X}` ⇒ `PREFLIGHT FAILED: config references unset environment variable(s): MISSING_VAR_X` before any capture (exit 1).
+- **AC5 NOT ACHIEVED — annotated per HoP DECISION 3 (t_32662913): "blocked: champion slots held by external traffic".** Three bounded attempts in this measurement window: (1) 01:38 PT `Say OK` unanswered in 120 s; (2) 01:47 PT unanswered in 60 s, GPU 100%; (3) 01:52 PT unanswered in 45 s; `/slots` shows slot 0 processing a **58,826-token external agentic prompt** (task id 6473) — platform-seat agentic traffic through the shared floor. Nothing killed. Retry belongs to t_32662913 step 5 ("retry the end-to-end receipt row … when champion slots free").
+
+### 3. Collision handling (hotspot flagged on both cards)
+
+During this session a **concurrent reliability-queue workstream** (signature-vote anchor determinism, honest-uncertainty confidence/ECE, corpus hardening — follow-up card (2) of the t_0267c240 intake) began editing the same working clone live: `fl4write/reliability.py` (~30 hunks), `fl4write/analyzer.py` (+112), `fl4write/config.py` (+7), `fl4write/models.py` (+6), plus tests. Fix-lane committed **hunks-only** (`git apply --cached`, content-marked hunk selection: 5/20 in reliability.py, 1/5 in test_reliability.py, 3/3 in test_cadence_orchestration.py) so none of that in-flight work entered `27b5cdb`; the worktree kept it untouched and uncommitted. Their README restamp 2 (1542 = 1518 + their 24) is theirs to commit. A transient mid-write `ImportError` observed earlier this session is explained by their concurrent edits, not by fix-lane code.
+
+### 4. Acceptance level of record for the fix lane
+
+**AC1–AC4: LIVE-RUNTIME-accepted (real serving state, real script probes, this session). AC5: NOT accepted — environmentally blocked (shared-floor contention, DECISION 3 annotation), retry owned by t_32662913 step 5. PRODUCTION acceptance NOT claimed (fix is not deployed to the production checkout; deploy gate = t_32662913 steps 2–4 — this card's `27b5cdb` is step 2, Landed).**
+
+— pm-fl4write, session 2 (t_69974fc6), 2026-10-15 ~01:55 PT
