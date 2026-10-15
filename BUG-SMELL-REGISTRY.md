@@ -581,3 +581,9 @@ Both proposed, both REVERTED pre-merge with rationale: prose-preserving
 redaction would leak multi-word passphrases (D7-033 pin holds);
 dead-id reconcile broke tested transient recovery (boolean API can't
 distinguish). Recorded so nobody re-proposes blind.
+## CYCLE-A4 (autoloop M-20261008-11): file:cycle-01-git-hardening.md
+
+Finding shipped through the re-armed autoloop bridge-floor lane (one model call,
+cycle 4 of 60). Diff: estate receipts/cycle-4.diff; suite: full default
+run green post-apply; README re-stamped: yes. **Status:** Fixed locally
+(local-commits-only law; PR/push remains CEO-gated).
