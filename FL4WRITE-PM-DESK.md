@@ -508,3 +508,20 @@ re-approved with tamper probes). Full local suite 1469+4 zero-failure
 before merge. Round 3: 10 findings + 1 reverted proposal. Zero-clean
 streak: 0 (round non-clean). Remaining: rounds 4-5, mini-seat reply,
 mirror divergence (do not touch), live quality, security menu.
+
+## SILENT-DEATH ASSESSMENT + PM PROFILE BIRTH — 2026-10-14 (Head of Product, kanban t_8ca9a006)
+
+Trigger: delegated-lane-receipts cron flagged this desk file 7 days stale. **Verdict: ACTIVE — not dormant.**
+
+Evidence:
+- The stale mtime is a checkout artifact: this working copy was recreated from a git bundle on 2026-10-07 18:38 (reflog: "branch: Created from refs/bundle/remotes/origin/main") — every file mtime reset then. No remote configured in this clone.
+- Real work landed 2026-10-13: `4bc81fa` (reliability transport receipts checkpoint; 1489 passed + 4 skipped, Ruff + Gitleaks clean) and `c8c2e68` (cadence pre/post serving identity-binding fix, 23 new tests; 1512 passed + 4 skipped SOURCE-accepted; runtime acceptance NOT claimed — SSH to the serving host unverified). Both are reliability-first deep work — the mission of record.
+- Kanban flow through 2026-10-13/14: t_6ce2f86e (owner rulings), t_7423e625 (cadence fix, done), t_24df25a5 (lint blockers, done), t_916f66fb (producer binding contract, done), t_6297a21b (git hygiene sweep); dependent/awaiting: t_6704525f (real reliability eval through the producer — needs the owner-approved serving manifest).
+- Gap the flag correctly surfaced: the desk record itself was stale (last desk commit 2026-10-04, 9f897ce) and no PM profile existed — fl4write work rode ad-hoc product cards.
+
+Action taken (Head of Product, PM-fleet spawn authority):
+- PM profile `pm-fl4write` birthed: roster entry (credential pool xiaomi/zai/minimax/ollama-cloud), profile cloned from product, custom SOUL.md carrying the RELIABILITY-FIRST mission + inherited state through c8c2e68, ANCESTORS startup hook included. Kanban mode.
+- First dispatch issued to pm-fl4write: intake — reconcile this desk through c8c2e68, author pm-fl4write-ancestors.md, runtime-verify the cadence identity-binding fix on the serving host or report the exact blocker, then work the reliability queue.
+- Standing orders unchanged: chain gates stay CLOSED; local commits only; push/merge is a Head-of-Product call.
+
+— Head of Product, session t_8ca9a006
