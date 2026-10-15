@@ -232,6 +232,35 @@ class TestGatherRemoteServingState:
         assert result["runtime"]["pid"] == 42
         assert result["collected_from"] == "100.113.174.74"
 
+    def test_probe_transport_is_stdin_not_dash_c(self):
+        """LAW 22: probe body travels via stdin (`python3 -`), never as a
+        `python3 -c <body>` argv — ssh joins argv into a shell command
+        line and the remote shell re-parses the body (runtime-broken
+        2026-10-15, three probes)."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"unavailable": True,
+                                         "reason": "unit not running"})
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            gather_remote_serving_state("nucbox")
+        argv = mock_run.call_args[0][0]
+        kwargs = mock_run.call_args[1]
+        assert argv[-2:] == ["python3", "-"]
+        assert "-c" not in argv
+        # the probe body must not ride in argv at all
+        assert all("import hashlib" not in arg for arg in argv)
+        # it rides on stdin instead
+        assert "import hashlib" in kwargs.get("input", "")
+
+    def test_no_python_dash_c_transport_anywhere_in_module(self):
+        """Static guard: fl4write/reliability.py never ships a program body
+        through ssh as `python3 -c <body>` (any host, any caller)."""
+        src = (Path(__file__).resolve().parents[1]
+               / "fl4write" / "reliability.py").read_text()
+        assert "'python3', '-c'" not in src
+        assert '"python3", "-c"' not in src
+        assert "'python3', '-'" in src
+
     def test_gather_serving_state_dispatches_to_remote(self):
         """gather_serving_state(host=...) calls gather_remote_serving_state."""
         with patch("fl4write.reliability.gather_remote_serving_state") as mock:
@@ -239,6 +268,31 @@ class TestGatherRemoteServingState:
             result = gather_serving_state(host="100.113.174.74")
         mock.assert_called_once_with("100.113.174.74")
         assert result["unavailable"] is True
+
+
+# ---------------------------------------------------------------------------
+# _gather_local_serving_state — fail-closed contract (never raises)
+# ---------------------------------------------------------------------------
+
+class TestLocalServingStateFailClosed:
+    def test_missing_route_file_returns_unavailable_not_raise(self, monkeypatch,
+                                                              tmp_path):
+        """Fail-closed contract: a local probe failure returns
+        {'unavailable': True, 'reason': ...}, never an exception (the
+        remote probe has honored this since c8c2e68; the local path must
+        match)."""
+        monkeypatch.setattr("fl4write.reliability._ROUTE_PATH",
+                            tmp_path / "CHAMPION-ROUTE-HASH-missing")
+        state = gather_serving_state()
+        assert state["unavailable"] is True
+        assert "route read failed" in state["reason"]
+
+    def test_gather_serving_state_never_raises_on_any_host(self):
+        """Contract: on any host, gather_serving_state() returns a dict —
+        real state, or fail-closed unavailable.  Never a traceback."""
+        state = gather_serving_state()
+        assert isinstance(state, dict)
+        assert ("runtime" in state) or (state.get("unavailable") is True)
 
 
 # ---------------------------------------------------------------------------
@@ -339,14 +393,15 @@ class TestCadenceOrchestrationOrdering:
     def test_local_collection_on_remote_endpoint_is_not_identity(self):
         """Local /proc reads do NOT represent a remote serving host.
         This test documents the design constraint: gather_serving_state()
-        with host=None on a macOS machine (no /proc) would raise.
-        The cadence script must pass the correct host to avoid this.
+        with host=None on a macOS machine (no /proc) fails closed with an
+        unavailable dict.  The cadence script must pass the correct host
+        to avoid this.
         """
-        # On macOS, _gather_local_serving_state() would fail because
-        # /proc doesn't exist. This is correct behavior — fail closed
-        # rather than fabricate local state for a remote host.
-        # We don't actually call it (would raise on macOS), but we
-        # verify the remote path is the default for non-localhost endpoints.
+        # On macOS, _gather_local_serving_state() fails closed (unavailable
+        # dict, no exception) because /proc doesn't exist. This is correct
+        # behavior — fail closed rather than fabricate local state for a
+        # remote host.  We verify the remote path is the default for
+        # non-localhost endpoints.
         with patch("fl4write.reliability.gather_remote_serving_state") as mock:
             mock.return_value = {"unavailable": True, "reason": "test"}
             # Non-localhost endpoint => should use remote collection

@@ -9,38 +9,101 @@
 # Usage: tools/reliability-cadence.sh [--quick] [--dry-run FILE] [--serving-host HOST]
 #   --quick:          runs=3 spot check
 #   --dry-run:        write receipt row to FILE instead of trend.jsonl
-#   --serving-host:   SSH host for remote serving state collection
-#                     (default: derive from endpoint URL; empty = local)
+#   --serving-host:   SSH host (alias) for remote serving state collection.
+#                     PINNED SEMANTICS (2026-10-15): when the flag is given
+#                     it is authoritative — even an empty value, which
+#                     forces LOCAL collection.  When omitted, the target is
+#                     derived from the endpoint (see derivation below).
 set -euo pipefail
 
 REPO_HOME="${FL4WRITE_HOME:-$HOME/workspaces/fl4write}"
 OUT_BASE="$HOME/.fl4write/reliability"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-RUNS=5; MIN_DET=0.93; DRY_RUN_FILE=""; SERVING_HOST=""
+RUNS=5; MIN_DET=0.93; DRY_RUN_FILE=""; SERVING_HOST=""; SERVING_HOST_GIVEN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --quick) RUNS=3; MIN_DET=0.80; shift ;;
     --dry-run) DRY_RUN_FILE="$2"; shift 2 ;;
-    --serving-host) SERVING_HOST="$2"; shift 2 ;;
+    --serving-host) SERVING_HOST="$2"; SERVING_HOST_GIVEN=1; shift 2 ;;
     *) shift ;;
   esac
 done
 OUT_DIR="$OUT_BASE/run-$STAMP"
 mkdir -p "$OUT_DIR"
 
+# --- endpoint: the CHAMPION route (CHAMPION-ROUTE-HASH route=127.0.0.1:46377
+# on the serving host).  The llama-server binds 127.0.0.1, so the tailnet-IP
+# form (http://100.113.174.74:46377/...) is REFUSED from every host including
+# the serving host itself (verified 2026-10-15: curl -> 000 everywhere;
+# loopback answers).  The measurement therefore runs ON the serving host
+# against loopback.  NOTE (route story, decision pending): run-cycle.sh
+# exports FL4WRITE_MODEL_ENDPOINT=http://127.0.0.1:46399 (CRACK-Ornith);
+# this cadence deliberately measures the CHAMPION route, not that one.
+ENDPOINT="${FL4WRITE_REL_ENDPOINT:-http://127.0.0.1:46377/v1/chat/completions}"
+
 # --- derive serving host from endpoint if not explicitly given ---
-ENDPOINT="${FL4WRITE_REL_ENDPOINT:-http://100.113.174.74:46377/v1/chat/completions}"
-if [ -z "$SERVING_HOST" ]; then
+if [ "$SERVING_HOST_GIVEN" = 0 ]; then
   # Extract host:port from URL; strip protocol and path
   _ep_host="${ENDPOINT#http://}"
   _ep_host="${_ep_host#https://}"
   _ep_host="${_ep_host%%/*}"
   _ep_ip="${_ep_host%%:*}"
-  # If endpoint points to localhost/127.0.0.1, use local collection
-  if [ "$_ep_ip" = "127.0.0.1" ] || [ "$_ep_ip" = "localhost" ]; then
-    SERVING_HOST=""
-  else
-    SERVING_HOST="$_ep_ip"
+  # Map endpoint host -> authorized ssh target (LAW 20: bare tailnet IPs are
+  # refused by tailscale policy; only ssh-config aliases are authorized).
+  # Loopback / this machine -> local collection.  Unmapped hosts fail with an
+  # actionable message instead of a broken ssh attempt later.
+  case "$_ep_ip" in
+    127.0.0.1|localhost|::1|"$(hostname)"|"$(hostname -s 2>/dev/null || true)")
+      SERVING_HOST="" ;;
+    100.113.174.74|nucbox)
+      # Endpoint is this machine's own address -> collect locally on the
+      # serving host; otherwise reach it via the authorized alias.
+      if hostname -I 2>/dev/null | tr ' ' '\n' | grep -qx "$_ep_ip"; then
+        SERVING_HOST=""
+      else
+        SERVING_HOST="${FL4WRITE_SERVING_SSH:-nucbox}"
+      fi ;;
+    *)
+      echo "PREFLIGHT FAILED: cannot derive an authorized ssh target for endpoint host '$_ep_ip'." >&2
+      echo "Pass --serving-host HOST (authorized ssh alias) or --serving-host '' for local collection." >&2
+      exit 1 ;;
+  esac
+fi
+
+# --- PREFLIGHT (all before any state capture; fail fast with the cause named) ---
+# 1. Config env: fl4write.fl4write.yaml references ${FL4WRITE_MODEL_ENDPOINT}
+#    and the bare weekly crontab exports nothing (reproduced ValueError:
+#    "config references unset environment variable").  Default it to the
+#    measured endpoint (champion route), then verify every ${VAR} referenced
+#    by the config is set — naming each missing one.
+export FL4WRITE_MODEL_ENDPOINT="${FL4WRITE_MODEL_ENDPOINT:-$ENDPOINT}"
+_MISSING=""
+for _var in $(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$REPO_HOME/fl4write.fl4write.yaml" 2>/dev/null | sort -u | tr -d '${}' || true); do
+  if [ -z "${!_var:-}" ]; then _MISSING="$_MISSING $_var"; fi
+done
+if [ -n "$_MISSING" ]; then
+  echo "PREFLIGHT FAILED: config references unset environment variable(s):$_MISSING" >&2
+  echo "Export them before running (see $REPO_HOME/fl4write.fl4write.yaml)." >&2
+  exit 1
+fi
+
+# 2. Endpoint reachability (anything but a curl transport failure counts —
+#    400/401/500 mean the server is listening; 000 means refused/absent).
+_ep_code="$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST "$ENDPOINT" \
+  -H 'Content-Type: application/json' -d '{}' || true)"
+if [ -z "$_ep_code" ] || [ "$_ep_code" = "000" ]; then
+  echo "PREFLIGHT FAILED: model endpoint not reachable: $ENDPOINT (curl http_code '$_ep_code')." >&2
+  echo "The champion server binds 127.0.0.1 — run this cadence on the serving host, or set FL4WRITE_REL_ENDPOINT." >&2
+  exit 1
+fi
+
+# 3. Serving-state collection target: if remote, the ssh alias must be
+#    authorized and reachable before any state capture.
+if [ -n "$SERVING_HOST" ]; then
+  if ! ssh -o ConnectTimeout=8 -o BatchMode=yes "$SERVING_HOST" true 2>/dev/null; then
+    echo "PREFLIGHT FAILED: ssh target '$SERVING_HOST' unreachable or unauthorized." >&2
+    echo "Use an authorized ssh alias (tailscale policy refuses bare tailnet IPs), or --serving-host '' for local collection." >&2
+    exit 1
   fi
 fi
 

@@ -733,15 +733,24 @@ def _save_artifact(content, path):
     return hashlib.sha256(data).hexdigest()
 
 
+_ROUTE_PATH = Path('/home/simon/exp/CHAMPION-ROUTE-HASH')
+
+
 def _gather_local_serving_state():
     """Gather live serving state from the local machine.
 
     Reads systemd unit files, /proc, and the CHAMPION-ROUTE-HASH to
     produce the fields the watchtower detector requires.  Linux/systemd
-    only — will raise on macOS or if the unit is inactive.
+    only.
+
+    Fail-closed per the receipt contract: any probe failure returns
+    ``{'unavailable': True, 'reason': ...}`` instead of raising — same
+    stage reasons as the remote probe (route read / systemctl / /proc),
+    and the same lenient weight resolution (unresolvable identities are
+    skipped, matching gather_remote_serving_state).
 
     Returns dict with: runtime, manifest, manifest_sha256, endpoint,
-    route_hash.
+    route_hash — or the unavailable dict.
     """
     import re
     import shlex
@@ -749,31 +758,54 @@ def _gather_local_serving_state():
 
     _CANON = 'watchtower-effective/v1'
     _UNIT = 'qwen27.service'
-    _ROUTE = Path('/home/simon/exp/CHAMPION-ROUTE-HASH')
 
-    route_text = _ROUTE.read_text().strip()
+    try:
+        route_text = _ROUTE_PATH.read_text().strip()
+    except Exception as exc:
+        return {'unavailable': True,
+                'reason': f'route read failed: {exc}',
+                'collected_from': 'local'}
     route_hash = route_text.split()[0]
     fields = dict(re.findall(r'(\w+)=([^\s]+)', route_text))
-    endpoint = fields['route']
+    endpoint = fields.get('route', 'unknown')
 
-    props = subprocess.check_output(
-        ['systemctl', 'show', _UNIT, '-p', 'FragmentPath',
-         '-p', 'DropInPaths', '-p', 'MainPID'], text=True)
+    try:
+        props = subprocess.check_output(
+            ['systemctl', 'show', _UNIT, '-p', 'FragmentPath',
+             '-p', 'DropInPaths', '-p', 'MainPID'], text=True)
+    except Exception as exc:
+        return {'unavailable': True,
+                'reason': f'systemctl failed: {exc}',
+                'collected_from': 'local'}
     props = dict(line.split('=', 1) for line in props.splitlines())
-    paths = [props['FragmentPath']] + shlex.split(props['DropInPaths'])
-    files = [(p, Path(p).read_text()) for p in paths]
-
     pid = int(props['MainPID'])
+    if pid == 0:
+        return {'unavailable': True,
+                'reason': 'unit not running (MainPID=0)',
+                'collected_from': 'local'}
+    paths = [props['FragmentPath']] + shlex.split(props.get('DropInPaths', ''))
+    files = []
+    for p in paths:
+        try:
+            files.append((p, Path(p).read_text()))
+        except Exception:
+            pass
+
     proc = Path('/proc') / str(pid)
-    live = (proc.joinpath('cmdline').read_bytes()
-            .rstrip(b'\x00').decode().split('\x00'))
-    stat = proc.joinpath('stat').read_text().rsplit(')', 1)[1].split()
-    boot_id = (Path('/proc/sys/kernel/random/boot_id')
-               .read_text().strip())
-    live_env = dict(
-        x.split('=', 1)
-        for x in proc.joinpath('environ').read_bytes()
-               .decode().split('\x00') if '=' in x)
+    try:
+        live = (proc.joinpath('cmdline').read_bytes()
+                .rstrip(b'\x00').decode().split('\x00'))
+        stat = proc.joinpath('stat').read_text().rsplit(')', 1)[1].split()
+        boot_id = (Path('/proc/sys/kernel/random/boot_id')
+                   .read_text().strip())
+        live_env = dict(
+            x.split('=', 1)
+            for x in proc.joinpath('environ').read_bytes()
+                   .decode().split('\x00') if '=' in x)
+    except Exception as exc:
+        return {'unavailable': True,
+                'reason': f'/proc read failed: {exc}',
+                'collected_from': 'local'}
     env_keys = ['HOME', 'HSA_ENABLE_SDMA', 'HSA_XNACK',
                 'LD_LIBRARY_PATH']
     env = {k: live_env.get(k) for k in env_keys}
@@ -793,23 +825,33 @@ def _gather_local_serving_state():
             r'/models--([^/]+)/snapshots/([0-9a-f]{40})/([^/]+)$',
             str(p))
         if not match or not p.is_file() or p.stat().st_size <= 0:
-            raise ValueError('unresolved immutable model identity')
+            return None
         return {'repository': match[1], 'revision': match[2],
                 'file': match[3], 'size': p.stat().st_size}
 
     weights = []
     for flag in ('-m', '--mmproj'):
-        weights.append(_model_identity(live[live.index(flag) + 1]))
+        try:
+            weight = _model_identity(live[live.index(flag) + 1])
+        except (IndexError, OSError, ValueError):
+            weight = None
+        if weight:
+            weights.append(weight)
 
-    manifest = {
-        'canonicalization': _CANON, 'unit': _UNIT,
-        'files': [{'path': p, 'sha256': hashlib.sha256(
-            text.encode()).hexdigest()} for p, text in files],
-        'argv': live, 'environment': env, 'weights': weights,
-        'binary': {'path': live[0],
-                    'sha256': _sha256_file(live[0])},
-    }
-    manifest_sha256 = _sha256_dict(manifest)
+    try:
+        manifest = {
+            'canonicalization': _CANON, 'unit': _UNIT,
+            'files': [{'path': p, 'sha256': hashlib.sha256(
+                text.encode()).hexdigest()} for p, text in files],
+            'argv': live, 'environment': env, 'weights': weights,
+            'binary': {'path': live[0],
+                        'sha256': _sha256_file(live[0])},
+        }
+        manifest_sha256 = _sha256_dict(manifest)
+    except Exception as exc:
+        return {'unavailable': True,
+                'reason': f'manifest build failed: {exc}',
+                'collected_from': 'local'}
 
     return {
         'runtime': runtime,
@@ -838,7 +880,7 @@ def gather_remote_serving_state(host: str) -> dict:
 
     _CANON = 'watchtower-effective/v1'
     _UNIT = 'qwen27.service'
-    _ROUTE = '/home/simon/exp/CHAMPION-ROUTE-HASH'
+    _ROUTE = str(_ROUTE_PATH)
 
     # Remote probe script — runs on the serving host, outputs JSON.
     # Collects boot_id, PID, start_ticks, cmdline, exe SHA, env SHA,
@@ -955,11 +997,18 @@ json.dump({
 }, sys.stdout)
 '''
 
+    # LAW 22 (SSH quoting): the probe body travels over STDIN, never as
+    # `python3 -c <body>`.  SSH joins remote argv into a shell command
+    # line, so the body is re-parsed by the remote shell and any multi-word
+    # body breaks at runtime (verified 2026-10-15, three probes: single-line
+    # argv repro -> bash syntax error; multi-line body -> SyntaxError at
+    # import; same body via stdin -> rc=0 with real state).  `python3 -`
+    # reads the program from stdin — nothing to quote, nothing to re-parse.
     try:
         result = subprocess.run(
             ['ssh', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=no',
-             host, 'python3', '-c', _PROBE],
-            capture_output=True, text=True, timeout=30)
+             host, 'python3', '-'],
+            input=_PROBE, capture_output=True, text=True, timeout=30)
     except (subprocess.TimeoutExpired, OSError) as exc:
         return {'unavailable': True,
                 'reason': f'ssh connection failed: {exc}',

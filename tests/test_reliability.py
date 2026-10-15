@@ -281,6 +281,29 @@ class TestRecallMetrics:
         assert "fcntl.flock" in script
         assert "MIN_DET=0.80" in script
 
+    def test_cadence_script_preflights_env_before_state_capture(self):
+        """Config env preflight names missing variables before any capture."""
+        script = (Path(__file__).resolve().parents[1] / "tools/reliability-cadence.sh").read_text()
+        # the env default + missing-var scan happen before the BEFORE capture
+        assert script.index("FL4WRITE_MODEL_ENDPOINT") < \
+            script.index("BEFORE_STATE_FILE=")
+        assert "unset environment variable" in script
+
+    def test_cadence_script_pins_serving_host_and_endpoint_semantics(self):
+        """--serving-host '' forces local; derivation resolves to an
+        authorized ssh alias or local collection; endpoint preflight runs
+        before any state capture."""
+        script = (Path(__file__).resolve().parents[1] / "tools/reliability-cadence.sh").read_text()
+        # explicit flag (even empty) is authoritative
+        assert "SERVING_HOST_GIVEN" in script
+        # derivation maps to an ssh alias, never a bare tailnet IP
+        assert 'FL4WRITE_SERVING_SSH:-nucbox' in script
+        assert "cannot derive an authorized ssh target" in script
+        # endpoint reachability is preflighted before state capture
+        assert script.index("_ep_code=") < script.index("BEFORE_STATE_FILE=")
+        # remote ssh target is preflighted before state capture
+        assert script.index("BatchMode=yes") < script.index("BEFORE_STATE_FILE=")
+
     def test_missed_case_is_not_hidden_by_same_class_hit(self):
         recs = [
             _rec("hit", "cls", SIG_A, "defect", True, {"Major": 1}),
