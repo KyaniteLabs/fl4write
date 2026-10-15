@@ -29,6 +29,12 @@ class Finding(BaseModel):
     category: str = "General"
     message: str
     proposal: str = ""  # suggested fix, tone-invariant
+    # Honest-uncertainty surface (reliability queue 2026-09-17): the model's
+    # own probability [0,1] that this finding is a real defect. OPTIONAL —
+    # absent means "the model did not claim calibrated confidence", never 0.5
+    # or any invented default. Invalid values are stripped upstream (never
+    # coerced), so an out-of-range or non-numeric claim degrades to "absent".
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class ReviewDoc(BaseModel):

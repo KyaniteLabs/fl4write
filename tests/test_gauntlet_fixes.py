@@ -810,6 +810,9 @@ class TestMECETerraPins:
                    "fallback_model": {"endpoint": "http://f/v1", "model": "fb", "key_env": "K"},
                    "review": {"secrets": "x"},
                    "severity_vocab": ["Critical", "Major", "Minor", "Nit"],
+                   # single-shot: this pin is about fallback ROUTING, not
+                   # signature-vote economics (voting multiplies samples)
+                   "signature_vote_n": 1,
                    "shadow": False, "ci_watch": {"enabled": False},
                    "fix": {"enabled": False}}
             c = cfg.RepoConfig.model_validate(raw)

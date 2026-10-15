@@ -213,6 +213,9 @@ class TestPostMergeSweep:
 
         monkeypatch.setattr("fl4write.analyzer._call_model", counting)
         c2 = make_config(post_merge={"enabled": True, "max_per_cycle": 1})
+        # single-shot: this pin counts model CALLS for the head-SHA skip guard
+        # (skipped = zero calls), not signature-vote samples
+        c2 = c2.model_copy(update={"signature_vote_n": 1})
         r2 = _rc(c2, tmp_path / "state.json", get_diff=lambda pr: ({"x.py"}, "d"))
         assert r2.postmerge_reviewed == 1  # PR 2 processed
         assert len(forge.posts) == 2 and forge.posts[1][0] == 2

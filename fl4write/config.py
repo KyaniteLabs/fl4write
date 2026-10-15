@@ -251,6 +251,13 @@ class RepoConfig(_StrictModel):
     # would be refused mid-round at the socket, so it fails loud at load.
     verify_tests: bool = True  # run the diff's own tests sandboxed; a failing
     # diff is a deterministic Critical (prompt-only tracing missed planted bugs)
+    signature_vote_n: int = Field(default=3, ge=1, le=9)
+    # Posted-findings signature-vote (best-of-N modal; reliability queue item
+    # 1, kills the measured anchor-flip class): analyze() takes N independent
+    # samples and posts the MODAL verdict signature (rule+severity+path+line),
+    # deterministic tie-break = lexicographically smallest signature. N=1
+    # disables voting (byte-for-byte single-shot). Odd N avoids ties; each
+    # sample is a real model call (N x cost per reviewed PR).
     shadow: bool = False  # True = log findings, post nothing
     gatekeeper: bool = True  # nit-filter second pass (fail-open)
     issues_enabled: bool = False  # issues-lane triage (comment-only)
