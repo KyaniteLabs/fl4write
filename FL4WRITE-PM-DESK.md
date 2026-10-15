@@ -759,6 +759,8 @@ This host = **simons-mac-mini** (Tailscale 100.115.175.18; macOS hostname `Mac.l
 
 Consequences (facts, not actions): this clone's desk lacks mainline desk entries M-20261008-10/11/15 (~88 lines) and the uncommitted M-20261009-01 record; mainline lacks 4bc81fa/c8c2e68 and this record. **Reconciling the lineages is a Head-of-Product decision (push/merge authority) — escalated via follow-up card.** Preservation: the MBA's uncommitted desk/registry deltas saved verbatim as `mba-uncommitted-desk-registry-20261015.patch` (attached to t_0267c240) before any local edits.
 
+**RECONCILED 2026-10-15** (HoP decisions t_850b24d3, execution t_32662913 — see the reconciliation entry at the end of this file): all four lineages merged to canonical Forgejo `main` on branch `reconcile/20261015-four-lineages` via merge commits `e38ec83` (mini lineage 9f897ce..e3097cd incl. 4bc81fa/c8c2e68 + LAW-22 landing 27b5cdb) and `30ae3de` (loop 7375fad), plus docs commit `a7f4981` (mba patch applied verbatim). The PR merge commit carrying this branch into `main` and the post-merge deploy receipts are recorded in the reconciliation entry and on t_32662913. §3 above is unchanged except for this pointer (acceptance levels at c8c2e68 stand as written; LAW-22 landing 27b5cdb supersedes the §3.5 remote-collection REJECT — see Session 2).
+
 **Mini autoloop status:** STOPPED — STOP file 2026-10-11 15:09, `autoloop-state.json` frozen at 2026-10-10 (0 cycles). Not alive; do not assume otherwise. Any re-arm must honor LAW 18 (never delete a live lockfile) and inherit autoloop.sh v6 (pre-apply ruff gate, env-failure classification — M-20261009-01).
 
 ### 3. RUNTIME ACCEPTANCE RECEIPT — cadence identity-binding fix (c8c2e68; criterion 3)
@@ -819,3 +821,52 @@ During this session a **concurrent reliability-queue workstream** (signature-vot
 **AC1–AC4: LIVE-RUNTIME-accepted (real serving state, real script probes, this session). AC5: NOT accepted — environmentally blocked (shared-floor contention, DECISION 3 annotation), retry owned by t_32662913 step 5. PRODUCTION acceptance NOT claimed (fix is not deployed to the production checkout; deploy gate = t_32662913 steps 2–4 — this card's `27b5cdb` is step 2, Landed).**
 
 — pm-fl4write, session 2 (t_69974fc6), 2026-10-15 ~01:55 PT
+
+
+## FOUR-LINEAGE RECONCILIATION + PRODUCTION CRON ENV FIX + GATED DEPLOY — 2026-10-15 (HoP decisions t_850b24d3; execution card t_32662913)
+
+Authority: Head of Product (t_850b24d3, issued 2026-10-15). Chain gates OPEN for exactly these steps. MERGE TECHNIQUE: git MERGE commits only — `4bc81fa`/`c8c2e68` hashes unchanged (never rebased/cherry-picked; §1/§3 receipt hashes stay valid). Honest acceptance levels (LAW 15) throughout.
+
+### A. Production cron env fix (deploy gate step 1 — ops-only, no code deploy)
+Gap: nucbox crontab ran `tools/reliability-cadence.sh` bare; `fl4write.fl4write.yaml` requires `${FL4WRITE_MODEL_ENDPOINT}` → every bare-cron run died at config load (`ValueError: config references unset environment variable 'FL4WRITE_MODEL_ENDPOINT'`, re-reproduced). Fix: crontab line wrapped with the canonical env — `run-cycle.sh`'s own export fallback (run-cycle.sh:94-97) applied as the line prefix. One line changed (backup `nucbox:~/crontab-backup-20261015T151500Z.txt`; 22 lines before = 22 after).
+- BEFORE (line 16): `30 5 * * 0 $HOME/workspaces/fl4write/tools/reliability-cadence.sh >> $HOME/.fl4write/reliability/cron.log 2>&1`
+- AFTER (line 16): `30 5 * * 0 FL4WRITE_MODEL_ENDPOINT="${FL4WRITE_MODEL_ENDPOINT:-http://127.0.0.1:46399/v1/chat/completions}" $HOME/workspaces/fl4write/tools/reliability-cadence.sh >> $HOME/.fl4write/reliability/cron.log 2>&1`
+- Config-load smoke (cron-equivalent `env -i HOME=$HOME PATH=/usr/bin:/bin`, nucbox): WITH wrap → `CONFIG-LOAD-OK` exit 0 (warn-only forge-token diagnostic); WITHOUT wrap (negative control, same env) → exit 1 with the exact ValueError. Scripts: `nucbox:/tmp/smoke-a-wrap.sh`, `/tmp/smoke-b-nowrap.sh`, `/tmp/fl4write-config-smoke.py`.
+- Acceptance: **OPS-ACCEPTED for the named config-load gap.** NOT a measurement-correctness claim: the cadence's measurement endpoint story (FL4WRITE_REL_ENDPOINT; run-cycle.sh exports CRACK-Ornith 46399 while the cadence measures the champion route) was deliberately NOT decided here — the fix lane (t_69974fc6) owned it and landed the champion-loopback default + preflights in 27b5cdb.
+
+### B. Preserved-patch artifacts (preserve-first; saved verbatim BEFORE any content decision)
+1. `nucbox-uncommitted-transport-variant-20261015.patch` (14,133 B) — the nucbox checkout's uncommitted earlier transport-receipts variant (reliability.py +262, cadence +67/-21). Saved from `ssh nucbox git diff` before comparison. Attached to t_32662913.
+2. `mba-uncommitted-desk-registry-20261015.patch` (9,080 B) — MBA uncommitted desk/registry deltas (+112 lines incl. M-20261009-01); original artifact on t_0267c240, copy attached to t_32662913.
+3. `loopclone-uncommitted-cadence-20261015.patch` (1,117 B) — loop clone's uncommitted tools/reliability-cadence.sh edit (2 lines). Attached to t_32662913.
+Tooling note (found live): the mba patch's hunks carry ZERO trailing context, which every diff engine rejects for mid-file anchors (git apply + patch(1) both; `--ignore-whitespace`, `--recount` included). Content was applied via anchor insertion with byte-identity verification (below) — the patch's added lines are byte-identical, 112/112 verified against `git diff`.
+
+### C. Lineage inputs and merge record (integration vehicle: fresh canonical clone `~/workspaces/fl4write-canonical-20261015` from Forgejo; lineages delivered by git bundle `9f897ce..main` from the mini/loop clones — bare-SHA bundle ranges are refused by git)
+| Input | Tip merged | Merge commit |
+|---|---|---|
+| Mini working clone (this host; lineage 4bc81fa, c8c2e68, 5794f19, ca09e79, 27b5cdb LAW-22 fix lane, 30fc1b4 reliability-queue 1-3a, e3097cd fix-lane desk entry) | `e3097cd` | `e38ec83` |
+| Loop clone (`7375fad` autoloop cycle-4 git-hardening fix; parent 253c3d0 already in main — verified ancestor) | `7375fad` | `30ae3de` |
+| Nucbox uncommitted variant | analyzed only — DROPPED (see D) | — |
+| MBA uncommitted deltas | applied verbatim | `a7f4981` (docs) |
+| Union merge policy for append-style docs | .gitattributes `merge=union` | `e5c527f` (chore) |
+Desk conflicts resolved UNION (kept M-20261008-10/11/15 + 2026-10-15 intake + Session-2 entries + M-20261009-01); README count conflicts resolved to the latest stamp then re-stamped from the real suite run (doc-truth law).
+Verification on the merged tree: suite **1554 passing + 4 skipped** (doc-truth verifier nested run; pin `test_readme_and_gh_wrap_laws` green), Ruff clean. `4bc81fa`/`c8c2e68` present unchanged (hash check in t_32662913 metadata).
+
+### D. Carry/drop rulings (decision rule: carry ONLY content not already present in 4bc81fa/c8c2e68; else drop with note)
+(a) Nucbox variant — **DROPPED, nothing carried.** AST-level comparison vs c8c2e68: helpers + `_model_identity` byte-identical; its `gather_serving_state` body == c8c2e68's `_gather_local_serving_state`; its `build_receipt_row` is the SUPERSEDED shape (request_id synthesized from run_id[:12], one serving sample duplicated as before/after, no identity binding — the exact defects 4bc81fa/c8c2e68 fixed); `trend_row` differs only by a vestigial `import time`; cadence script strictly a subset. Zero unique content.
+(c) Loop edit (2 lines) — **DROPPED, nothing carried** (patch preserved). Header comment ("eval-on-demand … triggered by product/corpus/model changes") is ALREADY PRESENT verbatim in the landed fix-lane script (27b5cdb rewrote the header identically); the endpoint default change (`gpu-host:8908` → `100.113.174.74:8908`) is superseded — the landed script defaults to the champion loopback `http://127.0.0.1:46377/v1/chat/completions` (the loop's :8908 reflects its older base; carrying it would regress the route). Schedule note for HoP: the header now says eval-on-demand while the nucbox crontab slot stays weekly (Sun 05:30) — schedule-vs-policy alignment is an ops decision, not made here.
+(d) mba patch — applied VERBATIM (`a7f4981`), 112/112 added lines byte-identical to the preserved patch (programmatic check against `git diff`).
+
+### E. Deploy gate (LAW 15: deploy != commit) — strict order
+1. Cron env fix — **DONE / OPS-ACCEPTED** (section A).
+2. LAW-22 fix lands — **DONE**: fix lane t_69974fc6 landed commit `27b5cdb` (acceptance per its receipt: AC1–AC4 LIVE-RUNTIME-ACCEPTED on real nucbox serving state; AC5 end-to-end receipt row NOT achieved — contention-blocked, Decision-3 annotation "blocked: champion slots held by external traffic", 3 bounded attempts, nothing killed). Fix landing SOURCE-accepted (1518+4, Ruff clean). PRODUCTION acceptance NOT claimed.
+3. Reconciliation PR merged — see post-merge receipt (appended after the PR merge; branch `reconcile/20261015-four-lineages`).
+4. Deploy canonical main to nucbox checkout (pulled, not rsynced; HEAD == merge hash) — post-merge receipt below.
+5. PRODUCTION acceptance — claimed ONLY if a real cadence run in the production context writes a receipt row bound to serving identity (check_identity_binding ok:true). See post-merge receipt.
+
+### F. Follow-up state (cross-reference)
+- Fix lane t_69974fc6: DONE (27b5cdb); its AC5 retry is deploy-gate step 5 here.
+- Reliability queue t_ded2961f: RUNNING at bundle time; its commit `30fc1b4` (signature-vote anchor determinism + honest-uncertainty confidence/ECE + FP law-note split) rides this reconciliation. Post-e3097cd commits are residual on the mini lineage — noted on that card; its remaining scope (corpus hardening + end-to-end retry) continues there.
+- Champion-route contention (shared floor): Decision-3 interim rule in force (never kill other lanes' traffic; bounded retry 3/window; annotate). 3 blocked measurement windows escalates HoP → org-design for QoS.
+- Hotspot flags stand: `fl4write/reliability.py`, `FL4WRITE-PM-DESK.md`, `README.md` (append-only entries; count stamps last-committer-settles).
+
+— pm-fl4write, execution card t_32662913 (2026-10-15)
