@@ -596,6 +596,97 @@ Not mine, left standing with owners:
   row M-20261008-15 (appended on completion); evidence: Forgejo runs 119-177,
   GitHub run 37862445233, local suite logs (venvs /tmp/fl4w-ci-venv,
   /tmp/fl4w-red-venv, worktree /tmp/fl4w-red-1963133).
+
+## LANE REPAIR: AUTOLOOP SELF-STOP + CERTIFICATION RE-ARM — M-20261009-01 (2026-10-09 ~10:2x PDT; fl4write lane-repair agent, HoP top-priority lane)
+
+**BLUF: both defects root-caused and fixed live. Autoloop: cycles 5/6 reverted
+ruff-GREEN diffs because launchd's PATH cannot resolve ruff — the exec-error text was
+mistaken for a lint finding and then for post-apply red; gate + PATH hardening landed,
+loop re-armed (next slot 15:40 PDT today). Certification: the config lane re-point
+changed the framework's request-identity hash, so the old state dir could never pass
+its own gate; tainted state archived, round 1 RUNNING on the mini since 17:18Z with
+verified progress (checkpoint file growing, 12+ real codex-sol calls), durable daily
+cycler installed for rounds 2-3.**
+
+Defect A — adjudication + fix (evidence-cited):
+- Adjudication of the two "offending" diffs: REVERT STANDS, but the loop's own
+  receipt wording was wrong — the diffs were never bad. Both `receipts/cycle-5.diff`
+  and `cycle-6.diff` apply to a throwaway worktree and lint clean per-file AND
+  repo-wide (real ruff, proven this session); they were reverted because the
+  post-apply ruff check could not even EXEC. Root cause: launchd PATH is
+  `/usr/bin:/bin`-only; ruff exists only in /opt/homebrew/bin (jq/git/python3 have
+  /usr/bin fallbacks, ruff does not). Same exec failure (a) fabricated the "finding"
+  in acquisition — a bridge call was spent on a defect that did not exist — and
+  (b) guaranteed "ruff_red_after_apply" regardless of diff content. The self-stop
+  itself was correct behavior (same-failure-twice law honored).
+- autoloop.sh v6 (backup `autoloop.sh.bak-pre-gate-20261009`; stop-stage-swap-verify,
+  bash -n verified): (1) explicit PATH export; (2) ruff rc>1 = environment failure —
+  `env_ruff_unrunnable` receipt, no bridge call spent, never a "finding"; (3)
+  PRE-APPLY RUFF GATE — candidate is applied to a throwaway detached worktree
+  (`.preapply-verify`) and linted with real ruff BEFORE the real tree may be touched
+  (red = rejected pre-apply, tree untouched; rc>1 = env failure). Same class as the
+  existing hunk-recount / apply --check deterministic gates; post-apply check kept as
+  defense in depth. Gate mechanism live-proven with the actual cycle-5 diff before
+  deployment.
+- Re-arm per the STOP file's own instruction: STOP removed, state reset; cadence and
+  laws unchanged (launchd 23:40/07:40/15:40 PDT). Registry row
+  AUTOLOOP-LAUNCHD-PATH-2026-10-09 appended.
+
+Defect B — certification un-stalled (framework code read, not guessed):
+- Gate condition (fl4write/exhaustive.py:820-827): `state_dir/request-identity.json`
+  stores sha256 of args + FULL config dump; any config byte (the codex-sol lane
+  re-point) changes the hash → "selected test command or configuration changed" →
+  Deferred → escalation. No new-round flag exists; the framework's fresh-start path
+  is a fresh state dir (empty ledger → new request-identity is minted).
+- Actions: tainted identity dir archived intact (never deleted):
+  `~/.fl4write/exhaustive/archive-tainted-20261009T171850Z-2dad57260d87f03457a48cde/`
+  (old request-identity 7c15b6c1…, outage-era 503 escalation, stale checkpoints).
+  Round 1 launched 17:18Z via `run-exhaustive.sh` (sources runner-env itself; named
+  log `~/.fl4write/exhaustive/cert-r1-20261009.log` — no blind spawns).
+- PROGRESS EVIDENCE (the prior failure was "process alive ≠ progress"): fresh
+  request-identity minted; artifacts `round-0001-9f897ce…` packed (head.tar, manifest,
+  selected-request); `recon-checkpoints/round-0001-9f897ce….json` written AND growing
+  (894 B → 1730 B within minutes); bridge codex-sol spend 2 → 12 real calls on
+  127.0.0.1:8788 during recon; runner + trusted-worker processes live.
+- Durable rounds 2-3: NEW `com.fluorite.cert-cycler` launchd job (loaded, lint-passed,
+  in-flight guard live-tested): daily 09:20 + 21:20 local; pgrep guard (no second
+  writer), certification guard (no-ops once forge_published at current HEAD),
+  framework's own CycleLock as backstop. The framework chains rounds within one
+  invocation until GREEN_REQUIRED=3 — if all rounds stay green, certification can
+  complete as early as today; the cycler re-arms Oct 10/11 if anything Deferreds.
+  The old one-shot `com.fluorite.verify-relaunch` remains bootout'ed (not loaded).
+- Config verification (orders: verify, don't re-edit): mini
+  `~/.fl4write/fl4write-floor.yaml` primary=codex-sol VERIFIED; fallback is
+  **floor-crack, not grok** as the mission brief stated — floor-crack IS present in
+  the bridge catalog so the lane is live-able; left untouched, discrepancy reported.
+  The MBA has NO `~/.fl4write/fl4write-floor.yaml` at all — the "both hosts" claim is
+  false; the cert runs on the mini only. Preconditions verified: mini cert tree clean
+  at 9f897ce, colima fluorite Running, test image 6d6dd6df512d matches the pinned
+  sha, runner-env holds CODESITTER_FORGEJO_TOKEN (present, never printed), spend
+  headroom large (2/100 at mission start).
+
+Correction of record (narrow, per evidence): earlier claim (mission brief) — "two
+offending commits left ruff red" and "config re-pointed to fallback grok on both
+hosts". What it is now: NO offending commits exist (both diffs were auto-reverted,
+clone clean at 7375fad); the diffs are ruff-green; the red was an unresolvable ruff
+binary. Config: primary codex-sol correct on the mini only, fallback floor-crack
+(live-able), nothing on the MBA. UNCHANGED: the self-stop was correct, the lane
+re-point itself was sound (codex-sol verified 200s), and the Oct 12 runway remains
+reachable.
+
+### IF-I-DIE-NOW
+- Mid-flight: cert round 1 RUNNING on mini (runner + worker; recon checkpointing;
+  codex-sol calls firing) — do NOT start a second runner (cycler's pgrep guard
+  exists; so should you). Autoloop re-armed, next cycle 15:40 PDT today.
+- Owed: rounds 2-3 (cycler re-arms daily 09:20/21:20 until forge_published at HEAD);
+  report fallback=floor-crack-vs-grok discrepancy to the HoP; autoloop cycle 7 will
+  be its first fully-healthy run — watch its receipt for `no_local_finding` or a
+  real fix.
+- Artifacts: mini `~/.fl4write/exhaustive/2dad57260d87f03457a48cde/` (live state),
+  `archive-tainted-20261009T171850Z-*` (tainted evidence), `cert-r1-20261009.log`,
+  `cert-cycler.log`; autoloop estate `~/workspaces/fl4write-autoloop/` (v6 script,
+  receipts); registry row AUTOLOOP-LAUNCHD-PATH-2026-10-09; MISSIONS-LEDGER.tsv row
+  M-20261009-01.
 ### Zero-loop round 4 opened
 
 Streak: 0 of 3. Scope: everything merged through PR #46 is now

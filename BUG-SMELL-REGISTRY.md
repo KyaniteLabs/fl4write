@@ -549,6 +549,27 @@ toolkit) — the gate was skipped precisely where the mirror looked red. gh#16
 2026-10-04 block); gh#16 is the polish sweep's CEO-gated PR (MISSIONS-LEDGER
 M-20261008-13 DONE row). Canonical main never needed `[skip ci]` — docs commits run
 CI and pass. Evidence: mission M-20261008-15, PM-DESK 2026-10-08 block.
+
+## AUTOLOOP-LAUNCHD-PATH-2026-10-09: ruff unresolvable under launchd PATH → fabricated lint findings, valid diffs reverted (fixed 2026-10-09)
+
+**Bug:** `com.fl4write.autoloop` runs autoloop.sh under launchd's PATH (`/usr/bin:/bin`
+only). ruff exists ONLY at `/opt/homebrew/bin/ruff` (jq/git/python3 all have /usr/bin
+fallbacks; ruff does not), so cycle 5 (2026-10-09T06:40Z) and cycle 6 (14:40Z):
+(a) the finding-acquisition ruff check exec-FAILED and the error TEXT was taken for a
+lint finding — a bridge call was spent and the model returned a plausible import-sort
+diff for a defect that did not exist; (b) the post-apply ruff check exec-failed
+identically, recording "ruff red after apply" for diffs that are ruff-GREEN (proven:
+both saved diffs `receipts/cycle-5.diff`/`cycle-6.diff` apply to a throwaway worktree
+and lint clean, per-file and repo-wide). The loop reverted valid work twice, then
+self-stopped per law (same-failure-twice = stop was the correct behavior; the failure
+underneath was environmental).
+**Fix (M-20261009-01):** autoloop.sh v6 — explicit tool PATH export; ruff rc>1 is
+classified as an environment failure (`env_ruff_unrunnable` receipt, no bridge call
+spent); PRE-APPLY RUFF GATE — every candidate is applied to a throwaway detached
+worktree and linted with real ruff before it may touch the real tree (red pre-apply =
+rejected, tree untouched). Deployed stop-stage-swap-verify (backup
+`autoloop.sh.bak-pre-gate-20261009`); loop re-armed same day. Evidence: mini
+`~/workspaces/fl4write-autoloop/` receipts + this mission's desk block.
 ## CYCLE7-001: explicit-null state survival (crash class)
 
 **File:** `fl4write/state.py`. Every normalizer guard kept explicit
