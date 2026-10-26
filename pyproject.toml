@@ -34,3 +34,12 @@ testpaths = ["tests"]
 # pins the import root to this repository, so the suite behaves the same from
 # any working directory.
 pythonpath = ["."]
+
+[tool.mutmut]
+source_paths = ["fl4write"]
+only_mutate = ["*gatekeeper.py"]
+pytest_add_cli_args_test_selection = [
+    "tests/test_gatekeeper_behavior.py",
+    "tests/test_gatekeeper_path_identity.py",
+]
+also_copy = ["tests"]
