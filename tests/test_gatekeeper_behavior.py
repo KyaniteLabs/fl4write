@@ -15,7 +15,6 @@ Expected values derived by hand from fl4write/gatekeeper.py:
 """
 import json
 
-import pytest
 
 from fl4write import gatekeeper
 from fl4write.models import Finding
@@ -419,8 +418,6 @@ class TestTelemetryAndDropLogs:
             "keep": [{"path": "src/a.py", "line": 1}],
             "demote": [{"path": "src/a.py", "line": 1, "rule_id": "r1", "severity": "Minor"}],
         })
-        captured = {}
-
         def model(route, prompt, **kw):
             return reply
 
@@ -539,7 +536,7 @@ class TestFinalKillRound:
             [F(path=path201, line=1)], make_config())
         assert failed is False and len(kept) == 1
         p = prompts[0]
-        assert f"- [Major] __fl4write_path_0__:1 (" in p     # masked: 200-cut changed it
+        assert "- [Major] __fl4write_path_0__:1 (" in p     # masked: 200-cut changed it
         assert f"{path201} => __fl4write_path_0__" not in p  # display goes key => path
         assert f"__fl4write_path_0__ => {path201[:200]}" in p  # display cuts at 200
 
