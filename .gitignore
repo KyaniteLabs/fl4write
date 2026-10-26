@@ -10,3 +10,6 @@ logs/
 .gjc/
 .omx/
 .omx-state-locks.identity.json
+
+# Mutation testing (mutmut)
+mutants/
