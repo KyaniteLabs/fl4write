@@ -3,7 +3,7 @@ name: Mutation
 # defects in the gatekeeper (fl4write/gatekeeper.py) — the filter that
 # decides which findings get posted across the fleet. Not a required check
 # (~2 min clean); the run goes red if the mutation score drops below 94%
-# (baseline 97.2%, 2026-10-26), so a weakening of the tests is visible
+# (baseline 96.9% = killed/(killed+survived+timeout), the formula below), so a weakening of the tests is visible
 # without blocking merges.
 on:
   schedule:
