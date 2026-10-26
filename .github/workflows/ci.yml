@@ -24,6 +24,14 @@ jobs:
       - run: python3 -m pytest tests/ -q
         timeout-minutes: 25
 
+      # Layer 5: self-description consistency (shared tooling checkout).
+      - name: Check out the shared CI tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: KyaniteLabs/.github
+          ref: 27ac4d4580e0e5fbb596d429ceea0d310d5ca7cb
+          path: .l5-tools
+          persist-credentials: false
       # Layer 3: executable docs. README blocks tagged ```bash readme-test run
       # after the build steps, so they see the built checkout. Same exit
       # contract as Layer 5: 2 = not applicable (no tagged blocks) passes.
@@ -41,14 +49,6 @@ jobs:
             exit "$rc"
           fi
 
-      # Layer 5: self-description consistency (shared tooling checkout).
-      - name: Check out the shared CI tooling
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          repository: KyaniteLabs/.github
-          ref: 27ac4d4580e0e5fbb596d429ceea0d310d5ca7cb
-          path: .l5-tools
-          persist-credentials: false
       - name: Layer 5 self-description consistency
         shell: bash
         run: |
