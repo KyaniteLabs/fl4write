@@ -1,0 +1,51 @@
+# Forgejo reads only .forgejo/workflows/ once that directory exists (it
+# holds mutation.yml), so the required CI lives here too. Keep this file in
+# sync with .github/workflows/ci.yml, which the GitHub push mirror runs.
+name: ci
+on:
+  push: {branches: [main]}
+  pull_request: {}
+permissions:
+  contents: read
+concurrency:
+  # Unique per push commit so queued main runs are never replaced; per PR otherwise.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+    steps:
+      - name: Install checkout runtime
+        run: apt-get update && apt-get install -y --no-install-recommends git nodejs
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with: {persist-credentials: false}
+      - run: pip install -e ".[dev]"
+      - run: python3 -m ruff check .
+      - run: python3 -m pytest tests/ -q
+        timeout-minutes: 25
+
+      # Layer 5: self-description consistency (shared tooling checkout).
+      - name: Check out the shared CI tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: KyaniteLabs/.github
+          ref: d99e9be1830d5e29d1d8f0ba1722997d3dd2184f
+          path: .l5-tools
+          persist-credentials: false
+      - name: Layer 5 self-description consistency
+        shell: bash
+        run: |
+          set -uo pipefail
+          command -v python3 >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq python3; }
+          script=".l5-tools/scripts/self_description_check.py"
+          [ -f "$script" ] || { echo "self-description check script missing" >&2; exit 1; }
+          rc=0
+          python3 "$script" . || rc=$?
+          if [ "$rc" -eq 2 ]; then
+            echo "gate evidence: self-description check not applicable here"
+          elif [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
