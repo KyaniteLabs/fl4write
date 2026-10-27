@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: KyaniteLabs/.github
-          ref: d99e9be1830d5e29d1d8f0ba1722997d3dd2184f
+          ref: acc41fc663d5b1ef623a406fddff912823b29f93
           path: .l5-tools
           persist-credentials: false
       - name: Layer 5 self-description consistency
