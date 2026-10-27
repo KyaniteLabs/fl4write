@@ -49,3 +49,11 @@ jobs:
           elif [ "$rc" -ne 0 ]; then
             exit "$rc"
           fi
+      # Layer 6: structure signals (duplication, large files, complex Python
+      # functions). Advisory: a snapshot for this run that never fails the job.
+      - name: Layer 6 structure signals (advisory)
+        shell: bash
+        run: |
+          if ! python3 .l5-tools/scripts/structure_signals.py .; then
+            echo "structure signals: not measured on this run (advisory)"
+          fi
