@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -41,3 +44,38 @@ class ReviewDoc(BaseModel):
     pr: PullRequest
     findings: list[Finding] = Field(default_factory=list)
     digest: dict[str, int] = Field(default_factory=dict)  # severity -> count
+
+
+
+@dataclass
+class CycleReport:
+    repo: str
+    scanned: int = 0
+    reviewed: int = 0
+    mirror_degraded: int = 0
+    skipped_dependency: int = 0
+    already_done: int = 0
+    mirror_dedup: int = 0
+    fix_escalations: int = 0
+    model_unavailable: int = 0
+    shadow_only: bool = False
+    gatekeeper_dropped: int = 0
+    fix_prs_opened: int = 0
+    fix_prs_merged: int = 0
+    issues_triaged: int = 0
+    acceptance: dict[str, Any] = field(default_factory=dict)
+    skipped_diff_unavailable: int = 0
+    postmerge_reviewed: int = 0
+    retro_reviewed: int = 0
+    retro_zombies: int = 0
+    ci_red_heads: int = 0
+    ci_fix_prs_opened: int = 0
+    ci_escalations: int = 0
+    omni_scanned: int = 0
+    omni_findings: int = 0
+    gatekeeper_failed: int = 0
+    fix_attempts: int = 0
+    fix_failures: int = 0
+    _fix_failure_notes: list = field(default_factory=list)
+    _merged_listing_incomplete: bool = False
+    alerts: list[str] = field(default_factory=list)

@@ -1203,7 +1203,8 @@ class TestMECERound3GlmPins:
 
     def test_retro_loop_contained(self):
         # the retro loop carries a ForgeError except now
-        src = (REPO_ROOT / "fl4write/engine.py").read_text()
+        src = ((REPO_ROOT / "fl4write/engine.py").read_text()
+               + (REPO_ROOT / "fl4write/engine_omni.py").read_text())
         assert "retro #" in src and "forge error contained" in src
 
 
@@ -4562,12 +4563,14 @@ class TestMECERound11Engine:
         assert any("malformed merged rows" in a for a in r.alerts)
 
     def test_escalation_title_scrubbed_and_bounded(self):
-        src = (REPO_ROOT / "fl4write/engine.py").read_text()
+        src = ((REPO_ROOT / "fl4write/engine.py").read_text()
+               + (REPO_ROOT / "fl4write/engine_omni.py").read_text())
         assert "scrub.inline(r.get(\"name\") or \"?\", 60)" in src
         assert "_title[:140]" in src
 
     def test_head_probe_helper_validates_shape(self):
-        src = (REPO_ROOT / "fl4write/engine.py").read_text()
+        src = ((REPO_ROOT / "fl4write/engine.py").read_text()
+               + (REPO_ROOT / "fl4write/engine_omni.py").read_text())
         assert "def _probe_head(" in src
         from fl4write.engine import _probe_head
 
@@ -4631,7 +4634,8 @@ class TestMECERound11Engine2:
         assert tiers._read_state("o/r") == {"version": 1, "prs": {}}
 
     def test_pm_shadow_belt_and_defer_cleanup_laws(self):
-        src = (REPO_ROOT / "fl4write/engine.py").read_text()
+        src = ((REPO_ROOT / "fl4write/engine.py").read_text()
+               + (REPO_ROOT / "fl4write/engine_omni.py").read_text())
         # bounded shadow belt
         assert "len(pm_shadow) > 200" in src
         # defer counters die with their reason (terminal success)

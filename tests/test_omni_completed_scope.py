@@ -2,6 +2,7 @@
 import pytest
 
 from fl4write import engine, state
+from fl4write import engine_omni
 from test_omnisweep import OmniForge, _run, make_config
 
 
@@ -81,7 +82,9 @@ def test_uncertain_completed_scope_defers_actions(tmp_path, monkeypatch, bad_lis
                            'rule': 'general', 'sev': 'Major', 'msg': 'Incorrect result'}]
     monkeypatch.setattr(forge, 'list_tree_files', lambda repo: bad_listing)
     monkeypatch.setattr(engine, '_omni_fix_phase', lambda *a: pytest.fail('fix on unverified scope'))
+    monkeypatch.setattr(engine_omni, '_omni_fix_phase', lambda *a: pytest.fail('fix on unverified scope'))
     monkeypatch.setattr(engine, '_omni_upsert_issue', lambda *a, **k: pytest.fail('publish unverified scope'))
+    monkeypatch.setattr(engine_omni, '_omni_upsert_issue', lambda *a, **k: pytest.fail('publish unverified scope'))
     config = make_config(omnisweep={'enabled': True, 'fix': True})
     report = engine.CycleReport(repo=config.repo)
     engine._omnisweep_step(config, forge, path, None, st, report, None)

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from fl4write import engine, state
+import fl4write.engine_omni as engine_omni
 from test_retro_forgejo import RetroForge, make_config, make_pr
 
 
@@ -49,6 +50,7 @@ def test_actual_retro_cycle_preserves_valid_work_with_invalid_numeric_state(tmp_
     loaded = state.load_state(path)
     reviewed = []
     monkeypatch.setattr(engine, '_retro_review_pr', lambda pr, *a: reviewed.append(pr.number) or 'reviewed')
+    monkeypatch.setattr(engine_omni, '_retro_review_pr', lambda pr, *a: reviewed.append(pr.number) or 'reviewed')
     config = make_config()
     engine._retro_sweep(config, forge, path, lambda pr: None, None, loaded,
                         engine.CycleReport(repo=config.repo), None)
@@ -83,6 +85,7 @@ def test_valid_decimal_retro_identities_keep_their_scheduling_contract(tmp_path,
     loaded = state.load_state(path)
     reviewed = []
     monkeypatch.setattr(engine, '_retro_review_pr', lambda pr, *a: reviewed.append(pr.number) or 'reviewed')
+    monkeypatch.setattr(engine_omni, '_retro_review_pr', lambda pr, *a: reviewed.append(pr.number) or 'reviewed')
     config = make_config()
     engine._retro_sweep(config, forge, path, lambda pr: None, None, loaded,
                         engine.CycleReport(repo=config.repo), None)
@@ -102,6 +105,7 @@ def test_active_string_park_survives_two_persisted_cycles(tmp_path, monkeypatch,
                                'retro_parked': {identity: str(expiry)}}))
     reviewed = []
     monkeypatch.setattr(engine, '_retro_review_pr', lambda pr, *a: reviewed.append(pr.number) or 'reviewed')
+    monkeypatch.setattr(engine_omni, '_retro_review_pr', lambda pr, *a: reviewed.append(pr.number) or 'reviewed')
     config = make_config()
     for _ in range(2):
         loaded = state.load_state(path)
