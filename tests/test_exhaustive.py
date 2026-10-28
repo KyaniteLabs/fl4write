@@ -658,6 +658,11 @@ def test_appauth_runtime_error_defers_publication(tmp_path, monkeypatch):
     monkeypatch.setattr(ex, "_identity", lambda repo: (repo, "o/r"))
     monkeypatch.setattr(ex, "_load_state", lambda path, ident: dict(fake_state))
     monkeypatch.setattr(ex, "_git", lambda *a, **k: "a" * 40)
+    # Cycle-1: the publication path resolves these through exhaustive_core now
+    from fl4write import exhaustive_core as exc
+    monkeypatch.setattr(exc, "_identity", lambda repo: (repo, "o/r"))
+    monkeypatch.setattr(exc, "_load_state", lambda path, ident: dict(fake_state))
+    monkeypatch.setattr(exc, "_git", lambda *a, **k: "a" * 40)
     monkeypatch.setattr(tx, "ledger_body", lambda *a, **k: request_body)
     request = {"version": 1, "repo": "o/r", "issue": 7,
                "config_sha256": tx._digest({}), "candidate_sha256": tx._digest(fake_state),

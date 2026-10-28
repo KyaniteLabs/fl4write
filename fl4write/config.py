@@ -534,7 +534,7 @@ def _warn_missing_forge_credentials(config) -> None:
     warn at load so an authless Forgejo binding never silently 401s forever."""
     import os
 
-    from .forges import _is_github_base
+    from .forge_urls import is_github_base as _is_github_base
 
     for bname, binding in config.forges.items():
         if not _is_github_base(binding.api_base) and binding.token_env \

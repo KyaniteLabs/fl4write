@@ -270,7 +270,7 @@ def main() -> int:
     # Forgejo-primary uses the adapter's native .diff endpoint (the gh path
     # 404s there — every PR would defer forever, the dead-adapter failure).
     primary_binding = next(b for b in config.forges.values() if b.role == "primary")
-    from .forges import _is_github_base as _gh_host
+    from .forge_urls import is_github_base as _gh_host
 
     if _gh_host(primary_binding.api_base):
         diff_getter = make_get_diff(config.repo)

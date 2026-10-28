@@ -17,7 +17,7 @@ class ReconProgress:
 
     def __init__(self, request, sources, ledger):
         from .config import ModelRoute
-        from .exhaustive import Deferred
+        from .exhaustive_core import Deferred
 
         # One lock covers EVERY mutation of self.value — attempt charges and
         # entry accepts alike — so the concurrent dispatch windows can never
@@ -68,7 +68,7 @@ class ReconProgress:
                 raise Deferred("recon checkpoint invalid or identity changed; retained for recovery") from exc
 
     def save(self):
-        from .exhaustive import _atomic_json
+        from .exhaustive_core import _atomic_json
 
         if self.path:
             _atomic_json(self.path, {"value": self.value, "sha256": _digest(self.value)})
@@ -77,7 +77,7 @@ class ReconProgress:
         """Return the checkpointed entry covering chunk `index`, else None.
         `screened` selects the required entry shape (cascade vs plain recon);
         any mismatch raises the same Deferred a serial resume would."""
-        from .exhaustive import Deferred
+        from .exhaustive_core import Deferred
 
         key = _digest(prompt)
         if index < len(self.value["entries"]):
@@ -110,7 +110,7 @@ class ReconProgress:
     def _charged_call(self, request, route, prompt, call, system, envelope):
         """Charge one attempt (call slot + reserved output tokens) before dispatch."""
         from .analyzer import extract_json
-        from .exhaustive import Deferred
+        from .exhaustive_core import Deferred
 
         with self.lock:
             if (self.value["attempts"] >= request["max_calls"]
@@ -124,7 +124,7 @@ class ReconProgress:
             raise Deferred(f"model unavailable or returned unusable output: {exc}") from exc
 
     def response(self, index, prompt, request, route, call, system):
-        from .exhaustive import Deferred
+        from .exhaustive_core import Deferred
 
         key = _digest(prompt)
         if index < len(self.value["entries"]):
@@ -138,7 +138,7 @@ class ReconProgress:
         """Screen-then-deep dispatch for one chunk: the cheap route flags
         suspect chunks and only flagged chunks reach the primary route. Both
         passes are charged — screening never rides free on the call budget."""
-        from .exhaustive import Deferred, _RECON_SYSTEM, _SCREEN_SYSTEM
+        from .exhaustive_core import Deferred, _RECON_SYSTEM, _SCREEN_SYSTEM
 
         key = _digest(prompt)
         if index < len(self.value["entries"]):
@@ -207,7 +207,7 @@ def _concurrent_pass(sources, request, route, screen_route, ledger, progress, ca
     instrument, never portable evidence."""
     from concurrent.futures import ThreadPoolExecutor
 
-    from .exhaustive import Deferred, _RECON_SYSTEM, _SCREEN_SYSTEM, _recon_prompts, _validated
+    from .exhaustive_core import Deferred, _RECON_SYSTEM, _SCREEN_SYSTEM, _recon_prompts, _validated
 
     screened = screen_route is not None
     tasks = [
@@ -336,7 +336,7 @@ def _concurrent_pass(sources, request, route, screen_route, ledger, progress, ca
 
 def worker(request_path, caller=None):
     from .config import ModelRoute
-    from .exhaustive import Deferred, _RECON_SYSTEM, _atomic_json, _recon_prompts, _text_sources, _validated
+    from .exhaustive_core import Deferred, _RECON_SYSTEM, _atomic_json, _recon_prompts, _text_sources, _validated
 
     request = json.loads(request_path.read_text(encoding="utf-8"))
     route = ModelRoute.model_validate(request["route"])

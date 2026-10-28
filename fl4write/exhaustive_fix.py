@@ -309,7 +309,7 @@ def _prove_patch(source: Path, reviewed_head: str, files: dict[str, str],
         _verify_unchanged(test_command, pin_only, evidence_dir / "regression-red.xml", test_timeout,
                           verify_suite, tracked | regressions)
     except Exception as exc:
-        from .exhaustive import NonGreen, _junit
+        from .exhaustive_core import NonGreen, _junit
 
         if not isinstance(exc, NonGreen):
             raise FixError("regression proof unavailable; runner failure is not a red pin") from exc

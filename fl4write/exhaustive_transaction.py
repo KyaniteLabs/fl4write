@@ -13,7 +13,8 @@ from .exhaustive_publication import PublicationError, inspect_owned, ledger_body
 @contextmanager
 def _publication_adapter(adapter, config):
     """Bind a late, repository-scoped App token without changing process env."""
-    from .forges import _is_github_base, adapter_for
+    from .forge_urls import is_github_base as _is_github_base
+    from .forges import adapter_for
 
     binding = next(b for b in config.forges.values() if b.role == "primary")
     if not _is_github_base(binding.api_base):
@@ -49,7 +50,7 @@ def _digest(value) -> str:
 def publish_round(repo: Path, state_path: Path, adapter, config, issue: int,
                   state: dict, certification: bool = False) -> None:
     """Persist an exact candidate and body before the first forge write."""
-    from .exhaustive import Deferred, _atomic_json
+    from .exhaustive_core import Deferred, _atomic_json
 
     pending = state_path.parent / "publication-pending.json"
     if pending.exists():
@@ -68,7 +69,7 @@ def publish_round(repo: Path, state_path: Path, adapter, config, issue: int,
 
 def replay_publication(repo: Path, state_path: Path, adapter, config, issue: int) -> bool:
     """Retry precisely the staged write; advance canonical state only after proof."""
-    from .exhaustive import Deferred, _atomic_json, _git, _load_state
+    from .exhaustive_core import Deferred, _atomic_json, _git, _load_state
 
     pending = state_path.parent / "publication-pending.json"
     if not pending.exists():
@@ -76,7 +77,7 @@ def replay_publication(repo: Path, state_path: Path, adapter, config, issue: int
     try:
         request = json.loads(pending.read_bytes())
         candidate = state_path.parent / "publication-candidate.json"
-        from .exhaustive import _identity
+        from .exhaustive_core import _identity
 
         if not candidate.exists():
             # NEW-3 (2026-09-16): a pending transaction whose candidate is
