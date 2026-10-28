@@ -608,7 +608,6 @@ def _post_merge_sweep(
     return considered
 
 
-# CI-watch conclusions that mean RED (everything not in the benign set).
 
 def run_cycle(
     config: RepoConfig,

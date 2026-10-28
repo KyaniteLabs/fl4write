@@ -117,7 +117,6 @@ def test_retro_cursor_capped_cycles_use_instant_order(tmp_path, monkeypatch, kin
 
     monkeypatch.setattr(engine, '_retro_review_pr', review)
     monkeypatch.setattr(engine_omni, '_retro_review_pr', review)
-    monkeypatch.setattr(engine_omni, '_retro_review_pr', review)
     for _ in range(2):
         engine._retro_sweep(config, forge, tmp_path / 'state.json', lambda p: None,
                             None, st, engine.CycleReport(repo=config.repo), None)
@@ -140,7 +139,6 @@ def test_retro_offset_and_invalid_cursor_preserve_valid_work(tmp_path, monkeypat
 
     monkeypatch.setattr(engine, '_retro_review_pr', review)
     monkeypatch.setattr(engine_omni, '_retro_review_pr', review)
-    monkeypatch.setattr(engine_omni, '_retro_review_pr', review)
     engine._retro_sweep(config, forge, tmp_path / 'state.json', lambda p: None,
                         None, st, engine.CycleReport(repo=config.repo), None)
     assert reviewed == [1]
@@ -158,7 +156,6 @@ def test_retro_invalid_timestamp_blocks_completion_without_hiding_valid_sibling(
     st = {'prs': {}, 'merged_since': date + 'T12:00:00Z'}
     reviewed = []
     monkeypatch.setattr(engine, '_retro_review_pr', lambda pr, *a: reviewed.append(pr.number) or 'reviewed')
-    monkeypatch.setattr(engine_omni, '_retro_review_pr', lambda pr, *a: reviewed.append(pr.number) or 'reviewed')
     monkeypatch.setattr(engine_omni, '_retro_review_pr', lambda pr, *a: reviewed.append(pr.number) or 'reviewed')
     for _ in range(2):
         report = engine.CycleReport(repo=config.repo)

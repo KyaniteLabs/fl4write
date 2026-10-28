@@ -21,7 +21,6 @@ def lane(monkeypatch):
     monkeypatch.setattr(engine.fixlane, "fix_allowed", lambda *a: None)
     monkeypatch.setattr(engine, "_fix_freshness_gate", lambda *a: True)
     monkeypatch.setattr(engine_omni, "_fix_freshness_gate", lambda *a: True)
-    monkeypatch.setattr(engine_omni, "_fix_freshness_gate", lambda *a: True)
     monkeypatch.setattr("fl4write.executor.attempt_fix",
                         lambda p, f, c, depth_used=0: calls.append(f.line) or {"status": "nofix"})
     return pr, config, forge, st, clock, calls, findings
@@ -61,7 +60,6 @@ def test_deadline_checks_preserve_only_unattempted_suffix(lane, monkeypatch, sta
             clock[0] = 100
             return True
         monkeypatch.setattr(engine, "_fix_freshness_gate", fresh)
-        monkeypatch.setattr(engine_omni, "_fix_freshness_gate", fresh)
         monkeypatch.setattr(engine_omni, "_fix_freshness_gate", fresh)
     else:
         def attempt(p, f, c, depth_used=0):

@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 
 ShadowSink = Callable[[str, int, str], None]
 
+# CI-watch conclusions that mean RED (everything not in the benign set).
 _CI_BENIGN = {"success", "skipped", "neutral", "canceled", "cancelled"}
 REVIEW_BUDGET_S = 90  # worst-case model time for one review (2 routes x ~45s + slack)
 
