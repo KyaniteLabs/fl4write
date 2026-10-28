@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 
 from fl4write import exhaustive
+from fl4write import exhaustive_core
 
 
 def test_git_uses_contained_runner_and_hardened_environment(monkeypatch, tmp_path):
@@ -24,7 +25,7 @@ def test_git_uses_contained_runner_and_hardened_environment(monkeypatch, tmp_pat
         )
 
     monkeypatch.setenv("FL4WRITE_TEST_SECRET", "must-not-be-forwarded")
-    monkeypatch.setattr(exhaustive, "_run", fake_run)
+    monkeypatch.setattr(exhaustive_core, "_run", fake_run)
 
     assert exhaustive._git(tmp_path, "status", "--short") == "clean"
     assert call["argv"] == [

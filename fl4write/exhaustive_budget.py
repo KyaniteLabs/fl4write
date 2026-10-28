@@ -27,7 +27,7 @@ class RoundBudget:
 
     def reserve(self, tokens):
         # Called under the proxy lock; the enclosing loop owns the repository lock.
-        from .exhaustive import _atomic_json
+        from .exhaustive_core import _atomic_json
         usage = {"calls": self.usage["calls"] + 1,
                  "reserved_output_tokens": self.usage["reserved_output_tokens"] + tokens}
         if (usage["calls"] > self.identity["max_calls"]
