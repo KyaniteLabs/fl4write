@@ -5,7 +5,8 @@ validation, recon chunking/prompts and the JUnit parser live here so the
 exhaustive_* satellites import a leaf instead of reaching back into the
 orchestrator (Cycle-1 fix, L6 backlog item 3). This module imports nothing
 from exhaustive or its satellites; sibling imports that do exist (scrub,
-config, executor, model_proxy, exhaustive_evidence) are acyclic.
+config, exhaustive_adjudication, exhaustive_evidence, model_proxy, plus
+call-time executor) are acyclic.
 """
 
 from __future__ import annotations
