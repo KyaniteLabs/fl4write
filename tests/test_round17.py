@@ -13,6 +13,7 @@ from fl4write import analyzer, engine, executor, model_proxy, state, telemetry
 from fl4write.config import ForgeBinding, ModelRoute, RepoConfig
 from fl4write.forges import ForgeError
 from fl4write.models import Finding, ReviewDoc
+import fl4write.engine_omni as engine_omni
 from test_gauntlet_fixes import (
     RAW, _NO_EXTRA_LANES, _R4Forge, _r4_cycle, _r4_date, _r4_pr, _r4_seed, make_config,
 )
@@ -68,6 +69,7 @@ def test_expired_retro_park_retries_after_older_pr_advances_cursor(tmp_path, mon
         return "reviewed" if recovered or pr.number == 2 else "deferred"
 
     monkeypatch.setattr(engine, "_retro_review_pr", review)
+    monkeypatch.setattr(engine_omni, "_retro_review_pr", review)
     for _ in range(3):
         _r4_cycle(forge, monkeypatch, path, config)
     _r4_cycle(forge, monkeypatch, path, config)
@@ -117,9 +119,11 @@ def test_omni_disabled_gatekeeper_preserves_findings_without_call(tmp_path, monk
     finding = Finding(rule_id="general", severity="Major", path="a.py", line=1,
                       message="Ordinary concrete defect")
     monkeypatch.setattr(engine, "_probe_head", lambda *a: "a" * 40)
+    monkeypatch.setattr(engine_omni, "_probe_head", lambda *a: "a" * 40)
     monkeypatch.setattr(analyzer, "analyze", lambda pr, *a, **kw: ReviewDoc(pr=pr, findings=[finding]))
     monkeypatch.setattr(engine.gatekeeper, "filter_findings", lambda *a: pytest.fail("disabled gatekeeper called"))
     monkeypatch.setattr(engine, "_omni_upsert_issue", lambda *a, **kw: None)
+    monkeypatch.setattr(engine_omni, "_omni_upsert_issue", lambda *a, **kw: None)
     st = {}
     report = engine.CycleReport(repo=config.repo)
     engine._omnisweep_step(config, forge, tmp_path / "state.json", None, st, report, None)

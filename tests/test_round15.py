@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from fl4write import engine, executor, issues, state
+from fl4write import engine_omni
 from fl4write.config import RepoConfig
 
 
@@ -35,6 +36,8 @@ def restart(tmp_path, **fields):
 def test_restart_does_not_suppress_fix_with_malformed_flag(tmp_path, monkeypatch, flag, value):
     st = restart(tmp_path, **{flag: value})
     monkeypatch.setattr(engine, "_fix_freshness_gate", lambda *a: True)
+    monkeypatch.setattr(engine_omni, "_fix_freshness_gate", lambda *a: True)
+    monkeypatch.setattr(engine_omni, "_fix_freshness_gate", lambda *a: True)
     calls = []
     monkeypatch.setattr(executor, "attempt_fix", lambda *a, **k: calls.append(a) or
                         {"status": "pr_opened", "pr_number": 9})
@@ -83,6 +86,8 @@ def test_completed_old_audit_is_refreshed_once_without_rescanning(monkeypatch, t
     bodies = []
     forge = SimpleNamespace(name="github", update_issue=lambda *a: bodies.append(a[-1]) or True)
     monkeypatch.setattr(engine, "_probe_head", lambda *a: "a" * 40)
+    monkeypatch.setattr(engine_omni, "_probe_head", lambda *a: "a" * 40)
+    monkeypatch.setattr(engine_omni, "_probe_head", lambda *a: "a" * 40)
     cfg = config().model_copy(update={"omnisweep": config().omnisweep.model_copy(update={"fix": False})})
     engine._omnisweep_step(cfg, forge, tmp_path / "state.json", None, st,
                           engine.CycleReport(repo=cfg.repo), None)
@@ -100,7 +105,11 @@ def test_failed_old_audit_refresh_defers_fixes(monkeypatch, tmp_path):
                              "rule": "tests", "sev": "Major", "msg": "A concrete defect."}]}
     forge = SimpleNamespace(name="github", update_issue=lambda *a: False)
     monkeypatch.setattr(engine, "_probe_head", lambda *a: "a" * 40)
+    monkeypatch.setattr(engine_omni, "_probe_head", lambda *a: "a" * 40)
+    monkeypatch.setattr(engine_omni, "_probe_head", lambda *a: "a" * 40)
     monkeypatch.setattr(engine, "_omni_fix_phase", lambda *a: pytest.fail("fix before publication"))
+    monkeypatch.setattr(engine_omni, "_omni_fix_phase", lambda *a: pytest.fail("fix before publication"))
+    monkeypatch.setattr(engine_omni, "_omni_fix_phase", lambda *a: pytest.fail("fix before publication"))
     engine._omnisweep_step(config(), forge, tmp_path / "state.json", None, st,
                           engine.CycleReport(repo="owner/project"), None)
     assert st["omni_pub_fail"] == 1
