@@ -21,4 +21,5 @@ code, tests and desk tooling link to them by those paths.
 
 Docs use placeholders for hosts (`<runner-host>`, `<forgejo-host>`). Configs
 carry no LAN addresses (loopback or `FL4WRITE_MODEL_ENDPOINT` instead); the
-Forgejo configs' `api_base` still names the tailnet-direct Forgejo API.
+Forgejo configs' `api_base` comes from the runner environment
+(`${FL4WRITE_FORGEJO_API_BASE}`), never a tracked host literal.
