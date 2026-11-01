@@ -60,8 +60,8 @@ _IPV4 = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])")
 def test_no_fleet_config_hardcodes_a_lan_host_address() -> None:
     # The repo is public: LAN (RFC1918) host addresses ride in as ${VAR}
     # placeholders or loopback, never literals (commit 1963133 fixed one
-    # config; this pins the whole fleet). Tailnet (CGNAT) Forgejo api_base
-    # literals are out of scope until the runner supplies them by env.
+    # config; this pins the whole fleet). Since the FL4WRITE_FORGEJO_API_BASE
+    # migration (2026-11-01) the Forgejo api_base is runner-env-supplied too.
     leaks: list[str] = []
     for path in CONFIGS + [ROOT / ".fl4write.yaml"]:
         for lineno, line in enumerate(path.read_text().splitlines(), 1):
@@ -73,4 +73,18 @@ def test_no_fleet_config_hardcodes_a_lan_host_address() -> None:
                 if ip.is_private and not ip.is_loopback:  # RFC1918 & co.; not CGNAT
                     leaks.append(f"{path.name}:{lineno}: {literal}")
     assert not leaks, "LAN host addresses in tracked configs: " + "; ".join(leaks)
+    # api_base admits NO IPv4 literal at all — hostnames and ${VAR}
+    # placeholders only. Structural regex, never ipaddress.is_private: the
+    # CGNAT answer is Python-version-sensitive, and any host literal in
+    # api_base is topology exposure regardless of its address class.
+    api_base_leaks: list[str] = []
+    for path in CONFIGS + [ROOT / ".fl4write.yaml"]:
+        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+            value = re.match(r"\s*api_base:\s*(\S+)\s*$", line)
+            if value and _IPV4.search(value.group(1)):
+                api_base_leaks.append(f"{path.name}:{lineno}: {value.group(1)}")
+    assert not api_base_leaks, (
+        "api_base values must be hostnames or ${VAR} placeholders, never IPv4 "
+        "literals: " + "; ".join(api_base_leaks)
+    )
 

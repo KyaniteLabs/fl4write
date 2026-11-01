@@ -92,6 +92,20 @@ if [ -z "${FL4WRITE_MODEL_ENDPOINT:-}" ]; then
     export FL4WRITE_MODEL_ENDPOINT=http://127.0.0.1:46399/v1/chat/completions
 fi
 
+# Forgejo api_base (2026-11-01): the tracked *.fj.fl4write.yaml configs carry
+# ${FL4WRITE_FORGEJO_API_BASE} — the tailnet host literal lives in the RUNNER
+# environment, never in the public repo. Same .bashrc extraction as the
+# tokens above; deliberately NO tracked default (a default would put the host
+# literal back in the repo). When this stays empty the ${VAR} expansion
+# aborts config load fail-loud (config.py, Lever 3b) and the Forgejo repos
+# alert-fallback the cycle until the runner host's ~/.bashrc exports it.
+if [ -z "${FL4WRITE_FORGEJO_API_BASE:-}" ]; then
+    export FL4WRITE_FORGEJO_API_BASE=$(grep "^export FL4WRITE_FORGEJO_API_BASE=" ~/.bashrc 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')
+fi
+if [ -z "${FL4WRITE_FORGEJO_API_BASE:-}" ]; then
+    echo "$(date -Iseconds) WARN: FL4WRITE_FORGEJO_API_BASE empty after extraction — the Forgejo configs' api_base placeholder fails load-loud and those repos alert-fallback this cycle (export it in ~/.bashrc on the runner host)" >> "$LOG"
+fi
+
 # SCALE Phase 2: tiered due-list + process pool (consensus-gated, #6).
 # The scheduler is invoked EXACTLY ONCE (Sol#2: three invocations = 3x the
 # probe cost + fragile grep-splitting); its JSON envelope carries due files,

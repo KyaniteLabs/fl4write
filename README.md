@@ -103,9 +103,10 @@ this setting to the selected route, so isolated callers cannot override it.
 
 **Host addresses in configs:** tracked configs never carry LAN (RFC1918) host
 addresses (pinned by `tests/test_fleet_configs.py`): local engines are reached
-on loopback, and `run-cycle.sh` supplies `FL4WRITE_MODEL_ENDPOINT` (defaults to
-loopback). The Forgejo configs still name the tailnet-direct Forgejo API
-(`api_base`); moving that to the environment is a follow-up.
+on loopback, `run-cycle.sh` supplies `FL4WRITE_MODEL_ENDPOINT` (defaults to
+loopback), and the Forgejo configs' `api_base` comes from the runner
+environment (`${FL4WRITE_FORGEJO_API_BASE}`, extracted from `~/.bashrc` by
+`run-cycle.sh` — no tracked default; an unset var fails the load loud).
 
 Round 14 remains open; no exhaustive certification is
 claimed. CI on every push. Quality loop on
