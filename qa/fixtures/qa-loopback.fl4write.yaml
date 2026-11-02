@@ -1,0 +1,44 @@
+# FL4WRITE QA fixture — dead-loopback review cycle (credential-free).
+# Schema: RepoConfig (fl4write/config.py). Every network-bearing value points
+# at 127.0.0.1:9 (discard port, nothing listens): forge listing, model routes.
+# The engine observes unreachable-forge degradation (ALERTs, scanned=0, exit 0)
+# without any credential, real forge, or model call. shadow: true = findings
+# log, nothing posts — the safe default for QA execution.
+repo: KyaniteLabs/qa-loopback
+forges:
+  forgejo:
+    role: primary
+    api_base: http://127.0.0.1:9/api/v1
+    token_env: CODESITTER_FORGEJO_TOKEN
+model:
+  endpoint: http://127.0.0.1:9/v1/chat/completions
+  model: qa-loopback-model
+  key_env: ''
+  temperature: 0.2
+  max_tokens: 1000
+fallback_model:
+  endpoint: http://127.0.0.1:9/v1/chat/completions
+  model: qa-loopback-fallback
+  key_env: ''
+  temperature: 0.2
+  max_tokens: 500
+review:
+  secrets: "Never commit or echo secrets, tokens, or credentials."
+severity_vocab: [Critical, Major, Minor, Nit]
+tone: balanced
+tone_fork_override: balanced
+fix:
+  enabled: false
+  merge_own_prs: false
+  max_fix_depth: 2
+  fork_policy: comment-only
+  dependency_policy: skip-patch
+post_merge:
+  enabled: true
+  initial_lookback_h: 1
+  max_per_cycle: 2
+retro_audit:
+  enabled: true
+  lookback_days: 1
+  max_per_cycle: 1
+shadow: true

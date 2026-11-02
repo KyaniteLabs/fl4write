@@ -1,0 +1,7 @@
+#!/bin/sh
+# FL4WRITE QA shim — stands in for the gh CLI in run-cycle.sh guard tests.
+# run-cycle.sh gates on `gh auth token` returning a nonempty string
+# (run-cycle.sh:34-38). This shim satisfies that gate with a fake value so the
+# LATER guards (check-dirty abort, self-update abort) are reachable without
+# any real credential. It never performs a network operation.
+echo qa-stub-token
