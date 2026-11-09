@@ -1,0 +1,758 @@
+# FL4WRITE operator-path catalog — the QA input contract for KyaniteLabs/fl4write.
+#
+# Schema aligned with the staged Q1 format (Epoch.yaml): schema_version, policy,
+# setup, paths[] with id/surface/command/expected/sources, negative_cases,
+# surface_absence, restricted/fixture-gated entries, coverage. Every executed
+# entry additionally carries machine-checkable assertions the shipped runner
+# (qa/run.sh) enforces:
+#   expect_exit      — required exit code of the command
+#   expect_stdout    — substrings that MUST appear on stdout
+#   expect_stderr    — substrings that MUST appear on stderr
+#   expect_log_delta — substrings that MUST appear in the runner.log bytes
+#                      appended by this command (sandbox runner.log)
+#   expect_no_log_delta: true — the command must append NOTHING to runner.log
+# Commands are bash strings executed with cwd=$QA_CHECKOUT under the isolated
+# environment built by qa/run.sh (empty HOME, no host credentials,
+# FL4WRITE_FORGEJO_API_BASE deliberately unset in the base env; the one entry
+# that needs it sets it inline). All commands pass `bash -n` (preflight).
+#
+# Landed unexecuted: run_status stays NOT_EXECUTED until QA re-executes this
+# catalog at the Security-merged SHA that contains it.
+
+schema_version: 1
+status: catalog_landed_not_executed
+run_status: NOT_EXECUTED
+
+policy:
+  pass: 'Every required action executes and meets its observable assertion on the
+    Security-merged default-branch SHA.'
+  blocked: 'Missing fixture, dependency, consent or path assertions prevent a full
+    pass; discovery/help never counts as end-to-end execution.'
+  evidence: 'For every path retain exact command, SHA, exit code, stdout/stderr,
+    asserted observations and hashes. Sanitize before delivery.'
+  isolation: 'New clone pinned at the merge SHA; empty HOME for product subprocesses;
+    no real user data or credentials; dead-loopback (127.0.0.1:9) forge/model endpoints
+    wherever a route would otherwise leave the host; state written only under the
+    isolated HOME. The QA host''s own gh auth, tokens and model keys are never read
+    (commands run through a constructed env, not the inherited one).'
+  resources: 'One bounded product test at a time; dead-loopback endpoints answer
+    instantly (connection refused); total runtime of the full catalog is seconds,
+    not minutes.'
+  change_control: 'Catalog and qa/run.sh changes require a repository PR and Security
+    merge. A runner EXISTS in this repo (qa/run.sh) and executes the catalog
+    end-to-end.'
+
+product: FL4WRITE (package fl4write)
+repository: KyaniteLabs/fl4write
+source_revision: 397c2ed2f3c182653ea2d2055f0b91a4066029ac
+revision_policy: 'Local-source provenance only; fetch/verify the actual Security
+  merge SHA during QA (this catalog''s own merge or later) and pin the checkout
+  to it. source_revision above is the last Security-merged SHA before this catalog
+  existed; every citation''s file/line/quote was verified against it.'
+
+setup:
+- id: isolate
+  surface: qa-harness
+  command: 'mkdir -p "$QA_WORK/home/.config" "$QA_WORK/home/.fl4write" "$QA_WORK/fixtures"
+    "$QA_WORK/nonrepo" "$QA_WORK/evidence"
+
+    # Product subprocesses run with env -i style constructed environments (see
+    # qa/run.sh): HOME under QA_WORK, no host credentials, FL4WRITE_FORGEJO_API_BASE
+    # unset in the base env (set inline only by the seam entry).'
+  expected: 'All product writes (state, plan, runner.log) land under the disposable
+    QA_HOME; no host credential is readable.'
+  sources:
+  - file: run-cycle.sh
+    line: 15
+    quote: 'mkdir -p ~/.fl4write || { echo "$(date -Iseconds) ERR: cannot create ~/.fl4write
+      — aborting" >> "$LOG"; exit 1; }'
+- id: clone_and_pin
+  surface: qa-harness
+  command: 'MERGE_SHA="${FL4WRITE_QA_SHA:-$(git -C "$QA_SRC" rev-parse HEAD)}"
+
+    git clone --no-local "$QA_SRC" "$QA_CHECKOUT"
+
+    git -C "$QA_CHECKOUT" checkout --detach "$MERGE_SHA"
+
+    test "$(git -C "$QA_CHECKOUT" rev-parse HEAD)" = "$MERGE_SHA"'
+  expected: 'New clone at exactly the merge SHA; fail before install if identity or
+    ancestry cannot be verified. Verify PR merged state and the Security merge
+    receipt separately.'
+  sources:
+  - file: pyproject.toml
+    line: 1
+    quote: '[build-system]'
+- id: install
+  surface: qa-harness
+  command: 'python3 -m venv "$QA_VENV"
+
+    "$QA_VENV/bin/pip" install -e "$QA_CHECKOUT"
+
+    "$QA_VENV/bin/python" -c "import fl4write, pydantic, yaml, jwt; print(''install-ok'')"'
+  expected: 'Exit 0; the package and its declared dependencies (pydantic>=2.5,
+    pyyaml>=6, pyjwt[crypto]>=2.8) import from the pinned checkout. A bare host
+    python3 is NOT sufficient — the CLI imports pydantic at module load, so this
+    step is required for every CLI path below.'
+  sources:
+  - file: pyproject.toml
+    line: 12
+    quote: 'dependencies = ["pydantic>=2.5", "pyyaml>=6", "pyjwt[crypto]>=2.8"]  #
+      RSA signing is the primary App auth path'
+- id: sandbox-runner-checkout
+  surface: qa-harness
+  command: 'git clone --no-local "$QA_CHECKOUT" "$QA_HOME/workspaces/fl4write"
+
+    git -C "$QA_HOME/workspaces/fl4write" checkout --detach "$MERGE_SHA"
+
+    mkdir -p "$QA_HOME/.fl4write"
+
+    rm -f "$QA_HOME/workspaces/fl4write/runner.log"'
+  expected: 'run-cycle.sh''s cd target (~/workspaces/fl4write) exists as a clean clone
+    at the merge SHA; the lock dir exists; a stale runner.log from an earlier
+    run cannot pollute log-delta assertions. runner.log and logs/ are gitignored,
+    so the guard stays clean across cases.'
+  sources:
+  - file: run-cycle.sh
+    line: 42
+    quote: 'cd ~/workspaces/fl4write || { echo "$(date -Iseconds) ERR: cannot cd to
+      ~/workspaces/fl4write" >> "$LOG"; exit 1; }'
+  - file: .gitignore
+    line: 6
+    quote: runner.log
+- id: fixtures
+  surface: qa-harness
+  command: 'cp "$QA_SRC/qa/fixtures/qa-loopback.fl4write.yaml" "$QA_WORK/fixtures/"
+
+    mkdir -p "$QA_WORK/shim"
+
+    cp "$QA_SRC/qa/fixtures/shim/gh" "$QA_WORK/shim/gh" && chmod +x "$QA_WORK/shim/gh"
+
+    mkdir -p "$QA_WORK/shim-noflock"
+
+    for b in env bash sh mkdir date grep head cut tr cat; do ln -sf "/usr/bin/$b"
+    "$QA_WORK/shim-noflock/$b"; done
+
+    ls "$QA_WORK/shim-noflock/flock" 2>/dev/null && exit 1 || true'
+  expected: 'The dead-loopback config fixture, the credential-free gh stub (satisfies
+    run-cycle.sh''s token gate with a fake value) and a PATH shim that contains
+    every binary run-cycle.sh needs BEFORE its flock gate EXCEPT flock itself.'
+  sources:
+  - file: qa/fixtures/qa-loopback.fl4write.yaml
+    line: 11
+    quote: 'api_base: http://127.0.0.1:9/api/v1'
+  - file: qa/fixtures/shim/gh
+    line: 7
+    quote: echo qa-stub-token
+
+paths:
+# ---------------------------------------------------------------- CLI review cycle
+- id: cli-cycle-shadow-fixture
+  surface: cli
+  command: cd "$QA_CHECKOUT" && python3 -m fl4write.cli "$QA_FIXTURE"
+  expect_exit: 0
+  expect_stdout:
+  - 'ALERT: config probe inconclusive for KyaniteLabs/qa-loopback (forge unqueryable — not an adoption-loss claim)'
+  - 'ALERT: primary unreachable: forgejo GET /repos/KyaniteLabs/qa-loopback/pulls?state=open&page=1&limit=50'
+  - 'fl4write cycle: repo=KyaniteLabs/qa-loopback scanned=0 reviewed=0 shadow=True'
+  expect_stderr:
+  - 'token_env CODESITTER_FORGEJO_TOKEN is not set in the environment (expect 401s)'
+  expected: 'The v1 trigger runs one full poll-invariant cycle against the dead-loopback
+    fixture — forge listing fails, degradation is ALERTed on stdout (never a crash,
+    never a silent skip), the cycle line reports scanned=0 with shadow=True, and
+    the process exits 0. The unset forge token warns at load but is not fatal.
+    Findings are log-only because the fixture sets shadow: true.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: README.md
+    line: 78
+    quote: '**Usage:** `python3 -m fl4write.cli <config> [--live] [--fixes] [--issues]
+      [--omni]`'
+  - file: fl4write/cli.py
+    line: 3
+    quote: 'Usage: python3 -m fl4write.cli <config.yaml> [--live] [--fixes] [--issues]
+      [--omni]'
+  - file: fl4write/cli.py
+    line: 331
+    quote: '    for a in report.alerts:'
+  - file: fl4write/cli.py
+    line: 341
+    quote: 'f"fl4write cycle: repo={report.repo} scanned={report.scanned} "'
+  - file: fl4write/config.py
+    line: 535
+    quote: 'log.warning("forge binding %s (%s): token_env %s is not set in the "'
+- id: cli-cycle-live-flag
+  surface: cli
+  command: cd "$QA_CHECKOUT" && python3 -m fl4write.cli "$QA_FIXTURE" --live
+  expect_exit: 0
+  expect_stdout:
+  - 'fl4write cycle: repo=KyaniteLabs/qa-loopback scanned=0 reviewed=0 shadow=False'
+  expected: '--live is the explicit live belt: the cycle line reports shadow=False
+    regardless of the config''s shadow field. With the forge unreachable nothing
+    can post (scanned=0), so the flag is observable safely, credential-free.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: fl4write/cli.py
+    line: 260
+    quote: '    if live:'
+  - file: fl4write/cli.py
+    line: 261
+    quote: '        config = config.model_copy(update={"shadow": False})'
+- id: cli-cycle-omni-flag
+  surface: cli
+  command: cd "$QA_CHECKOUT" && python3 -m fl4write.cli "$QA_FIXTURE" --omni
+  expect_exit: 0
+  expect_stdout:
+  - omni=0/0f
+  - 'scanned=0 reviewed=0 shadow=True'
+  expected: '--omni forces the one-shot prelaunch kick (omnisweep enabled, per-cycle
+    file cap 50) through a NORMAL run_cycle — with the forge tree unlistable the
+    sweep degrades to omni=0/0f and exits 0, proving the flag is live (not dead)
+    without a model or forge.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: fl4write/cli.py
+    line: 251
+    quote: '    if "--omni" in sys.argv:'
+  - file: fl4write/cli.py
+    line: 258
+    quote: '"omnisweep": config.omnisweep.model_copy(update={"enabled": True, "max_files_per_cycle":
+      50}),'
+- id: cli-cycle-fixes-issues
+  surface: cli
+  command: cd "$QA_CHECKOUT" && python3 -m fl4write.cli "$QA_FIXTURE" --fixes --issues
+  expect_exit: 0
+  expect_stdout:
+  - 'fl4write cycle: repo=KyaniteLabs/qa-loopback scanned=0'
+  expected: 'The fleet runner''s exact per-repo invocation (run-cycle.sh calls the
+    CLI with --fixes --issues) parses both lane flags and completes a cycle on
+    the fixture (fix lane disabled in the fixture; issues lane opt-out by default).'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: run-cycle.sh
+    line: 182
+    quote: '    OUT=$(timeout 900 python3 -m fl4write.cli "$f" --fixes --issues 2>&1)'
+  - file: fl4write/config.py
+    line: 256
+    quote: 'issues_enabled: bool = False  # issues-lane triage (comment-only)'
+- id: cli-cycle-kinocut-seam
+  surface: cli
+  command: cd "$QA_CHECKOUT" && FL4WRITE_FORGEJO_API_BASE=http://127.0.0.1:9/api/v1
+    python3 -m fl4write.cli kinocut.fj.fl4write.yaml
+  expect_exit: 0
+  expect_stdout:
+  - 'ALERT: config probe inconclusive for KyaniteLabs/kinocut (forge unqueryable — not an adoption-loss claim)'
+  - 'fl4write cycle: repo=KyaniteLabs/kinocut scanned=0 reviewed=0 shadow=False'
+  expected: 'The PR #26 environment seam, exercised on the TRACKED reference config:
+    the tracked .fj config''s api_base is the ${FL4WRITE_FORGEJO_API_BASE}
+    placeholder, the env var supplies a dead loopback, the config loads, and the
+    cycle degrades loudly (ALERTs, scanned=0, exit 0). This is the credential-free
+    shape QA uses for every Forgejo-primary repo. The deployed runner''s real value
+    is provisioned out-of-band (platform chain t_72e4d9a7) and is NOT exercised
+    here.'
+  substitutions: 'The dead-loopback value above; QA may substitute any loopback
+    address that refuses connections.'
+  required: true
+  sources:
+  - file: kinocut.fj.fl4write.yaml
+    line: 5
+    quote: 'api_base: ${FL4WRITE_FORGEJO_API_BASE}'
+  - file: run-cycle.sh
+    line: 103
+    quote: 'export FL4WRITE_FORGEJO_API_BASE=$(grep "^export FL4WRITE_FORGEJO_API_BASE="
+      ~/.bashrc 2>/dev/null | head -1 | cut -d= -f2- | tr -d ''"'')'
+  - file: README.md
+    line: 107
+    quote: 'loopback), and the Forgejo configs'' `api_base` comes from the runner'
+- id: tiers-plan-envelope
+  surface: cli
+  command: 'set -o pipefail; cd "$QA_CHECKOUT" && python3 -m fl4write.tiers --plan
+    "$QA_FIXTURE" | python3 -c ''import json,sys; p=json.load(sys.stdin); assert
+    isinstance(p["due"], list) and all(isinstance(d, str) for d in p["due"]); assert
+    isinstance(p["alerts"], list) and all(isinstance(a, str) for a in p["alerts"]);
+    assert isinstance(p["summary"], str); print("envelope-ok", len(p["due"]), "due")'''
+  expect_exit: 0
+  expect_stdout:
+  - envelope-ok
+  expected: 'The tier scheduler emits ONE JSON envelope {due, alerts, summary} on
+    stdout and exits 0 — the exact shape run-cycle.sh parses and validates. The
+    fixture (Forgejo-primary, no state file) classifies WARM per the Forgejo
+    default; due/alerts content may vary with cadence watermarks, so the assertion
+    is the envelope shape, not a pinned count.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: fl4write/tiers.py
+    line: 228
+    quote: 'help="ONE envelope {due, alerts, summary} — the runner parses this "'
+  - file: run-cycle.sh
+    line: 116
+    quote: 'python3 -m fl4write.tiers --plan *.fl4write.yaml > ~/.fl4write/plan.json
+      2>>"$LOG"'
+  - file: fl4write/tiers.py
+    line: 13
+    quote: 'org merges in ~60s — a busy Forgejo repo silently parked cold is a'
+- id: check-dirty-clean
+  surface: ops-shell
+  command: FL4WRITE_CHECKOUT="$QA_SANDBOX" bash "$QA_SANDBOX/check-dirty.sh"
+  expect_exit: 0
+  expect_stdout:
+  - clean
+  expected: 'The C2 guard certifies the pristine sandbox clone as clean (single line
+    "clean"). FL4WRITE_CHECKOUT is the documented testability override pointing
+    the guard at the QA sandbox instead of a deployment checkout.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: check-dirty.sh
+    line: 6
+    quote: 'CHECKOUT="${FL4WRITE_CHECKOUT:-$HOME/workspaces/fl4write}"'
+  - file: check-dirty.sh
+    line: 30
+    quote: echo "clean"
+- id: run-cycle-contention
+  surface: ops-shell
+  command: 'flock "$QA_LOCK" -c ''sleep 10'' & HOLDER=$!; sleep 1; env -i HOME="$QA_HOME"
+    TERM=dumb PATH=/usr/bin:/bin LANG=C.UTF-8 bash "$QA_SANDBOX/run-cycle.sh";
+    rc=$?; kill -9 $HOLDER 2>/dev/null; wait $HOLDER 2>/dev/null; exit $rc'
+  expect_exit: 0
+  expect_stdout: []
+  expect_stderr: []
+  expect_stdout_empty: true
+  expect_stderr_empty: true
+  expect_no_log_delta: true
+  expected: 'With another holder on ~/.fl4write/runner.lock, run-cycle.sh''s
+    nonblocking flock fails with rc=1 — genuine contention — and the script exits
+    0 SILENTLY (no output, no runner.log line): one runner at a time, the concurrent
+    cycle is not an error.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: run-cycle.sh
+    line: 27
+    quote: 'flock -n 9 2>>"$LOG" || {'
+  - file: run-cycle.sh
+    line: 29
+    quote: '    if [ "$rc" -eq 1 ]; then exit 0; fi  # genuine contention: another
+      cycle runs'
+
+negative_cases:
+# ------------------------------------------------------------- CLI refusal guards
+- id: cli-unknown-flag
+  surface: cli
+  command: cd "$QA_CHECKOUT" && python3 -m fl4write.cli --bogus
+  expect_exit: 2
+  expect_stderr:
+  - 'unknown flag(s): --bogus — refusing to run (typo guard)'
+  expected: 'Unknown flags are refused before anything runs — a typo like --lvie for
+    --live cannot silently run the cycle in the wrong mode. Exit 2, one-line
+    diagnostic.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: fl4write/cli.py
+    line: 204
+    quote: 'print(f"unknown flag(s): {'', ''.join(unknown)} — refusing to run (typo
+      guard)",'
+  - file: fl4write/cli.py
+    line: 162
+    quote: '_KNOWN_FLAGS = ("--live", "--fixes", "--issues", "--omni")'
+  - file: README.md
+    line: 79
+    quote: '(mode flag typos are refused — unknown flags exit 2).'
+- id: cli-no-args
+  surface: cli
+  command: cd "$QA_CHECKOUT" && python3 -m fl4write.cli
+  expect_exit: 2
+  expect_stderr:
+  - 'usage: python3 -m fl4write.cli <config.yaml> [--live] [--fixes] [--issues] [--omni]'
+  expected: 'No arguments prints the usage line and exits 2.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: fl4write/cli.py
+    line: 208
+    quote: 'print("usage: python3 -m fl4write.cli <config.yaml> [--live] [--fixes]
+      [--issues] [--omni]", file=sys.stderr)'
+- id: cli-two-positional
+  surface: cli
+  command: cd "$QA_CHECKOUT" && python3 -m fl4write.cli a.yaml b.yaml
+  expect_exit: 2
+  expect_stderr:
+  - 'expected exactly ONE config path, got 2 positional argument(s) — refusing to run (typo guard)'
+  expected: 'EXACTLY one positional is the contract; extra positionals were silently
+    ignored once, so now a typo''d invocation refuses instead of running a valid
+    config while discarding the mistake.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: fl4write/cli.py
+    line: 220
+    quote: 'print(f"expected exactly ONE config path, got {len(positionals)} "'
+  - file: fl4write/cli.py
+    line: 221
+    quote: 'f"positional argument(s) — refusing to run (typo guard)",'
+- id: cli-missing-config
+  surface: cli
+  command: cd "$QA_CHECKOUT" && python3 -m fl4write.cli "$QA_WORK/no-such-config.yaml"
+  expect_exit: 2
+  expect_stderr:
+  - 'config error: FileNotFoundError — see log for detail'
+  expected: 'A missing/unreadable config is a concise CLI error with exit 2 — never
+    an uncaught traceback (the error TYPE is surfaced; values stay out of the
+    message).'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: fl4write/cli.py
+    line: 248
+    quote: 'print(f"config error: {''; ''.join(_detail)[:200]} — see log for detail",'
+  - file: fl4write/cli.py
+    line: 226
+    quote: '# F8-005: a missing/unreadable/malformed config is a concise CLI'
+- id: cli-config-unset-env
+  surface: cli
+  command: cd "$QA_CHECKOUT" && python3 -m fl4write.cli kinocut.fj.fl4write.yaml
+  expect_exit: 2
+  expect_stderr:
+  - 'ERROR fl4write.cli: config load failed for kinocut.fj.fl4write.yaml: fields=ValueError'
+  - 'config error: ValueError — see log for detail'
+  expected: 'Config-load fail-loud on an unset ${FL4WRITE_FORGEJO_API_BASE}: the
+    tracked kinocut config references the placeholder, the variable is absent
+    from the environment, and _expand_env raises ValueError("config references
+    unset environment variable ''FL4WRITE_FORGEJO_API_BASE'' ... — set it or inline
+    the value"). The CLI surface shows the concise form (exit 2, config error
+    naming the exception type); the full variable-naming message is the raised
+    exception text cited below.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: fl4write/config.py
+    line: 563
+    quote: '            if name not in os.environ:'
+  - file: fl4write/config.py
+    line: 565
+    quote: 'f"config references unset environment variable {name!r} ({source}) — "'
+  - file: fl4write/config.py
+    line: 566
+    quote: '"set it or inline the value"'
+  - file: fl4write/cli.py
+    line: 246
+    quote: 'log.error("config load failed for %s: fields=%s", config_path,'
+- id: cli-budget-invalid
+  surface: cli
+  command: cd "$QA_CHECKOUT" && FL4WRITE_CYCLE_BUDGET_S=banana python3 -m fl4write.cli
+    "$QA_FIXTURE"
+  expect_exit: 2
+  expect_stderr:
+  - 'FL4WRITE_CYCLE_BUDGET_S must be an integer, got ''banana'''
+  expected: 'An unparseable cycle budget is a misconfiguration, not a traceback or a
+    silently-already-expired deadline: exit 2 with a one-line diagnostic. (The
+    config loads first — the forge-token warning may precede the diagnostic.)'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: fl4write/cli.py
+    line: 187
+    quote: 'print(f"FL4WRITE_CYCLE_BUDGET_S must be an integer, got {raw!r}", file=sys.stderr)'
+  - file: fl4write/cli.py
+    line: 311
+    quote: '        return 2  # error already printed by the helper'
+# --------------------------------------------------------- check-dirty.sh guards
+- id: check-dirty-dirty
+  surface: ops-shell
+  command: 'echo qa > "$QA_SANDBOX/untracked-probe.txt"; FL4WRITE_CHECKOUT="$QA_SANDBOX"
+    bash "$QA_SANDBOX/check-dirty.sh"; rc=$?; rm -f "$QA_SANDBOX/untracked-probe.txt";
+    exit $rc'
+  expect_exit: 1
+  expect_stdout:
+  - 'ALERT: 1 untracked + 0 changed files (modified/added/deleted/renamed) in the runner config home — invisible to the gpu-host runner until committed'
+  expected: 'ANY porcelain line is a hazard: an untracked file makes the guard ALERT
+    with honest untracked/changed counts and exit 1. The command removes its own
+    probe file so later cases see a clean sandbox.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: check-dirty.sh
+    line: 26
+    quote: 'echo "ALERT: $U untracked + $M changed files (modified/added/deleted/renamed)
+      in the runner config home — invisible to the gpu-host runner until committed"'
+  - file: check-dirty.sh
+    line: 22
+    quote: 'U=$(printf ''%s\n'' "$STATUS" | grep -c ''^??'' || true)'
+- id: check-dirty-missing
+  surface: ops-shell
+  command: FL4WRITE_CHECKOUT="$QA_WORK/no-such-dir" bash "$QA_SANDBOX/check-dirty.sh"
+  expect_exit: 1
+  expect_stdout:
+  - 'ALERT: cannot cd to '
+  expected: 'A MISSING checkout is never certified clean — the cd failure ALERTs and
+    exits 1.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: check-dirty.sh
+    line: 8
+    quote: 'cd "$CHECKOUT" || { echo "ALERT: cannot cd to $CHECKOUT — checkout missing";
+      exit 1; }'
+  - file: check-dirty.sh
+    line: 7
+    quote: '# MECE round-6 (sol F6-E05): never certify a MISSING checkout as clean'
+- id: check-dirty-nonrepo
+  surface: ops-shell
+  command: 'mkdir -p "$QA_WORK/nonrepo"; FL4WRITE_CHECKOUT="$QA_WORK/nonrepo" bash
+    "$QA_SANDBOX/check-dirty.sh"'
+  expect_exit: 1
+  expect_stdout:
+  - 'ALERT: git status failed (rc='
+  expected: 'A directory that exists but is not a git worktree fails git status; a
+    FAILED git command must never certify clean — integrity unknown, ALERT, exit 1.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: check-dirty.sh
+    line: 18
+    quote: '  echo "ALERT: git status failed (rc=$RC) — checkout integrity UNKNOWN"'
+  - file: check-dirty.sh
+    line: 15
+    quote: 'if [ $RC -ne 0 ]; then'
+# ------------------------------------------------------------ run-cycle.sh guards
+- id: run-cycle-no-flock
+  surface: ops-shell
+  command: env -i HOME="$QA_HOME" TERM=dumb PATH="$QA_SHIM_NOFLOCK" LANG=C.UTF-8
+    bash "$QA_SANDBOX/run-cycle.sh"
+  expect_exit: 1
+  expect_log_delta:
+  - 'ERR: flock tool missing — aborting cycle'
+  expected: 'A missing flock tool (rc 127 class) must not look like normal contention
+    or silently skip the fleet: ERR to runner.log, exit 1. The shim PATH carries
+    every earlier binary but no flock.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: run-cycle.sh
+    line: 19
+    quote: 'if ! command -v flock >/dev/null 2>&1; then'
+  - file: run-cycle.sh
+    line: 20
+    quote: '    echo "$(date -Iseconds) ERR: flock tool missing — aborting cycle"
+      >> "$LOG"'
+- id: run-cycle-no-gh-token
+  surface: ops-shell
+  command: env -i HOME="$QA_HOME" TERM=dumb PATH=/usr/bin:/bin LANG=C.UTF-8 bash
+    "$QA_SANDBOX/run-cycle.sh"
+  expect_exit: 1
+  expect_log_delta:
+  - 'ERROR: no gh token available'
+  expected: 'With gh present on PATH but no credential reachable from the isolated
+    HOME (or gh absent entirely), `gh auth token` yields nothing and the runner
+    aborts before any cycle: ERROR to runner.log, exit 1. On a host with a
+    SYSTEM-level gh credential this gate cannot trigger; treat an unexpected
+    pass-through as an environment anomaly to investigate, not a pass.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: run-cycle.sh
+    line: 34
+    quote: 'export CODESITTER_GITHUB_TOKEN=$(gh auth token 2>/dev/null)'
+  - file: run-cycle.sh
+    line: 36
+    quote: '    echo "$(date -Iseconds) ERROR: no gh token available" >> "$LOG"'
+- id: run-cycle-dirty-abort
+  surface: ops-shell
+  command: 'echo qa > "$QA_SANDBOX/untracked-probe.txt"; env -i HOME="$QA_HOME" TERM=dumb
+    PATH="$QA_SHIM_GH:/usr/bin:/bin" LANG=C.UTF-8 bash "$QA_SANDBOX/run-cycle.sh";
+    rc=$?; rm -f "$QA_SANDBOX/untracked-probe.txt"; exit $rc'
+  expect_exit: 1
+  expect_log_delta:
+  - 'ERR: dirty checkout — cycle ABORTED (commit/stash before the runner self-pulls)'
+  expected: 'The gh token gate is satisfied by the credential-free stub shim; the
+    C2 guard then finds the untracked probe file and the whole fleet cycle aborts
+    BEFORE self-update — uncommitted files are invisible to git pull and must not
+    run. The command removes its own probe file afterwards.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: run-cycle.sh
+    line: 48
+    quote: 'if ! GUARD_OUT=$(bash check-dirty.sh 2>&1); then'
+  - file: run-cycle.sh
+    line: 50
+    quote: '    echo "$(date -Iseconds) ERR: dirty checkout — cycle ABORTED (commit/stash
+      before the runner self-pulls)" >> "$LOG"'
+  - file: run-cycle.sh
+    line: 47
+    quote: '# dirty checkout must not run (the guard was previously never invoked).'
+- id: run-cycle-selfupdate-abort
+  surface: ops-shell
+  command: 'git -C "$QA_SANDBOX" remote remove origin 2>/dev/null; env -i HOME="$QA_HOME"
+    TERM=dumb PATH="$QA_SHIM_GH:/usr/bin:/bin" LANG=C.UTF-8 bash "$QA_SANDBOX/run-cycle.sh"'
+  expect_exit: 1
+  expect_log_delta:
+  - 'ERR: self-update (git pull) failed — cycle ABORTED (retry next hour)'
+  expected: 'Pull failure IS FATAL: with the sandbox clean (guard passes via the
+    stub gh) but no origin remote, `git pull -q origin main` fails and the cycle
+    aborts — running stale code that reviews today''s PRs with yesterday''s rules
+    is never alert-and-continue. Runs last among the run-cycle cases because it
+    removes the sandbox''s origin remote.'
+  substitutions: 'None.'
+  required: true
+  sources:
+  - file: run-cycle.sh
+    line: 57
+    quote: 'if ! git pull -q origin main 2>>"$LOG"; then'
+  - file: run-cycle.sh
+    line: 58
+    quote: '    echo "$(date -Iseconds) ERR: self-update (git pull) failed — cycle
+      ABORTED (retry next hour)" >> "$LOG"'
+
+surface_absence:
+- id: no-server-surface
+  surfaces_declared_absent: [mcp, http, browser-ui]
+  statement: 'The fl4write package exposes NO MCP, HTTP or browser-UI server surface.
+    Its operator surfaces are exactly the CLI module mains (fl4write.cli the v1
+    trigger; fl4write.tiers the scheduler; fl4write.reliability the eval harness;
+    fl4write.exhaustive the draft loop) and the two ops shell scripts (run-cycle.sh,
+    check-dirty.sh). Source-verified at the merge SHA — the only listener in the
+    package is the per-process model proxy bound to a filesystem AF_UNIX socket
+    (never a network interface) used to serialize model-route calls — not an
+    externally reachable service. No entries are invented for absent surfaces.'
+  sources:
+  - file: fl4write/model_proxy.py
+    line: 104
+    quote: 'with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:'
+  - file: fl4write/model_proxy.py
+    line: 308
+    quote: 'self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval":
+      0.1}, daemon=True)'
+  - file: README.md
+    line: 57
+    quote: 'v1 trigger = cron (the engine''s entry point takes a normalized trigger
+      — cron is an adapter, not the architecture; the flip list for an event adapter:'
+
+restricted_paths:
+- id: cli-live-positive-post
+  surface: cli
+  command: 'python3 -m fl4write.cli <config> --live   # against a REAL reachable forge'
+  expected: 'Posting a review comment through --live to a real forge. QA isolation
+    prohibits real credentials and real user data; no fixture forge exists in
+    this repo. A positive path needs a local Forgejo fixture (container + throwaway
+    token + seeded PR) shipped with a future catalog revision — until then this
+    stays out of scope, and the dead-loopback --live case above (shadow=False,
+    scanned=0, nothing posts) is the credential-free observable.'
+  status: fixture-required
+  fixture_ask: 'local Forgejo instance fixture with a seeded PR and a throwaway bot
+    token'
+  sources:
+  - file: fl4write/cli.py
+    line: 8
+    quote: 'Shadow is a per-repo CONFIG field (shadow: true = log findings, post
+      nothing); a config that omits it runs LIVE, and --live forces'
+- id: reliability-eval
+  surface: cli
+  command: 'python3 -m fl4write.reliability --config <config> --runs 2'
+  expected: 'The reliability harness (determinism/recall/FP/calibration) calls a
+    real model route over the corpus. Needs a model endpoint and key (or a local
+    engine) plus the eval corpus; discovery only here.'
+  status: fixture-required
+  fixture_ask: 'isolated model route (loopback engine or throwaway key) sized for
+    the 20-defect/20-clean corpus'
+  sources:
+  - file: fl4write/reliability.py
+    line: 424
+    quote: 'def main(argv: list[str] | None = None) -> int:'
+  - file: README.md
+    line: 94
+    quote: '**Live (paid-model) suite:** `FL4WRITE_EVAL=1 python3 -m pytest -q` runs
+      the'
+- id: exhaustive-loop
+  surface: cli
+  command: 'python3 -m fl4write.exhaustive --repo <path> --rounds 1'
+  expected: 'The exhaustive bug-resolution loop executes untrusted test code only
+    inside the Docker runtime (tools/exhaustive-runtime); without an image those
+    lanes refuse to execute code. Draft, not certified or deployed (README).'
+  status: fixture-required
+  fixture_ask: 'built tools/exhaustive-runtime Docker image id (FL4WRITE_TEST_IMAGE)
+    plus an isolated model route'
+  sources:
+  - file: fl4write/exhaustive.py
+    line: 1082
+    quote: 'def main() -> int:'
+  - file: README.md
+    line: 67
+    quote: 'its image id (`FL4WRITE_TEST_IMAGE=sha256:...`, env or `~/.bashrc`); see'
+
+cli_inventory:
+- name: fl4write.cli
+  command: cd "$QA_CHECKOUT" && python3 -m fl4write.cli
+  check_kind: refusal_contract
+  expected: 'See the negative cases; the no-args invocation IS the documented usage
+    error (exit 2).'
+  sources:
+  - file: fl4write/cli.py
+    line: 3
+    quote: 'Usage: python3 -m fl4write.cli <config.yaml> [--live] [--fixes] [--issues]
+      [--omni]'
+- name: fl4write.tiers
+  command: cd "$QA_CHECKOUT" && python3 -m fl4write.tiers --help
+  check_kind: discovery_only
+  expected: 'Help identifies configs/--json/--plan and exits 0; the executable
+    contract is the --plan envelope path above.'
+  e2e_status: 'Covered by tiers-plan-envelope.'
+  sources:
+  - file: fl4write/tiers.py
+    line: 227
+    quote: '    ap.add_argument("--plan", action="store_true",'
+- name: fl4write.reliability
+  command: cd "$QA_CHECKOUT" && python3 -m fl4write.reliability --help
+  check_kind: discovery_only
+  expected: 'Help identifies the eval flags and exits 0; execution is fixture-gated
+    (see restricted_paths).'
+  e2e_status: 'BLOCKED pending isolated model-route fixture.'
+  sources:
+  - file: fl4write/reliability.py
+    line: 425
+    quote: 'ap = argparse.ArgumentParser(prog="fl4write.reliability",'
+- name: fl4write.exhaustive
+  command: cd "$QA_CHECKOUT" && python3 -m fl4write.exhaustive --help
+  check_kind: discovery_only
+  expected: 'Help identifies the loop flags and exits 0; execution is fixture-gated
+    (Docker runtime, see restricted_paths).'
+  e2e_status: 'BLOCKED pending Docker test-runtime image fixture.'
+  sources:
+  - file: fl4write/exhaustive.py
+    line: 1082
+    quote: 'def main() -> int:'
+
+supporting_observations:
+- id: run-cycle-scheduler-failure-gate
+  surface: ops-shell
+  statement: 'With the token gate satisfied (stub gh), the sandbox clean and the
+    self-update pull a no-op success (up-to-date detached HEAD), run-cycle.sh
+    reaches the scheduler; a PATH whose python3 cannot import fl4write makes the
+    scheduler die, and the runner exits 1 with "ERR: tier scheduler failed —
+    fleet NOT cycled this hour" — the loud-failure contract (a dead scheduler
+    never looks like a healthy empty cycle). Observed during catalog authoring
+    on the authoring host; kept as a supporting observation rather than a
+    required path because its trigger is host-Python-dependent.'
+  sources:
+  - file: run-cycle.sh
+    line: 134
+    quote: '    echo "$(date -Iseconds) ERR: tier scheduler failed — fleet NOT cycled
+      this hour" >> "$LOG"'
+  - file: run-cycle.sh
+    line: 133
+    quote: 'if [ $PLAN_RC -ne 0 ] || [ -z "$PLAN" ]; then'
+
+coverage:
+  cli_cycle_paths: 5
+  cli_refusal_guards: 6
+  ops_shell_paths: 8
+  fixture_gated_paths: 3
+  server_surfaces: 0
+  complete_e2e_catalog: true
+  executions_performed: 0
+  runner: qa/run.sh
