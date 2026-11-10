@@ -289,3 +289,12 @@ def test_cycle_lock_is_exclusive_and_released(tmp_path):
     with st.CycleLock(lock):                                       # free again
         pass
     assert oct(lock.stat().st_mode & 0o777) == "0o600"
+
+
+def test_valid_pub_fail_counter_survives(tmp_path):
+    assert _aux(tmp_path, omni_pub_fail=3)["omni_pub_fail"] == 3
+
+
+def test_malformed_finding_row_also_resets_the_truncation_marker(tmp_path):
+    out = _aux(tmp_path, omni_findings=[_good_row(), "junk"], omni_truncated_seen=True)
+    assert "omni_truncated_seen" not in out

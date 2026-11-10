@@ -143,9 +143,8 @@ def load_state(path: Path) -> dict[str, Any]:
                     data["prs"] = {k: v for k, v in prs.items() if k not in bad}
                 # F11-C009 (reopened F5-204): record VALUES are consumed by
                 # raw int() — normalize fix_depth and the per-PR failure maps
-                _prs = data["prs"]
-                _dirty = False
-                for _rec in _prs.values():
+                # (records are edited in place; data["prs"] already holds them)
+                for _rec in data["prs"].values():
                     if not isinstance(_rec, dict):
                         continue
                     _fd = _rec.get("fix_depth")
@@ -153,23 +152,17 @@ def load_state(path: Path) -> dict[str, Any]:
                                             or not isinstance(_fd, int)):
                         log.warning("state %s: non-int fix_depth dropped", path)
                         _rec.pop("fix_depth", None)
-                        _dirty = True
                     _mf = _rec.get("model_failures")
                     if _mf is not None:
                         if not isinstance(_mf, dict):
                             log.warning("state %s: non-dict PR model_failures dropped", path)
                             _rec.pop("model_failures", None)
-                            _dirty = True
                         else:
                             _kept = {k: x for k, x in _mf.items()
                                      if isinstance(x, int) and not isinstance(x, bool)}
                             if len(_kept) != len(_mf):
                                 log.warning("state %s: dropping non-int PR model_failures", path)
                                 _rec["model_failures"] = _kept
-                                _dirty = True
-                if _dirty:
-                    data = dict(data)
-                    data["prs"] = _prs
                 return _normalize_aux(data)
             log.warning("state %s version ok but shape wrong; bounded reconcile", path)
         else:
