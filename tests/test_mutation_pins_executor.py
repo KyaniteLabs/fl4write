@@ -502,8 +502,12 @@ class FixRig:
     """Fake git + forge + model for attempt_fix; every call is recorded."""
 
     def __init__(self, monkeypatch, *, content="x = 2\n", fixed="x = 1\n", tests=True,
-                 rc=None, stdout=None, model=None):
+                 rc=None, stdout=None, model=None, stderr=None):
         self.calls: list = []
+        self.fetched: list = []
+        self.tested: list = []
+        self.branch_repo: list = []
+        self.stderr = stderr or {}
         self.prompts: list = []
         self.api: list = []
         self.tokens: list = []
@@ -512,10 +516,13 @@ class FixRig:
         self.stdout.update(stdout or {})
         monkeypatch.setenv("CODESITTER_GITHUB_TOKEN", "tok-fix")
         monkeypatch.setattr(executor, "_test_isolation", lambda: ("host", ""))
-        monkeypatch.setattr(executor, "_get_file_content", lambda r, p, ref: content)
-        monkeypatch.setattr(executor, "_run_tests", lambda cwd, cfg: tests)
+        monkeypatch.setattr(executor, "_get_file_content",
+                            lambda r, p, ref: self.fetched.append((r, p, ref)) or content)
+        monkeypatch.setattr(executor, "_run_tests",
+                            lambda cwd, cfg: self.tested.append((cwd, cfg)) or tests)
         monkeypatch.setattr(executor, "_run", self._run)
-        monkeypatch.setattr(executor, "_default_branch", lambda repo: "trunk")
+        monkeypatch.setattr(executor, "_default_branch",
+                            lambda repo: self.branch_repo.append(repo) or "trunk")
         monkeypatch.setattr(executor, "_gh_api", self._api)
         reply = model if model is not None else _json.dumps({"fixed_content": fixed})
 
@@ -541,7 +548,8 @@ class FixRig:
         out = self.stdout.get(key, "")
         if cmd[:2] == ["git", "rev-parse"]:
             out = self.stdout.get(" ".join(cmd[1:3]), "")
-        return subprocess.CompletedProcess(cmd, rc, out, "err-tail" if rc else "")
+        err = self.stderr.get(key, "err-tail" if rc else "")
+        return subprocess.CompletedProcess(cmd, rc, out, err)
 
     def _api(self, method, path, data=None):
         self.api.append((method, path, data))
@@ -868,3 +876,133 @@ def test_verify_finding_names_the_default_cmd_and_last_three_lines(monkeypatch):
 def test_verify_empty_completed_suite_is_a_did_not_run_finding(monkeypatch, junit):
     VerifyRig(monkeypatch, junit=junit, rc=5)
     assert _verify() is not None
+
+
+def test_fix_hands_the_right_inputs_to_every_helper(monkeypatch):
+    cfg = make_config(fix={"enabled": True})
+    rig = FixRig(monkeypatch)
+    assert _fix(cfg)["status"] == "pr_opened"
+    assert rig.fetched == [("KyaniteLabs/kinocut", "pkg/mod.py", HEAD)]
+    (checkout,) = rig.cmds("checkout")
+    assert checkout["cmd"] == ["git", "checkout", "-q", "--detach", "FETCH_HEAD"]
+    ((testdir, tcfg),) = rig.tested
+    workdir = rig.calls[0]["cwd"]
+    assert tcfg is cfg and testdir != workdir and str(testdir).startswith(
+        os.path.join(os.path.dirname(str(workdir)), "fl4write-fix-test-"))
+    assert not Path(testdir).exists()
+    (cp,) = [c for c in rig.calls if c["cmd"][0] == "cp"]
+    assert cp["cmd"] == ["cp", "-a", f"{workdir}/.", f"{testdir}/"]
+    assert rig.branch_repo == ["KyaniteLabs/kinocut"]
+
+
+def test_fix_plain_content_uses_a_single_backtick_fence(monkeypatch):
+    rig = FixRig(monkeypatch, content="x = 2\n")
+    _fix()
+    assert rig.prompts[0][1].endswith("FILE CONTENT (pkg/mod.py):\n`\nx = 2\n\n`")
+
+
+def test_fix_empty_commit_is_a_nofix_not_an_error(monkeypatch):
+    FixRig(monkeypatch, rc={"commit -q": 1}, stderr={"commit -q": "nothing to commit, clean"})
+    assert _fix() == {"status": "nofix", "reason": "nothing to commit (patch was a no-op)"}
+
+
+def test_fix_retry_push_runs_in_the_workdir(monkeypatch):
+    pushes = iter([1, 0])
+    rig = FixRig(monkeypatch, rc={"push -q": lambda: next(pushes)})
+    _fix()
+    workdir = rig.calls[0]["cwd"]
+    assert [p["cwd"] for p in rig.cmds("push")] == [workdir, workdir]
+
+
+def test_fix_depth_starts_at_zero(monkeypatch):
+    FixRig(monkeypatch)
+    out = _fix(make_config(fix={"enabled": True, "max_fix_depth": 1}))
+    assert out["status"] == "pr_opened"
+
+
+def test_fix_block_carries_an_escalation_naming_the_reason(monkeypatch):
+    FixRig(monkeypatch)
+    out = _fix(make_config(fix={"enabled": False}))
+    assert out["reason"] == "fix lane disabled for this repo"
+    assert "Blocked: fix lane disabled for this repo" in out["escalation"]
+    assert "pkg/mod.py:3" in out["escalation"]
+
+
+# ---------------------------------------------------------------- process + API plumbing
+def test_run_is_text_captured_in_cwd_with_exact_env(tmp_path):
+    out = executor._run(["sh", "-c", 'printf "%s|" "$FOO"; pwd'], cwd=tmp_path,
+                        env={"FOO": "bar", "PATH": os.environ["PATH"]}, timeout=10)
+    assert out.returncode == 0 and out.stdout == f"bar|{tmp_path}\n" and out.stderr == ""
+
+
+def test_run_honours_its_timeout(tmp_path):
+    with pytest.raises(subprocess.TimeoutExpired):
+        executor._run(["sleep", "5"], timeout=0.2)
+
+
+def test_gh_api_sends_an_authenticated_json_request(monkeypatch):
+    import io
+    seen = {}
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(req, timeout=None):
+        seen.update(url=req.full_url, method=req.get_method(), data=req.data,
+                    auth=req.get_header("Authorization"),
+                    ctype=req.get_header("Content-type"), timeout=timeout)
+        return Resp(b'{"ok": 1}')
+    monkeypatch.setenv("CODESITTER_GITHUB_TOKEN", "t0k")
+    monkeypatch.setattr(executor.urllib.request, "urlopen", urlopen)
+    assert executor._gh_api("PUT", "/repos/o/r/x", {"a": 1}) == {"ok": 1}
+    assert seen == {"url": "https://api.github.com/repos/o/r/x", "method": "PUT",
+                    "data": b'{"a": 1}', "auth": "token t0k",
+                    "ctype": "application/json", "timeout": 30}
+    assert executor._gh_api("GET", "/x") == {"ok": 1}
+    assert seen["data"] is None and seen["method"] == "GET"
+
+
+def test_sandbox_env_reexposes_only_user_site_on_pythonpath(monkeypatch, tmp_path):
+    import site
+    usersite = tmp_path / "site"
+    usersite.mkdir()
+    monkeypatch.setattr(site, "getusersitepackages", lambda: str(usersite))
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    assert executor._sandbox_env_for("/h")["PYTHONPATH"] == str(usersite)
+    monkeypatch.setenv("PYTHONPATH", "/a")
+    assert executor._sandbox_env_for("/h")["PYTHONPATH"] == f"{usersite}{os.pathsep}/a"
+
+
+def test_sandbox_home_is_created_once_and_removed_at_exit(monkeypatch):
+    import atexit
+    registered = []
+    monkeypatch.setattr(executor, "_SANDBOX_HOME", None)
+    monkeypatch.setattr(atexit, "register", lambda *a: registered.append(a))
+    home = executor._sandbox_home()
+    try:
+        assert executor._sandbox_home() == home and Path(home).is_dir()
+        assert Path(home).name.startswith("fl4write-sandbox-home-")
+        assert registered == [(executor.shutil.rmtree, home, True)]
+    finally:
+        executor.shutil.rmtree(home, True)
+
+
+def test_verify_git_argv_is_exact(monkeypatch):
+    rig = VerifyRig(monkeypatch)
+    _verify()
+    assert [g["cmd"] for g in rig.git] == [
+        ["git", "init", "-q"],
+        ["git", "fetch", "-q", "--depth", "1", "https://github.com/KyaniteLabs/kinocut.git",
+         "c" * 40],
+        ["git", "checkout", "-q", "--detach", "FETCH_HEAD"],
+    ]
+
+
+def test_verify_isolation_unavailable_touches_nothing(monkeypatch):
+    rig = VerifyRig(monkeypatch)
+    monkeypatch.setattr(executor, "_test_isolation", lambda: ("unavailable", "x"))
+    assert _verify() is None and rig.git == [] and rig.evidence == []
