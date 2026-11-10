@@ -12,7 +12,7 @@ license-files = ["LICENSE"]
 dependencies = ["pydantic>=2.5", "pyyaml>=6", "pyjwt[crypto]>=2.8"]  # RSA signing is the primary App auth path
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.16.5"]
+dev = ["pytest>=8", "ruff>=0.16.5", "hypothesis>=6.100"]
 
 [tool.ruff]
 line-length = 120

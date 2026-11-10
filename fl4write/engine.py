@@ -262,7 +262,11 @@ def _review_pr(
     st.get("model_failures", {}).pop(f"{pr.number}:{pr.head_sha[:10]}", None)
 
     deterministic = [f for f in findings if f.category == "CI"]
-    findings = [f for f in findings if f.category != "CI"] + doc.findings
+    # deterministic implicit-state-machine smells, anchored to added lines
+    # (no model in the loop); they ride the gatekeeper like any other Minor
+    from . import state_smells
+    smells = state_smells.scan(diff_text, config.review)
+    findings = [f for f in findings if f.category != "CI"] + doc.findings + smells
     dropped_here = 0  # MECE round-4 (luna F4-006): per-PR count for the comment
     if findings and config.gatekeeper:
         findings, dropped, failed_open = gatekeeper.filter_findings(findings, config)
@@ -1477,7 +1481,7 @@ def _ci_watch_step(
     deadline: float | None = None,
 ) -> None:
     """CEO directive 2026-09-01: a red default-branch HEAD on an OWN repo
-    summons review + fix. SHA-keyed (state['ci_acted:{sha}']) — no timestamp
+    summons review + fix. SHA-keyed (sweep_lifecycle.CIHead) — no timestamp
     watermark, self-healing on the next commit, same law as the head-SHA
     predicate. Findings come from the failing checks' annotations (a
     deterministic signal — the model is never asked to invent them); the fix
