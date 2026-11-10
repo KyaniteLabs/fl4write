@@ -840,8 +840,6 @@ def analyze(
     # sweep: most Criticals were mention-noise).
     import re as _re2
 
-    _SECRET_PREFIX = ("ghp_", "gho_", "github_pat_", "sk-", "sk_", "AKIA",
-                      "xoxb-", "xoxp-", "glpat-", "AIza")
     import math as _math
 
     def _entropy(s: str) -> float:

@@ -151,3 +151,95 @@ def test_extract_json_accepts(content, key, expected):
 def test_extract_json_refuses(content, key, reason):
     with pytest.raises(ValueError, match=reason):
         analyzer.extract_json(content, key)
+
+
+# ---------------------------------------------------------------- analyze(): end-to-end gates
+_PR = PullRequest(forge="github", number=1, repo="o/r", head_sha="a" * 40)
+
+
+def _finding(severity, message, rule="loc-ceiling", path="x.py", **extra):
+    return {"rule_id": rule, "severity": severity, "path": path, "line": 1,
+            "category": "c", "message": message, **extra}
+
+
+@pytest.fixture
+def model(monkeypatch):
+    """Fake model: returns the given findings and records the prompt + mode."""
+    seen: dict = {}
+
+    def run(items, config=None, diff_text="diff content x.py", files=None, mode="pr"):
+        def fake(route, prompt, mode="pr", system=None, **kw):
+            seen.update(prompt=prompt, mode=mode)
+            return json.dumps({"findings": items})
+        monkeypatch.setattr("fl4write.analyzer._call_model", fake)
+        files = files or ({i["path"] for i in items} or {"x.py"})
+        return analyze(_PR, files, diff_text, config or make_config(), mode=mode)
+    run.seen = seen
+    return run
+
+
+def test_digest_counts_each_severity(model):
+    doc = model([_finding("Major", "a"), _finding("Major", "b"), _finding("Minor", "c")])
+    assert doc.digest == {"Major": 2, "Minor": 1, "_dropped_ungrounded": 0, "_diff_truncated": 0}
+
+
+def test_proposal_and_category_are_scrubbed_and_redacted(model):
+    item = _finding("Major", "x", proposal="set token=abcdefgh <!-- hide -->")
+    item["category"] = "<!--h-->cat"
+    f = model([item]).findings[0]
+    assert "abcdefgh" not in f.proposal and "<!--" not in f.proposal
+    assert f.category == "cat"
+
+
+def test_oversized_diff_is_truncated_not_replaced(model):
+    doc = model([_finding("Major", "m")], diff_text="HEADLINE\n" + "x" * 60_005)
+    assert "HEADLINE" in model.seen["prompt"]            # += not =
+    assert "[diff truncated" in model.seen["prompt"]
+    assert doc.digest["_diff_truncated"] == 1
+
+
+def test_diff_at_exactly_the_limit_is_not_truncated(model):
+    doc = model([_finding("Major", "m")], diff_text="H" + "x" * 59_999)  # 60_000 chars
+    assert "[diff truncated" not in model.seen["prompt"]
+    assert doc.digest["_diff_truncated"] == 0
+
+
+def test_mode_reaches_the_model_call(model):
+    model([_finding("Major", "m")], mode="file")
+    assert model.seen["mode"] == "file"
+
+
+@pytest.mark.parametrize("message,severity", [
+    # concrete-scenario markers keep Critical
+    ("the payload enables an exploit of the parser", "Critical"),
+    ("rce in handler", "Critical"),                       # acronym, whole word
+    ("this executes arbitrary shell input", "Critical"),
+    ("a destructive overwrite of user data", "Critical"),
+    # no positive marker: demoted to Major
+    ("the source of truth is unclear", "Major"),          # 'rce' inside 'source'
+    ("the branch is unexecuted dead code", "Major"),      # un- prefix
+    ("there is no exploit here but naming is inconsistent", "Major"),  # negated
+])
+def test_critical_needs_a_concrete_scenario(model, message, severity):
+    assert [f.severity for f in model([_finding("Critical", message)]).findings] == [severity]
+
+
+_SECRETS = make_config(review={"secrets": "no secrets"})
+
+
+def _diff_with(line):
+    return ("diff --git a/cfg.py b/cfg.py\n--- a/cfg.py\n+++ b/cfg.py\n"
+            f"@@ -0,0 +1,2 @@\n+{line}\n+x = 1\n")
+
+
+@pytest.mark.parametrize("source_line,message,severity", [
+    # literal in the diff + concrete wording: Critical
+    ("KEY = 'AKIAIOSFODNN7EXAMPLE'", "this leaks the AWS key", "Critical"),
+    ("PASSWORD = 'aaaa'", "this leaks the password", "Critical"),   # assignment, any case
+    # only a mention of a credential name: no literal anywhere -> Nit
+    ("# set the API_TOKEN env var", "hard-coded credential", "Nit"),
+])
+def test_secrets_critical_needs_a_literal_in_the_source(model, source_line, message, severity):
+    doc = model([_finding("Critical", message, rule="secrets", path="cfg.py")],
+                config=_SECRETS, diff_text=_diff_with(source_line), files={"cfg.py"})
+    assert [f.severity for f in doc.findings] == [severity]
