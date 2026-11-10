@@ -207,3 +207,107 @@ def test_capped_check_runs_never_merge(monkeypatch, merge_config):
     forge = FakeForge([[_pr()]], runs={"h" * 40: [GREEN * 100] * 25})
     assert _scan(monkeypatch, forge, merge_config) == []
     assert forge.puts == []
+
+
+# ---------------------------------------------------------------- pytest argv model
+_VA = executor._pytest_verify_argv
+_LONG_FLAGS = ["--verbose", "--quiet", "--exitfirst", "--lf", "--ff", "--collect-only",
+               "--no-header", "--disable-warnings", "--strict", "--strict-markers",
+               "--continue-on-collection-errors", "--no-summary", "--keep-duplicates",
+               "--no-cov", "--pdb", "--tb-native", "--pyargs"]
+_LONG_VALUE = ["-c", "-k", "-m", "-o", "-p", "-r", "-W", "--maxfail", "--tb", "--rootdir",
+               "--basetemp", "--deselect", "--ignore", "--ignore-glob", "--confcutdir",
+               "--override-ini", "--junitxml", "--junit-prefix", "--color", "--log-level",
+               "--timeout", "--durations", "--durations-min", "--cov", "--cov-report"]
+
+
+@pytest.mark.parametrize("flag", _LONG_FLAGS)
+def test_argv_every_modeled_long_flag_rides_through(flag):
+    assert _VA(["pytest", flag, "tests/"]) == ["pytest", flag]
+    assert _VA(["pytest", f"{flag}=x", "tests/"]) == ["pytest", f"{flag}=x"]
+
+
+@pytest.mark.parametrize("opt", _LONG_VALUE)
+def test_argv_every_modeled_value_option_keeps_its_value(opt):
+    # the value is consumed even when it looks like a path
+    assert _VA(["pytest", opt, "tests/v", "tests/"]) == ["pytest", opt, "tests/v"]
+    if opt.startswith("--"):
+        assert _VA(["pytest", f"{opt}=v"]) == ["pytest", f"{opt}=v"]
+        assert _VA(["pytest", opt]) is None             # value missing: fail closed
+
+
+@pytest.mark.parametrize("flag", list("qvxsl"))
+def test_argv_every_short_flag_alone_and_bundled(flag):
+    assert _VA(["pytest", f"-{flag}"]) == ["pytest", f"-{flag}"]
+    assert _VA(["pytest", f"-q{flag}"]) == ["pytest", f"-q{flag}"]
+
+
+@pytest.mark.parametrize("c", list("ckmoprW"))
+def test_argv_every_short_value_option_attached(c):
+    assert _VA(["pytest", f"-{c}expr", "tests/"]) == ["pytest", f"-{c}expr"]
+
+
+@pytest.mark.parametrize("parts", [
+    ["python", "-m", "unittest"],                 # no pytest at all
+    ["pytest", "-n", "auto"],                     # xdist: unmodeled short
+    ["pytest", "-qn"],                            # bundle with unmodeled letter
+    ["pytest", "-zz"],                            # unknown body
+    ["pytest", "--unknown=1"],                    # unknown attached long
+    ["pytest", "--unknown"],                      # unknown long
+    ["pytest", "-q", "-k"],                       # trailing short value missing
+])
+def test_argv_unmodeled_grammar_fails_closed(parts):
+    assert _VA(parts) is None
+
+
+def test_argv_prefix_kept_and_double_dash_ends_options():
+    assert _VA(["env", "X=1", "python", "-m", "pytest", "-q", "--", "-n", "tests/"]) == \
+        ["env", "X=1", "python", "-m", "pytest", "-q"]
+    assert _VA(["pytest"]) == ["pytest"]
+    assert _VA(["pytest", "a.py", "b.py", "-x"]) == ["pytest", "-x"]
+
+
+# ---------------------------------------------------------------- file fetch
+import base64 as _b64  # noqa: E402
+import urllib.error  # noqa: E402
+
+
+def _fetch(monkeypatch, reply, path="src/a b.py", ref="feat/x#1"):
+    seen = []
+
+    def api(method, p, data=None):
+        seen.append((method, p))
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    monkeypatch.setattr(executor, "_gh_api", api)
+    return executor._get_file_content("o/r", path, ref), seen
+
+
+def test_fetch_quotes_path_and_ref_into_one_get(monkeypatch):
+    body = {"encoding": "base64", "content": _b64.b64encode(b"x = 1\n").decode()}
+    out, seen = _fetch(monkeypatch, body)
+    assert out == "x = 1\n"
+    assert seen == [("GET", "/repos/o/r/contents/src%2Fa%20b.py?ref=feat%2Fx%231")]
+
+
+def test_fetch_accepts_line_wrapped_base64_and_utf8(monkeypatch):
+    enc = _b64.b64encode("café = 'ü'\n".encode("utf-8") * 20).decode()
+    wrapped = "\n".join(enc[i:i + 60] for i in range(0, len(enc), 60)) + "\n"
+    out, _ = _fetch(monkeypatch, {"encoding": "base64", "content": wrapped})
+    assert out == "café = 'ü'\n" * 20
+
+
+@pytest.mark.parametrize("reply", [
+    ["a", "dir", "listing"],                                        # directory match
+    {"encoding": "base64"},                                         # no content
+    {"encoding": "utf-8", "content": "eA=="},                       # wrong encoding
+    {"encoding": "base64", "content": _b64.b64encode(b"\xff\xfe").decode()},  # not utf-8
+    {"encoding": "base64", "content": 123},                         # wrong shape
+    urllib.error.URLError("down"),
+    ValueError("bad json"),
+])
+def test_fetch_never_returns_a_fabricated_premise(monkeypatch, reply):
+    out, _ = _fetch(monkeypatch, reply)
+    assert out is None
