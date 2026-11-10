@@ -868,8 +868,11 @@ def test_redact_credentials_plural_key_forms():
     assert "[redacted]" in out
     # singular-key context still survives (my_password)
     assert redact_credentials("my_password = abc") == "my_password = [redacted]"
-    # non-assignment Bearer context is NOT redacted (still a real case)
-    assert redact_credentials("Authorization: Bearer abc") == "Authorization: Bearer abc"
+    # an Authorization header value is a credential in any key casing. This
+    # pin used to expect the capital-A form left verbatim: that was the
+    # case-sensitive key match leaking (lowercase was already redacted).
+    assert redact_credentials("Authorization: Bearer abc") == "Authorization: [redacted]"
+    assert redact_credentials("authorization: Bearer abc") == "authorization: [redacted]"
 
 
 def test_redact_credentials_multiple_runs():
