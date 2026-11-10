@@ -3086,7 +3086,9 @@ class TestMECERound8SolB:
         # F8-006/F10-B001/E002: arity is modeled explicitly and anything
         # outside the model fails closed to UNVERIFIED (no hand table rot)
         assert "_pytest_verify_argv" in src and "_LONG_VALUE" in src
-        assert "setup/infrastructure failure" in src  # F8-008 infra class
+        # F8-008 infra class: install/chained/non-pytest runners never reach a
+        # run — they return UNVERIFIED before any Critical can be minted
+        assert "diff's own tests — UNVERIFIED (no run, no finding)" in src
         assert "_tag = _hl.blake2b" in src  # F8-003 branch identity
 
 
