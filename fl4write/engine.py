@@ -39,6 +39,8 @@ from .analyzer import MAX_FILE_BYTES
 from .config import RepoConfig
 from .forges import ForgeAdapter, ForgeError, adapter_for
 from .models import Finding, PullRequest
+from .outcomes import (FIX_FAILURES, TERMINAL_STEPS, FixResume, FixStatus, ReviewMark,
+                       ReviewStep)
 from .state import CycleLock, CycleLockHeld
 
 log = logging.getLogger("fl4write.engine")
@@ -152,7 +154,7 @@ def _review_pr(
         # real findings — LEARNINGS #3) and DO NOT mark reviewed.
         report.skipped_diff_unavailable += 1
         report.alerts.append(f"diff unavailable for #{pr.number} — not reviewed, will retry")
-        return "diff-unavailable"
+        return ReviewStep.DIFF_UNAVAILABLE
     diff_files, diff_text = diff
     findings: list = []
 
@@ -179,14 +181,14 @@ def _review_pr(
             # deterministic finding posts on a later cycle with the model)
             if deadline is not None and (deadline - time.monotonic()) < REVIEW_BUDGET_S:
                 report.alerts.append(f"#{pr.number}: verify consumed the review budget — deferred")
-                return "deferred"
+                return ReviewStep.DEFERRED
         elif deadline is not None and (deadline - time.monotonic()) < REVIEW_BUDGET_S + 5:
             # MECE round-3 (glm F3-3): verify_tests can consume ~500s of a
             # ~90s review budget — defer the analyze rather than overrun the
             # whole cycle on one PR (the old comment claimed a later gate
             # that never existed)
             report.alerts.append(f"#{pr.number}: verify consumed the review budget — deferred")
-            return "deferred"
+            return ReviewStep.DEFERRED
 
     try:
         doc = analyze(pr, diff_files, diff_text, config)
@@ -214,7 +216,7 @@ def _review_pr(
                 report.alerts.append(
                     f"#{pr.number}: model unavailable — deterministic verify finding "
                     f"posted to the shadow sink (live retries under its own cap)")
-                return "model-unavailable"
+                return ReviewStep.MODEL_UNAVAILABLE
             # F11-C003 (reopened F6-C007): posting the deterministic finding
             # must NOT terminalize the SHA — the old mark_reviewed made
             # 'reviewed:1' and needs_review False, so the deferred model
@@ -229,30 +231,30 @@ def _review_pr(
                 f"#{pr.number}: model unavailable — deterministic verify finding posted "
                 f"(model analysis deferred; attempt {fails}/{MODEL_FAILURE_CAP} at this SHA)")
             if fails >= MODEL_FAILURE_CAP:
-                state.mark_reviewed(st, pr.number, pr.head_sha, "model-failed-cap")
+                state.mark_reviewed(st, pr.number, pr.head_sha, ReviewMark.MODEL_FAILED_CAP)
                 report.alerts.append(
                     f"#{pr.number}: model failed {fails}x at this SHA after the "
                     f"deterministic finding — needs human look")
-                return "model-failed-cap"
-            return "model-unavailable"
+                return ReviewStep.MODEL_FAILED_CAP
+            return ReviewStep.MODEL_UNAVAILABLE
         report.model_unavailable += 1
         # MECE round-6 (luna-max F6-C005): shadow runs must not consume the
         # LIVE model-failure counters or reach the live model-failed-cap — the
         # live cutover then never retries the SHA
         if config.shadow:
             log.warning("model unavailable for %s#%s (shadow): %s", config.repo, pr.number, exc)
-            return "model-unavailable"
+            return ReviewStep.MODEL_UNAVAILABLE
         key = f"{pr.number}:{pr.head_sha[:10]}"
         fails = int(st.get("model_failures", {}).get(key, 0)) + 1
         st.setdefault("model_failures", {})[key] = fails
         if fails >= MODEL_FAILURE_CAP:
             # Terminal: stop retrying this SHA (the alert asks for a human);
             # mark it so a re-listed PR is not re-modeled every sweep.
-            state.mark_reviewed(st, pr.number, pr.head_sha, "model-failed-cap")
+            state.mark_reviewed(st, pr.number, pr.head_sha, ReviewMark.MODEL_FAILED_CAP)
             report.alerts.append(f"#{pr.number}: model failed {fails}x at this SHA — needs human look")
-            return "model-failed-cap"
+            return ReviewStep.MODEL_FAILED_CAP
         log.warning("model unavailable for %s#%s: %s", config.repo, pr.number, exc)
-        return "model-unavailable"
+        return ReviewStep.MODEL_UNAVAILABLE
     st.get("model_failures", {}).pop(f"{pr.number}:{pr.head_sha[:10]}", None)
 
     deterministic = [f for f in findings if f.category == "CI"]
@@ -286,8 +288,9 @@ def _review_pr(
         primary.update_comment(config.repo, pr.number, existing[0], body)
     else:
         primary.create_comment(config.repo, pr.number, body)
-    outcome = f"shadow:{len(findings)}" if config.shadow else f"reviewed:{len(findings)}"
-    state.mark_reviewed(st, pr.number, pr.head_sha, outcome)
+    state.mark_reviewed(st, pr.number, pr.head_sha,
+                        ReviewMark.SHADOW if config.shadow else ReviewMark.REVIEWED,
+                        len(findings))
     report.reviewed += 1
 
     # finding-level severity into telemetry (the gap: the quality loop
@@ -326,9 +329,23 @@ def _review_pr(
             _fix_lane(pr, findings_for_fix, config, primary, st, report,
                       post_merge=post_merge, deadline=deadline)
             if st["prs"][str(pr.number)].get("pending_fixes"):
-                return "fix-deferred"
+                return ReviewStep.FIX_DEFERRED
 
-    return "shadow" if config.shadow else "reviewed"
+    return ReviewStep.SHADOW if config.shadow else ReviewStep.REVIEWED
+
+
+def _fix_status(result: object) -> FixStatus | None:
+    """The executor's terminal fix outcome, or None for a malformed result
+    (an attempt_fix that returned something outside the FixStatus set)."""
+    try:
+        return FixStatus(result.get("status") if isinstance(result, dict) else None)
+    except ValueError:
+        return None
+
+
+def _raw_status(result: object) -> object:
+    """What a malformed fix result carried, for the unknown-status note."""
+    return result.get("status") if isinstance(result, dict) else result
 
 
 def _fix_lane(
@@ -369,21 +386,25 @@ def _fix_lane(
         pr_state["pending_fixes"].pop(0)
         report.fix_attempts += 1
         result = executor.attempt_fix(pr, f, config)
-        status = result.get("status")
-        if status == "pr_opened":
+        status = _fix_status(result)
+        if status is FixStatus.PR_OPENED:
             report.fix_prs_opened += 1
             pr_state["fix_depth"] = depth + 1
-        elif status in ("error", "testfail", "nofix"):
+        elif status in FIX_FAILURES:
             # enumerated failure classes (the Architect's V2): every outcome
             # is COUNTED; the summarizing alert fires once at cycle end
             report.fix_failures += 1
-            report._fix_failure_notes.append(f"#{pr.number} {status}: {str(result.get('reason'))[:80]}")
-        elif status == "blocked":
+            report._fix_failure_notes.append(
+                f"#{pr.number} {status.value}: {str(result.get('reason'))[:80]}")
+        elif status is FixStatus.BLOCKED:
             report.fix_escalations += 1
+        elif status is FixStatus.SKIPPED:
+            # policy skip (dependency PR): not a failure, but never silent
+            report._fix_failure_notes.append(f"#{pr.number} skipped: {result.get('reason')}")
         else:
-            # Sol audit: unknown statuses had no denominator — count + surface
+            # Sol audit: malformed results had no denominator — count + surface
             report.fix_failures += 1
-            report._fix_failure_notes.append(f"#{pr.number} unknown-status {status!r}")
+            report._fix_failure_notes.append(f"#{pr.number} unknown-status {_raw_status(result)!r}")
     pr_state.pop("pending_fixes", None)
     pr_state.pop("pending_fix_sha", None)
 
@@ -396,12 +417,12 @@ def _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline, *, po
     the Forgejo cutover shape), "dropped" when a stale/malformed record was
     cleared, and "attempted" when the lane actually executed for this PR."""
     if not (run_fixes and config.fix.enabled and not config.shadow and primary.name == "github"):
-        return "gated-off"
+        return FixResume.GATED_OFF
     rec = st["prs"].get(str(pr.number), {})
     if rec.get("pending_fix_sha") != pr.head_sha:
         rec.pop("pending_fixes", None)
         rec.pop("pending_fix_sha", None)
-        return "dropped"
+        return FixResume.DROPPED
     from pydantic import ValidationError
     try:
         rows = rec.get("pending_fixes", [])
@@ -412,13 +433,13 @@ def _resume_fix_lane(pr, config, primary, st, report, run_fixes, deadline, *, po
         rec.pop("pending_fixes", None)
         rec.pop("pending_fix_sha", None)
         report.alerts.append(f"#{pr.number}: malformed pending fixes dropped")
-        return "dropped"
+        return FixResume.DROPPED
     try:
         _fix_lane(pr, findings, config, primary, st, report,
                   post_merge=post_merge, deadline=deadline)
     except ForgeError as exc:
         report.alerts.append(f"#{pr.number}: deferred fix forge error contained: {exc}")
-    return "attempted"
+    return FixResume.ATTEMPTED
 
 
 def _poll_fix_merges(config: RepoConfig, primary: ForgeAdapter, report: CycleReport) -> None:
@@ -530,19 +551,19 @@ def _post_merge_sweep(
                 # could miss a shadow-processed PR entirely
                 pm_shadow[str(pr.number)] = pr.head_sha + ":dep"
                 continue
-            state.mark_reviewed(st, pr.number, pr.head_sha, "dependency-skip")
+            state.mark_reviewed(st, pr.number, pr.head_sha, ReviewMark.DEPENDENCY_SKIP)
             terminal += 1
             continue
         if not state.needs_review(st, pr.number, pr.head_sha):
             report.already_done += 1  # poll-invariant no-op: counted, never silent
-            resume = _resume_fix_lane(pr, config, primary, st, report, run_fixes,
-                                      deadline, post_merge=True)
+            resume = FixResume(_resume_fix_lane(pr, config, primary, st, report, run_fixes,
+                                                deadline, post_merge=True))
             state.save_state(state_path, st)
             if st["prs"][str(pr.number)].get("pending_fixes"):
                 if config.shadow:
                     # shadow touches no live belts — skip without mutation
                     continue
-                if resume == "gated-off":
+                if resume is FixResume.GATED_OFF:
                     # PM 2026-09-16 (adversarial finding A1): a structurally
                     # off fix lane (Forgejo cutover, fixes disabled, shadow)
                     # used to wedge the merged sweep on this PR forever —
@@ -576,26 +597,26 @@ def _post_merge_sweep(
             )
             break  # watermark stops BEFORE this unprocessed PR
         try:
-            outcome = _review_pr(
+            outcome = ReviewStep(_review_pr(
                 pr, config, primary, get_diff, shadow_sink, st, report, run_fixes,
                 post_merge=True, deadline=deadline,
-            )
+            ))
         except ForgeError as exc:
             report.alerts.append(f"#{pr.number}: forge error contained: {exc}")
             break  # do not advance the watermark past unprocessed PRs
         state.save_state(state_path, st)  # checkpoint after each merged PR
         reviewed_budget += 1
-        if outcome == "shadow":
+        if outcome is ReviewStep.SHADOW:
             pm_shadow[str(pr.number)] = pr.head_sha
             report.postmerge_reviewed += 1
             continue  # NOT terminal — the live cutover re-reviews and posts
-        if outcome == "fix-deferred":
+        if outcome is ReviewStep.FIX_DEFERRED:
             report.postmerge_reviewed += 1
             if not config.shadow:  # A2 (2026-09-16): shadow never owns the live watermark
                 st.setdefault("merged_since", since)
             break
-        if outcome in ("reviewed", "model-failed-cap"):
-            if outcome == "reviewed":
+        if outcome in TERMINAL_STEPS:
+            if outcome is ReviewStep.REVIEWED:
                 report.postmerge_reviewed += 1
             terminal += 1
         else:
@@ -764,22 +785,26 @@ def _omni_fix_phase(
             category="omnisweep", message=f["msg"],
         )
         result = executor.attempt_fix(synth, finding, config)
-        status = result.get("status")
-        if status == "error":
+        status = _fix_status(result)
+        if status is FixStatus.ERROR:
             # MECE round-6 (M3 stream candidate, desk-verified): a transient
             # error (network/model) marked the finding attempted BEFORE the
             # call, so it was never retried on a later cycle — un-mark it:
             # terminal outcomes (pr_opened/testfail/nofix) stay attempted,
             # transient errors retry (per-cycle cap still bounds the burn)
             f["fix_attempted"] = False
-        if status == "pr_opened":
+        if status is FixStatus.PR_OPENED:
             report.fix_prs_opened += 1
-        elif status in ("error", "testfail", "nofix"):
+        elif status is not None:
+            # failures, rail blocks and policy skips: the finding did not get
+            # its fix, so each is counted under its real name
             report.fix_failures += 1
-            report._fix_failure_notes.append(f"omni {f['path']}:{f['line']} {status}: {str(result.get('reason'))[:60]}")
+            report._fix_failure_notes.append(
+                f"omni {f['path']}:{f['line']} {status.value}: {str(result.get('reason'))[:60]}")
         else:
             report.fix_failures += 1
-            report._fix_failure_notes.append(f"omni {f['path']}:{f['line']} unknown-status {status!r}")
+            report._fix_failure_notes.append(
+                f"omni {f['path']}:{f['line']} unknown-status {_raw_status(result)!r}")
 
 
 def _omni_completed_actions(config, primary, st, report, *, allow_fixes=True):
@@ -1376,9 +1401,9 @@ def _retro_sweep(
                 oldest_processed = pr.merged_at
             continue  # already reviewed at this SHA while it was open — nothing to catch
         try:
-            outcome = _retro_review_pr(
+            outcome = ReviewStep(_retro_review_pr(
                 pr, config, primary, get_diff, shadow_sink, st, report,
-            )
+            ))
         except ForgeError as exc:
             # MECE round-3 (glm F3-1): per-PR containment like post-merge —
             # a forge hiccup defers THIS PR, never crashes the cycle
@@ -1388,12 +1413,12 @@ def _retro_sweep(
                 st["retro_seen"] = {int(n): True for n in seen}
             state.save_state(state_path, st)
             break
-        if outcome == "shadow":
+        if outcome is ReviewStep.SHADOW:
             shadow_belt[str(pr.number)] = pr.head_sha
             if not config.shadow:
                 oldest_processed = pr.merged_at
             continue
-        if outcome == "deferred":
+        if outcome is ReviewStep.DEFERRED:
             seen.discard(pr.number)  # retry next cycle
             if not config.shadow:
                 st["retro_seen"] = {n: True for n in seen}
@@ -1467,14 +1492,14 @@ def _retro_review_pr(
     diff = get_diff(pr)
     if diff is None:
         report.skipped_diff_unavailable += 1
-        return "deferred"
+        return ReviewStep.DEFERRED
     diff_files, diff_text = diff
 
     try:
         doc = analyze(pr, diff_files, diff_text, config)
     except ModelUnavailable:
         report.model_unavailable += 1
-        return "deferred"  # retro never caps: the cursor already passed it; retry is free
+        return ReviewStep.DEFERRED  # retro never caps: the cursor already passed it; retry is free
 
     findings = doc.findings
     dropped_here = 0  # MECE round-4 (luna F4-006): per-PR count for the comment
@@ -1496,8 +1521,8 @@ def _retro_review_pr(
     if not findings and not _has_prior_findings(primary, config, pr.number):
         # all-zombie or clean: post NOTHING on the old PR (zero-noise law);
         # the state record is the audit trail.
-        state.mark_reviewed(st, pr.number, pr.head_sha, "retro:0")
-        return "reviewed"
+        state.mark_reviewed(st, pr.number, pr.head_sha, ReviewMark.RETRO, 0)
+        return ReviewStep.REVIEWED
 
     rh = f"{pr.head_sha[:12]}{len(findings):04x}"
     previous: list[Finding] = []
@@ -1513,16 +1538,16 @@ def _retro_review_pr(
         if shadow_sink:
             shadow_sink(config.repo, pr.number, body)
         report.shadow_only = True
-        state.mark_reviewed(st, pr.number, pr.head_sha, f"shadow:{len(findings)}")
+        state.mark_reviewed(st, pr.number, pr.head_sha, ReviewMark.SHADOW, len(findings))
         report.retro_reviewed += 1
-        return "shadow"
+        return ReviewStep.SHADOW
     if existing:
         primary.update_comment(config.repo, pr.number, existing[0], body)
     else:
         primary.create_comment(config.repo, pr.number, body)
-    state.mark_reviewed(st, pr.number, pr.head_sha, f"retro:{len(findings)}")
+    state.mark_reviewed(st, pr.number, pr.head_sha, ReviewMark.RETRO, len(findings))
     report.retro_reviewed += 1
-    return "reviewed"
+    return ReviewStep.REVIEWED
 
 
 def _has_prior_findings(primary: ForgeAdapter, config: RepoConfig, number: int) -> bool:
@@ -1693,14 +1718,24 @@ def _ci_watch_step(
                 continue
             report.fix_attempts += 1
             result = executor.attempt_fix(synth, f, config)
-            status = result.get("status")
-            if status == "pr_opened":
+            status = _fix_status(result)
+            if status is FixStatus.PR_OPENED:
                 report.ci_fix_prs_opened += 1
-            elif status in ("error", "testfail", "nofix"):
+            elif status in FIX_FAILURES:
                 report.fix_failures += 1
-                report._fix_failure_notes.append(f"ci@{head[:8]} {status}: {str(result.get('reason'))[:80]}")
-                if status == "error":
+                report._fix_failure_notes.append(
+                    f"ci@{head[:8]} {status.value}: {str(result.get('reason'))[:80]}")
+                if status is FixStatus.ERROR:
                     break  # environmental failure: stop burning attempts this cycle
+            elif status in (FixStatus.BLOCKED, FixStatus.SKIPPED):
+                # a rail or policy refused this red-head fix: the issue
+                # escalation below is the human surface, but it is noted
+                report._fix_failure_notes.append(
+                    f"ci@{head[:8]} {status.value}: {str(result.get('reason'))[:80]}")
+            else:
+                report.fix_failures += 1
+                report._fix_failure_notes.append(
+                    f"ci@{head[:8]} unknown-status {_raw_status(result)!r}")
         opened = report.ci_fix_prs_opened
     else:
         opened = 0
@@ -1826,7 +1861,7 @@ def run_cycle(
                         # live reviewed marker — a later LIVE run must still
                         # see this PR as unreviewed
                         continue
-                    state.mark_reviewed(st, pr.number, pr.head_sha, "dependency-skip")
+                    state.mark_reviewed(st, pr.number, pr.head_sha, ReviewMark.DEPENDENCY_SKIP)
                     continue
                 if not state.needs_review(st, pr.number, pr.head_sha):
                     report.already_done += 1  # poll-invariant no-op: counted, never silent

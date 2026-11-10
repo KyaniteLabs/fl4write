@@ -24,7 +24,10 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .outcomes import ReviewMark
 
 log = logging.getLogger("fl4write.state")
 
@@ -380,15 +383,22 @@ def needs_review(state: dict[str, Any], pr_number: int, head_sha: str) -> bool:
     """The poll-invariant predicate: re-review iff SHA diverges, is unknown,
     or the only prior outcome was SHADOW (shadow reviews never count as
     reviewed — the dogfood cutover must post, not no-op)."""
+    from .outcomes import mark_is_shadow
+
     rec = state["prs"].get(str(pr_number), {})
     if rec.get("last_reviewed_sha") != head_sha:
         return True
-    return str(rec.get("last_outcome", "")).startswith("shadow")
+    return mark_is_shadow(rec.get("last_outcome"))
 
 
-def mark_reviewed(state: dict[str, Any], pr_number: int, head_sha: str, outcome: str) -> None:
+def mark_reviewed(state: dict[str, Any], pr_number: int, head_sha: str,
+                  kind: "ReviewMark", count: int | None = None) -> None:
     """MERGE into the record — replacing it wiped fix_depth and reset the
-    fix-loop cap on every push (audit finding A3)."""
+    fix-loop cap on every push (audit finding A3). The outcome is an explicit
+    ReviewMark (+ finding count for counted kinds); free text is refused."""
+    from .outcomes import format_mark
+
+    outcome = format_mark(kind, count)
     rec = state["prs"].setdefault(str(pr_number), {})
     rec["last_reviewed_sha"] = head_sha
     rec["last_outcome"] = outcome
