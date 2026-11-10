@@ -877,6 +877,7 @@ def analyze(
     # 'secrets-config' (legacy alias 'secrets' still honored)
     _SECRET_FAMILY = ("secrets", "secrets-config")
     diff_chunks = _diff_path_texts(diff_text or "")
+    verified_secrets: set[int] = set()  # findings whose credential the SOURCE proves
     for f in findings:
         if f.severity == "Critical" and f.rule_id in _SECRET_FAMILY:
             chunk = diff_chunks.get(f.path, "")
@@ -885,6 +886,8 @@ def analyze(
                 # the anchored source for credential evidence (message text is
                 # redacted pre-render, so it can never be the evidence)
                 chunk = diff_text or ""
+            if _has_credential(chunk):
+                verified_secrets.add(id(f))
             has_literal = _has_credential(chunk) or _has_credential(f.message)
             if not has_literal:
                 f.severity = "Nit"
@@ -899,7 +902,9 @@ def analyze(
                          "execut", "arbitrary", "rce", "ssrf", "privilege",
                          "denial", "remote", "overwrite", "destruct")
     for f in findings:
-        if f.severity == "Critical":
+        # a credential proven in the anchored source IS the concrete scenario:
+        # its severity must not hinge on the model's wording
+        if f.severity == "Critical" and id(f) not in verified_secrets:
             low = _normalize_negations(f.message.lower())
             # F9-A07/F10-A02: negated risk clauses ("no credible scenario ...",
             # "cannot crash") are refutations, not scenario evidence

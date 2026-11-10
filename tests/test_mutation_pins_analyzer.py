@@ -233,9 +233,11 @@ def _diff_with(line):
 
 
 @pytest.mark.parametrize("source_line,message,severity", [
-    # literal in the diff + concrete wording: Critical
+    # literal proven in the diff: Critical, whatever the model's wording
     ("KEY = 'AKIAIOSFODNN7EXAMPLE'", "this leaks the AWS key", "Critical"),
+    ("KEY = 'AKIAIOSFODNN7EXAMPLE'", "hard-coded credential", "Critical"),
     ("PASSWORD = 'aaaa'", "this leaks the password", "Critical"),   # assignment, any case
+    ("PASSWORD = 'aaaa'", "credential in config", "Critical"),
     # only a mention of a credential name: no literal anywhere -> Nit
     ("# set the API_TOKEN env var", "hard-coded credential", "Nit"),
 ])
