@@ -716,3 +716,68 @@ def test_log_row_redacts_before_truncating():
     out = forges._log_row("github", "bad row", {"t": "token=" + "A" * 40})
     assert out.startswith("github bad row: ") and "A" * 40 not in out
     assert len(out) <= len("github bad row: ") + 120
+
+
+# ---------------------------------------------------------------- round-3 gaps
+@pytest.mark.parametrize("code", [403, 429, 500, 502, 503, 504])
+def test_call_text_retries_every_throttle_code(monkeypatch, code):
+    net = Net(monkeypatch, [_http_error(code), b"ok"])
+    assert _fj()._call_text("GET", "/d") == "ok" and len(net.reqs) == 2
+
+
+@pytest.mark.parametrize("retry_after,wait", [
+    (None, 0.0), ("", 0.0), ("2.5", 2.5), ("30", 30.0), ("31", 30.0), ("-0.5", 1.0),
+    ("nan", 1.0), ("inf", 30.0), ("soon", 1.0)])
+def test_retry_wait_is_bounded(retry_after, wait):
+    assert forges._retry_wait(_http_error(503, retry_after)) == wait
+
+
+def test_retry_wait_without_headers_is_immediate():
+    assert forges._retry_wait(urllib.error.HTTPError("u", 503, "m", None, None)) == 0.0
+
+
+def test_own_comment_with_id_one_is_found(monkeypatch, adapter):
+    rows = [{"id": 1, "body": MARK + "a -->", "user": {"login": "fl4write[bot]"}}]
+    _route(monkeypatch, adapter, {("GET", "/repos/o/r/issues/4/comments"): lambda p: rows})
+    assert adapter.get_persistent_comment("o/r", 4) == (1, MARK + "a -->")
+
+
+def test_own_unmarked_comment_with_bad_id_is_skipped_not_raised(monkeypatch, adapter):
+    rows = [{"id": None, "body": "plain note", "user": {"login": "fl4write[bot]"}}]
+    _route(monkeypatch, adapter, {("GET", "/repos/o/r/issues/4/comments"): lambda p: rows})
+    assert adapter.get_persistent_comment("o/r", 4) is None
+
+
+def test_a_closed_unmerged_row_does_not_hide_later_merges(monkeypatch, adapter):
+    rows = [_merged(5, None), _merged(6, "not a time"),
+            _merged(1, "2026-01-02T00:00:00Z")]  # time-rot-safe: no clock involved
+    _route(monkeypatch, adapter, {("GET", "/repos/o/r/pulls?state=closed"): lambda p: rows})
+    assert [p.number for p in adapter.list_merged_prs("o/r", "")] == [1]
+
+
+def test_annotation_without_any_line_is_line_zero(monkeypatch, adapter):
+    _route(monkeypatch, adapter, {("GET", "/repos/o/r/check-runs/7/annotations"):
+                                  lambda p: [{"path": "a", "start_line": 0}]})
+    assert adapter.check_annotations("o/r", 7)[0]["start_line"] == 0
+
+
+def test_recursive_tree_odd_default_branch_falls_back_to_main(monkeypatch):
+    gh = _gh()
+    calls = _route(monkeypatch, gh, _tree_routes({"tree": []}, repo_info={"default_branch": ""}))
+    assert gh.list_tree_files("o/r") == ([], False)
+    assert calls.seen[1][1] == "/repos/o/r/commits/main"
+
+
+def test_forgejo_walk_keeps_zero_byte_files(monkeypatch):
+    trees = {"dev%2Fx": {"tree": [_b("empty", 0), _t("s", "S")]}, "S": {"tree": [_b("e2", 0)]}}
+    (files, truncated), _ = _walk(monkeypatch, trees)
+    assert sorted(files) == [("empty", 0), ("s/e2", 0)] and truncated is False
+
+
+def test_forgejo_walk_finished_subtree_is_not_a_cycle_later(monkeypatch):
+    # S is fully walked under b/ first, then reached again under a/s/; only an
+    # OPEN ancestor is a cycle, so the second visit must not mark truncated
+    trees = {"dev%2Fx": {"tree": [_t("a", "A"), _t("b", "S")]},
+             "A": {"tree": [_t("s", "S")]}, "S": {"tree": [_b("f")]}}
+    (files, truncated), _ = _walk(monkeypatch, trees)
+    assert sorted(files) == [("a/s/f", 1), ("b/f", 1)] and truncated is False

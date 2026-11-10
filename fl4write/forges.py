@@ -56,6 +56,23 @@ def _log_row(adapter_name, label, row) -> str:
     return f"{adapter_name} {label}: {_scrub.redact_credentials(str(row))[:120]}"
 
 
+_RETRYABLE_HTTP = (403, 429, 500, 502, 503, 504)
+
+
+def _retry_wait(exc: urllib.error.HTTPError) -> float:
+    """Seconds to wait before the single GET retry: Retry-After capped at
+    30s; absent means retry now. F6-307: a NaN, negative or non-numeric
+    Retry-After waits a bounded 1s, never time.sleep(raw) crashes or spins."""
+    raw = exc.headers.get("Retry-After") if exc.headers else None
+    if not raw:
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 1.0
+    return min(value, 30.0) if value >= 0 and value == value else 1.0
+
+
 def is_own_identity(author: str, bot_login: str) -> bool:
     """GitHub and Forgejo logins are case-insensitive: a mixed-case configured
     bot_login (PAT fallback on a personal account) must still recognize our
@@ -107,17 +124,8 @@ class ForgeAdapter:
                     # not leak JSONDecodeError past the boundaries
                     raise ForgeError(f"{self.name} {method} {path}: non-JSON response") from exc
         except urllib.error.HTTPError as exc:
-            if method == "GET" and _retry and exc.code in (403, 429, 500, 502, 503, 504):
-                wait = 0.0
-                if exc.headers and exc.headers.get("Retry-After"):
-                    try:
-                        _raw = float(exc.headers["Retry-After"])
-                    except ValueError:
-                        _raw = float("nan")
-                    # F6-307: NaN/negative Retry-After -> bounded 1s, never
-                    # time.sleep(raw) crashes or instant-spin
-                    wait = min(_raw, 30.0) if _raw >= 0 and _raw == _raw else 1.0
-                time.sleep(wait)
+            if method == "GET" and _retry and exc.code in _RETRYABLE_HTTP:
+                time.sleep(_retry_wait(exc))
                 return self._call(method, path, payload, _retry=False)
             raise ForgeError(f"{self.name} {method} {path}: HTTP {exc.code}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
@@ -147,16 +155,8 @@ class ForgeAdapter:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return resp.read().decode()
         except urllib.error.HTTPError as exc:
-            if method == "GET" and _retry and exc.code in (403, 429, 500, 502, 503, 504):
-                wait = 0.0
-                if exc.headers and exc.headers.get("Retry-After"):
-                    try:
-                        _raw = float(exc.headers["Retry-After"])
-                    except ValueError:
-                        _raw = float("nan")
-                    # F6-307: NaN/negative Retry-After -> bounded 1s
-                    wait = min(_raw, 30.0) if _raw >= 0 and _raw == _raw else 1.0
-                time.sleep(wait)
+            if method == "GET" and _retry and exc.code in _RETRYABLE_HTTP:
+                time.sleep(_retry_wait(exc))
                 return self._call_text(method, path, _retry=False)
             raise ForgeError(f"{self.name} {method} {path}: HTTP {exc.code}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
@@ -175,24 +175,24 @@ class ForgeAdapter:
     def list_open_prs(self, repo: str) -> list[PullRequest]:
         data = self._paginated(f"/repos/{repo}/pulls?state=open", page_size=50)
         prs = []
-        self._pr_rows_dropped = 0
+        dropped = 0
         for p in data:
             if not isinstance(p, dict):  # F7-D004/F10-D001: one bad row never
-                self._pr_rows_dropped += 1
+                dropped += 1
                 continue  # kills the page translation (log-loud below)
             pr = self._row_pr(repo, p)
             if pr is None:
                 log.warning(_log_row(self.name, "open-pr row malformed (skipped)", p))
-                self._pr_rows_dropped += 1
+                dropped += 1
                 continue
             prs.append(pr)
         # F14-D007: malformed rows were discarded — the enumeration is
         # INCOMPLETE; returning a filtered list as complete lets the engine
         # prune live state or advance watermarks past unseen rows
-        if getattr(self, "_pr_rows_dropped", 0):
+        if dropped:
             raise ForgeError(
                 f"{self.name} list_open_prs on {repo}: listing incomplete "
-                f"({self._pr_rows_dropped} malformed row(s) dropped)")
+                f"({dropped} malformed row(s) dropped)")
         return prs
 
     def list_merged_prs(self, repo: str, since_iso: str) -> list[PullRequest]:  # pragma: no cover - interface
@@ -493,14 +493,11 @@ class ForgeAdapter:
                 # matching — malformed forge content never escapes
                 log.warning(_log_row(self.name, "comment row malformed (skipped)", c))
                 continue
-            body = cbody
-            author = cuser.get("login").lower()
             # Marker substring alone is hijackable by any commenter (review
             # finding 2): require BOTH marker and our own authorship.
-            if any(prefix in body for prefix in renderer.LEGACY_MARKER_PREFIXES) and is_own_identity(
-                author, self.bot_login
-            ):
-                return cid, body
+            if any(prefix in cbody for prefix in renderer.LEGACY_MARKER_PREFIXES) \
+                    and is_own_identity(cuser["login"], self.bot_login):
+                return cid, cbody
         return None
 
     def _row_pr(self, repo: str, p: dict) -> PullRequest | None:
@@ -572,10 +569,10 @@ class GitHubAdapter(ForgeAdapter):
         )
         since = _parse_iso(since_iso)
         prs = []
-        self._pr_rows_dropped = 0
+        dropped = 0
         for p in data:
             if not isinstance(p, dict):  # F7-D004: row guard
-                self._pr_rows_dropped = getattr(self, "_pr_rows_dropped", 0) + 1
+                dropped += 1
                 continue
             merged_raw = p.get("merged_at")
             if not isinstance(merged_raw, str) or not merged_raw:
@@ -596,17 +593,17 @@ class GitHubAdapter(ForgeAdapter):
             pr = self._row_pr(repo, p)
             if pr is None:
                 log.warning(_log_row(self.name, "merged-pr row malformed (skipped)", p))
-                self._pr_rows_dropped += 1
+                dropped += 1
                 continue
             prs.append(pr)
         prs.sort(key=lambda pr: _parse_iso(pr.merged_at))  # oldest instant first
         # F14-D007: malformed rows were discarded — the enumeration is
         # INCOMPLETE; returning a filtered list as complete lets the engine
         # prune live state or advance watermarks past unseen rows
-        if getattr(self, "_pr_rows_dropped", 0):
+        if dropped:
             raise ForgeError(
                 f"{self.name} list_merged_prs on {repo}: listing incomplete "
-                f"({self._pr_rows_dropped} malformed row(s) dropped)")
+                f"({dropped} malformed row(s) dropped)")
         return prs
 
     def head_check_runs(self, repo: str) -> tuple[str, list[dict]] | None:
@@ -681,10 +678,10 @@ class ForgejoAdapter(ForgeAdapter):
         data = self._paginated(f"/repos/{repo}/pulls?state=closed", page_size=50)
         since = _parse_iso(since_iso)
         prs = []
-        self._pr_rows_dropped = 0
+        dropped = 0
         for p in data:
             if not isinstance(p, dict):  # F8-004: per-row guard like GitHub
-                self._pr_rows_dropped = getattr(self, "_pr_rows_dropped", 0) + 1
+                dropped += 1
                 continue
             merged_raw = p.get("merged_at")
             if (not isinstance(merged_raw, str) or not merged_raw
@@ -704,17 +701,17 @@ class ForgejoAdapter(ForgeAdapter):
             pr = self._row_pr(repo, p)
             if pr is None:
                 log.warning(_log_row(self.name, "merged-pr row malformed (skipped)", p))
-                self._pr_rows_dropped += 1
+                dropped += 1
                 continue
             prs.append(pr)
         prs.sort(key=lambda pr: _parse_iso(pr.merged_at))
         # F14-D007: malformed rows were discarded — the enumeration is
         # INCOMPLETE; returning a filtered list as complete lets the engine
         # prune live state or advance watermarks past unseen rows
-        if getattr(self, "_pr_rows_dropped", 0):
+        if dropped:
             raise ForgeError(
                 f"{self.name} list_merged_prs on {repo}: listing incomplete "
-                f"({self._pr_rows_dropped} malformed row(s) dropped)")
+                f"({dropped} malformed row(s) dropped)")
         return prs
 
     def head_check_runs(self, repo: str) -> tuple[str, list[dict]] | None:
