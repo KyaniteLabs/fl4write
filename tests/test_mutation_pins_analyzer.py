@@ -247,6 +247,59 @@ def test_secrets_critical_needs_a_literal_in_the_source(model, source_line, mess
     assert [f.severity for f in doc.findings] == [severity]
 
 
+
+# ---------------------------------------------------------------- verified secrets are gatekeeper-proof
+from fl4write.models import VERIFIED_SECRET_CATEGORY  # noqa: E402
+
+
+def test_only_a_source_proven_secret_gets_the_protected_category(model):
+    doc = model([_finding("Critical", "hard-coded credential", rule="secrets", path="cfg.py")],
+                config=_SECRETS, diff_text=_diff_with("KEY = 'AKIAIOSFODNN7EXAMPLE'"),
+                files={"cfg.py"})
+    assert [f.category for f in doc.findings] == [VERIFIED_SECRET_CATEGORY]
+    doc = model([_finding("Critical", "hard-coded credential", rule="secrets", path="cfg.py")],
+                config=_SECRETS, diff_text=_diff_with("# set the API_TOKEN env var"),
+                files={"cfg.py"})
+    assert [f.category for f in doc.findings] == ["c"]
+
+
+def test_a_model_cannot_forge_the_protected_category(model):
+    item = _finding("Major", "rename this", path="x.py")
+    item["category"] = VERIFIED_SECRET_CATEGORY
+    assert model([item]).findings[0].category == "General"
+
+
+def test_gatekeeper_neither_drops_nor_demotes_a_verified_secret(monkeypatch):
+    from fl4write import gatekeeper as gk
+    from fl4write.models import Finding
+
+    secret = Finding(rule_id="secrets", severity="Critical", path="cfg.py", line=1,
+                     category=VERIFIED_SECRET_CATEGORY, message="key")
+    nit = Finding(rule_id="style", severity="Major", path="a.py", line=2, message="n")
+    keep = Finding(rule_id="bug", severity="Major", path="b.py", line=3, message="b")
+    seen = []
+
+    def fake(route, prompt, system=None, **kw):
+        seen.append(prompt)
+        return json.dumps({"keep": [{"path": "b.py", "line": 3}], "demote": [
+            {"path": "cfg.py", "line": 1, "rule_id": "secrets", "severity": "Nit"}]})
+    monkeypatch.setattr(gk, "_call_model", fake)
+    kept, dropped, failed = gk.filter_findings([secret, nit, keep], make_config())
+    assert kept == [secret, keep] and secret.severity == "Critical"
+    assert (dropped, failed) == (1, False)
+    assert "cfg.py" not in seen[0]                     # the model never saw it
+
+
+def test_gatekeeper_with_only_verified_secrets_never_calls_the_model(monkeypatch):
+    from fl4write import gatekeeper as gk
+    from fl4write.models import Finding
+
+    secret = Finding(rule_id="secrets", severity="Critical", path="cfg.py", line=1,
+                     category=VERIFIED_SECRET_CATEGORY, message="key")
+    monkeypatch.setattr(gk, "_call_model", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
+    assert gk.filter_findings([secret], make_config()) == ([secret], 0, False)
+
+
 # ---------------------------------------------------------------- _call_model transport
 class _Resp:
     def __init__(self, body):

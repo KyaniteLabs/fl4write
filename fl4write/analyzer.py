@@ -35,7 +35,7 @@ import urllib.request
 
 from . import scrub
 from .config import ModelRoute, RepoConfig
-from .models import Finding, PullRequest, ReviewDoc
+from .models import VERIFIED_SECRET_CATEGORY, Finding, PullRequest, ReviewDoc
 
 log = logging.getLogger("fl4write.analyzer")
 
@@ -879,6 +879,11 @@ def analyze(
     diff_chunks = _diff_path_texts(diff_text or "")
     verified_secrets: set[int] = set()  # findings whose credential the SOURCE proves
     for f in findings:
+        # the protected category is the analyzer's to grant: a model that
+        # writes it itself must not shield a finding from the gatekeeper
+        if f.category == VERIFIED_SECRET_CATEGORY:
+            f.category = "General"
+    for f in findings:
         if f.severity == "Critical" and f.rule_id in _SECRET_FAMILY:
             chunk = diff_chunks.get(f.path, "")
             if mode == "file" and not chunk:
@@ -888,6 +893,7 @@ def analyze(
                 chunk = diff_text or ""
             if _has_credential(chunk):
                 verified_secrets.add(id(f))
+                f.category = VERIFIED_SECRET_CATEGORY
             has_literal = _has_credential(chunk) or _has_credential(f.message)
             if not has_literal:
                 f.severity = "Nit"
