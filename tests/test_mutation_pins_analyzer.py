@@ -245,3 +245,79 @@ def test_secrets_critical_needs_a_literal_in_the_source(model, source_line, mess
     doc = model([_finding("Critical", message, rule="secrets", path="cfg.py")],
                 config=_SECRETS, diff_text=_diff_with(source_line), files={"cfg.py"})
     assert [f.severity for f in doc.findings] == [severity]
+
+
+# ---------------------------------------------------------------- _call_model transport
+class _Resp:
+    def __init__(self, body):
+        self._body = json.dumps(body).encode()
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.fixture
+def http(monkeypatch):
+    """Fake urlopen: records the request and timeout, replies with `reply`."""
+    seen: dict = {"reply": {"choices": [{"message": {"content": "{}"}}]}}
+
+    def urlopen(req, timeout=None):
+        seen.update(req=req, timeout=timeout, body=json.loads(req.data))
+        return _Resp(seen["reply"])
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    monkeypatch.delenv("FL4WRITE_MODEL_PROXY_SOCKET", raising=False)
+    return seen
+
+
+def test_call_model_sends_key_json_post_with_a_finite_timeout(http, monkeypatch):
+    monkeypatch.setenv("MK", "sekrit")
+    route = make_config().model  # key_env="MK"
+    assert analyzer._call_model(route, "prompt") == "{}"
+    req = http["req"]
+    assert req.get_method() == "POST"
+    assert req.get_header("Authorization") == "Bearer sekrit"
+    assert req.get_header("Content-type") == "application/json"
+    assert isinstance(http["timeout"], (int, float)) and 0 < http["timeout"] <= 600
+
+
+def test_call_model_without_key_env_sends_no_authorization(http):
+    route = make_config(model={"endpoint": "http://127.0.0.1:9/v1", "model": "m", "key_env": ""}).model
+    analyzer._call_model(route, "prompt")
+    assert http["req"].get_header("Authorization") is None
+
+
+def test_call_model_refuses_a_missing_key(http, monkeypatch):
+    monkeypatch.delenv("MK", raising=False)
+    with pytest.raises(RuntimeError, match="MK"):
+        analyzer._call_model(make_config().model, "prompt")
+    assert "req" not in http  # nothing was sent
+
+
+def test_call_model_payload_carries_mode_prompt_and_explicit_system(http, monkeypatch):
+    monkeypatch.setenv("MK", "k")
+    route = make_config().model
+    analyzer._call_model(route, "the diff", mode="file")
+    system, user = http["body"]["messages"]
+    assert system == {"role": "system", "content": analyzer._system_prompt("file")}
+    assert user == {"role": "user", "content": "the diff"}
+    analyzer._call_model(route, "x", system="custom system")
+    assert http["body"]["messages"][0]["content"] == "custom system"
+
+
+@pytest.mark.parametrize("reply,reason", [
+    ({"choices": [{"message": {"content": ""}}]}, "empty content"),
+    ({"choices": [{"message": {"content": 42}}]}, "non-string"),
+    ({"choices": [{"message": {"content": "x"}, "finish_reason": "length"}]}, "truncated"),
+    ({"choices": []}, "empty content"),
+])
+def test_call_model_rejects_unusable_replies(http, monkeypatch, reply, reason):
+    monkeypatch.setenv("MK", "k")
+    http["reply"] = reply
+    with pytest.raises(RuntimeError, match=reason):
+        analyzer._call_model(make_config().model, "p")
