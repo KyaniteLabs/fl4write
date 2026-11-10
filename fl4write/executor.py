@@ -898,94 +898,62 @@ def verify_diff_tests(pr: PullRequest, config: RepoConfig, test_files: list[str]
         import time as _time
         _t0 = _time.time()
         from . import telemetry as _tel
-        if "pytest" in cmd and not chain:
-            # host-controlled evidence (UltraQA P4/Sol): junit is written only
-            # by a suite that genuinely completed; os._exit(0) at import can
-            # fake rc and text, never the junit artifact.
-            junit_dir = Path(tempfile.mkdtemp(prefix="fl4write-verify-junit-"))
-            junit = junit_dir / "results.xml"
-            try:
-                green, result = _pytest_evidence(argv, workdir, config.test_timeout, env, junit)
-                if not green:
-                    # F11-B005 (round 11, luna DOM-B, reopened F8-008): a
-                    # non-green junit run is a REAL test failure only when the
-                    # suite COMPLETED and wrote failures. Missing evidence with
-                    # a NONZERO exit (import/collection/env failures) and
-                    # errors-only junit are infrastructure trouble = UNVERIFIED,
-                    # never a deterministic Critical. A zero-exit with NO junit
-                    # stays the hostile killed-suite class (a finding).
-                    import xml.etree.ElementTree as _ET
-                    if not junit.exists() and result.returncode != 0:
-                        log.warning("verify_diff_tests: pytest exited %s with no "
-                                    "junit evidence — infra UNVERIFIED, no finding",
-                                    result.returncode)
-                        # F12-B012: infra paths emit their terminal outcome too
-                        _tel.emit("verify_tests", repo=pr.repo, head=pr.head_sha[:10],
-                                  cmd=cmd, files=test_files, ok=False, unverified=True,
-                                  latency_s=round(_time.time() - _t0, 1))
-                        return None
-                    if junit.exists():
-                        try:
-                            _root = _ET.parse(junit).getroot()
-                            _suites = [_root] if _root.tag == "testsuite" \
-                                else _root.findall("testsuite")
-                            _fails = sum(int(s.get("failures", "0") or 0) for s in _suites)
-                            _errs = sum(int(s.get("errors", "0") or 0) for s in _suites)
-                            if _fails == 0 and _errs > 0:
-                                log.warning("verify_diff_tests: junit shows errors-only "
-                                            "(%s) — infra UNVERIFIED, no finding", _errs)
-                                _tel.emit("verify_tests", repo=pr.repo,
-                                          head=pr.head_sha[:10], cmd=cmd,
-                                          files=test_files, ok=False, unverified=True,
-                                          latency_s=round(_time.time() - _t0, 1))
-                                return None
-                        except Exception as exc:  # noqa: BLE001
-                            log.warning("verify_diff_tests: junit unreadable (%s) — "
-                                        "infra UNVERIFIED, no finding", exc)
+        # Only pytest reaches here: non-pytest and chained test_cmds returned
+        # UNVERIFIED above, so junit evidence is the single path.
+        # host-controlled evidence (UltraQA P4/Sol): junit is written only
+        # by a suite that genuinely completed; os._exit(0) at import can
+        # fake rc and text, never the junit artifact.
+        junit_dir = Path(tempfile.mkdtemp(prefix="fl4write-verify-junit-"))
+        junit = junit_dir / "results.xml"
+        try:
+            green, result = _pytest_evidence(argv, workdir, config.test_timeout, env, junit)
+            if not green:
+                # F11-B005 (round 11, luna DOM-B, reopened F8-008): a
+                # non-green junit run is a REAL test failure only when the
+                # suite COMPLETED and wrote failures. Missing evidence with
+                # a NONZERO exit (import/collection/env failures) and
+                # errors-only junit are infrastructure trouble = UNVERIFIED,
+                # never a deterministic Critical. A zero-exit with NO junit
+                # stays the hostile killed-suite class (a finding).
+                import xml.etree.ElementTree as _ET
+                if not junit.exists() and result.returncode != 0:
+                    log.warning("verify_diff_tests: pytest exited %s with no "
+                                "junit evidence — infra UNVERIFIED, no finding",
+                                result.returncode)
+                    # F12-B012: infra paths emit their terminal outcome too
+                    _tel.emit("verify_tests", repo=pr.repo, head=pr.head_sha[:10],
+                              cmd=cmd, files=test_files, ok=False, unverified=True,
+                              latency_s=round(_time.time() - _t0, 1))
+                    return None
+                if junit.exists():
+                    try:
+                        _root = _ET.parse(junit).getroot()
+                        _suites = [_root] if _root.tag == "testsuite" \
+                            else _root.findall("testsuite")
+                        _fails = sum(int(s.get("failures", "0") or 0) for s in _suites)
+                        _errs = sum(int(s.get("errors", "0") or 0) for s in _suites)
+                        if _fails == 0 and _errs > 0:
+                            log.warning("verify_diff_tests: junit shows errors-only "
+                                        "(%s) — infra UNVERIFIED, no finding", _errs)
                             _tel.emit("verify_tests", repo=pr.repo,
                                       head=pr.head_sha[:10], cmd=cmd,
                                       files=test_files, ok=False, unverified=True,
                                       latency_s=round(_time.time() - _t0, 1))
                             return None
-            finally:
-                shutil.rmtree(junit_dir, ignore_errors=True)
-        else:
-            # chained or non-pytest runner: no host-controlled evidence yet —
-            # rc is the only signal; a zero-exit with NO output is treated as
-            # UNPROVEN (never a clean claim, never a false "did not run")
-            if iso_mode != "host":
-                # no isolated path for evidence-less runners: never run on the host
-                log.warning("verify_diff_tests: runner %r has no isolated path — UNVERIFIED", cmd)
-                return None
-            result = _run(argv, cwd=workdir, timeout=config.test_timeout, env=env)
-            green = result.returncode == 0
-            if green and not f"{result.stdout}\n{result.stderr}".strip():
-                green = False
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("verify_diff_tests: junit unreadable (%s) — "
+                                    "infra UNVERIFIED, no finding", exc)
+                        _tel.emit("verify_tests", repo=pr.repo,
+                                  head=pr.head_sha[:10], cmd=cmd,
+                                  files=test_files, ok=False, unverified=True,
+                                  latency_s=round(_time.time() - _t0, 1))
+                        return None
+        finally:
+            shutil.rmtree(junit_dir, ignore_errors=True)
         _tel.emit("verify_tests", repo=pr.repo, head=pr.head_sha[:10], cmd=cmd,
                   files=test_files, ok=green, latency_s=round(_time.time() - _t0, 1))
         if green:
             return None
-        if not green and "pytest" in cmd and not chain:
-            pass  # junit-gated pytest failures ARE test failures
-        elif not green:
-            # F8-008: distinguish setup/infrastructure failure (install,
-            # missing deps, env) from a COMPLETED failing test run — the
-            # DialectOS chain begins with 'corepack pnpm install', and an
-            # install error used to mint a deterministic Critical
-            text_all = f"{result.stdout}\n{result.stderr}"
-            setup_err = bool(re.search(
-                r"(npm|pnpm|corepack|yarn|pip|poetry|go (?:mod|build|install)|"
-                r"EACCES|ENOENT|Cannot find module|command not found|Install failed|"
-                r"Could not resolve|Network (?:error|timeout))",
-                text_all, re.IGNORECASE))
-            test_signal = bool(re.search(
-                r"(collected \d+|\d+ (?:passed|failed)|passed|FAILED|failed|"
-                r"All tests passed|Tests:|\bOK\b|not ok)",
-                text_all, re.IGNORECASE))
-            if setup_err and not test_signal:
-                log.warning("verify_diff_tests: setup/infrastructure failure \u2014 "
-                            "UNVERIFIED, no finding (rc=%s)", result.returncode)
-                return None
         tail = (result.stdout + "\n" + result.stderr).strip().splitlines()
         # Sol-B2: the verifier records the EXACT evidence it ran — command,
         # files, head SHA — so the claim is auditable, not asserted
