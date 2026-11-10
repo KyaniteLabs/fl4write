@@ -35,7 +35,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install deps and pinned mutmut
-        run: python3 -m pip install --no-cache-dir -e ".[dev]" mutmut==3.8.0
+        run: python3 -m pip install --no-cache-dir -e ".[dev]" mutmut==3.8.1
       - name: Mutation score of the gatekeeper (break below 94%)
         run: |
           mutmut run
