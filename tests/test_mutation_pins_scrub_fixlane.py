@@ -143,3 +143,16 @@ def test_merge_gate_refusal_names_the_wrong_author():
     config = make_config(fix={"enabled": True, "merge_own_prs": True})
     with pytest.raises(fixlane.FixLaneBlocked, match="mallory"):
         fixlane.merge_own_pr("mallory", "fl4write[bot]", True, config)
+
+
+@pytest.mark.parametrize("text,expected", [
+    # short prefix-marked tokens, under the 16-char run rule
+    ("use sk-abcd now", "use [redacted] now"),
+    ("ghp_ab12 here", "[redacted] here"),
+    ("AKIAABCD x", "[redacted] x"),
+    ("glpat-Ab9_ ok", "[redacted] ok"),
+    # a bare prefix with fewer than 4 trailing chars is documentation, not a key
+    ("the sk-ab prefix", "the sk-ab prefix"),
+])
+def test_redact_short_prefixed_tokens(text, expected):
+    assert scrub.redact_credentials(text) == expected
