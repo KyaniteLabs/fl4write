@@ -56,8 +56,31 @@ def _log_row(adapter_name, label, row) -> str:
     return f"{adapter_name} {label}: {_scrub.redact_credentials(str(row))[:120]}"
 
 
+_RETRYABLE_HTTP = (403, 429, 500, 502, 503, 504)
+
+
+def _retry_wait(exc: urllib.error.HTTPError) -> float:
+    """Seconds to wait before the single GET retry: Retry-After capped at
+    30s; absent means retry now. F6-307: a NaN, negative or non-numeric
+    Retry-After waits a bounded 1s, never time.sleep(raw) crashes or spins."""
+    raw = exc.headers.get("Retry-After") if exc.headers else None
+    if not raw:
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 1.0
+    return min(value, 30.0) if value >= 0 and value == value else 1.0
+
+
 def is_own_identity(author: str, bot_login: str) -> bool:
-    return author == bot_login or author in LEGACY_BOT_LOGINS
+    """GitHub and Forgejo logins are case-insensitive: a mixed-case configured
+    bot_login (PAT fallback on a personal account) must still recognize our
+    own comments, or the persistent comment is re-posted every cycle."""
+    if not isinstance(author, str) or not isinstance(bot_login, str):
+        return False
+    a = author.casefold()
+    return a == bot_login.casefold() or a in {b.casefold() for b in LEGACY_BOT_LOGINS}
 
 
 class ForgeError(RuntimeError):
@@ -67,6 +90,7 @@ class ForgeError(RuntimeError):
 class ForgeAdapter:
     name = "base"
     page_size_param = "per_page"  # Gitea/Forgejo uses `limit`
+    comment_page_size = 100  # Forgejo caps list pages at 50
 
     def __init__(self, binding: ForgeBinding) -> None:
         self.binding = binding
@@ -100,17 +124,8 @@ class ForgeAdapter:
                     # not leak JSONDecodeError past the boundaries
                     raise ForgeError(f"{self.name} {method} {path}: non-JSON response") from exc
         except urllib.error.HTTPError as exc:
-            if method == "GET" and _retry and exc.code in (403, 429, 500, 502, 503, 504):
-                wait = 0.0
-                if exc.headers and exc.headers.get("Retry-After"):
-                    try:
-                        _raw = float(exc.headers["Retry-After"])
-                    except ValueError:
-                        _raw = float("nan")
-                    # F6-307: NaN/negative Retry-After -> bounded 1s, never
-                    # time.sleep(raw) crashes or instant-spin
-                    wait = min(_raw, 30.0) if _raw >= 0 and _raw == _raw else 1.0
-                time.sleep(wait)
+            if method == "GET" and _retry and exc.code in _RETRYABLE_HTTP:
+                time.sleep(_retry_wait(exc))
                 return self._call(method, path, payload, _retry=False)
             raise ForgeError(f"{self.name} {method} {path}: HTTP {exc.code}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
@@ -140,16 +155,8 @@ class ForgeAdapter:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return resp.read().decode()
         except urllib.error.HTTPError as exc:
-            if method == "GET" and _retry and exc.code in (403, 429, 500, 502, 503, 504):
-                wait = 0.0
-                if exc.headers and exc.headers.get("Retry-After"):
-                    try:
-                        _raw = float(exc.headers["Retry-After"])
-                    except ValueError:
-                        _raw = float("nan")
-                    # F6-307: NaN/negative Retry-After -> bounded 1s
-                    wait = min(_raw, 30.0) if _raw >= 0 and _raw == _raw else 1.0
-                time.sleep(wait)
+            if method == "GET" and _retry and exc.code in _RETRYABLE_HTTP:
+                time.sleep(_retry_wait(exc))
                 return self._call_text(method, path, _retry=False)
             raise ForgeError(f"{self.name} {method} {path}: HTTP {exc.code}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
@@ -164,9 +171,29 @@ class ForgeAdapter:
                 return self._call_text(method, path, _retry=False)
             raise ForgeError(f"{self.name} {method} {path}: {exc}") from exc
 
-    # Subclass responsibilities -------------------------------------------
-    def list_open_prs(self, repo: str) -> list[PullRequest]:  # pragma: no cover - interface
-        raise NotImplementedError
+    # Shared listing + write surface (GitHub and Forgejo agree on these)
+    def list_open_prs(self, repo: str) -> list[PullRequest]:
+        data = self._paginated(f"/repos/{repo}/pulls?state=open", page_size=50)
+        prs = []
+        dropped = 0
+        for p in data:
+            if not isinstance(p, dict):  # F7-D004/F10-D001: one bad row never
+                dropped += 1
+                continue  # kills the page translation (log-loud below)
+            pr = self._row_pr(repo, p)
+            if pr is None:
+                log.warning(_log_row(self.name, "open-pr row malformed (skipped)", p))
+                dropped += 1
+                continue
+            prs.append(pr)
+        # F14-D007: malformed rows were discarded — the enumeration is
+        # INCOMPLETE; returning a filtered list as complete lets the engine
+        # prune live state or advance watermarks past unseen rows
+        if dropped:
+            raise ForgeError(
+                f"{self.name} list_open_prs on {repo}: listing incomplete "
+                f"({dropped} malformed row(s) dropped)")
+        return prs
 
     def list_merged_prs(self, repo: str, since_iso: str) -> list[PullRequest]:  # pragma: no cover - interface
         """PRs merged AFTER since_iso (exclusive), oldest first. The post-merge
@@ -316,13 +343,29 @@ class ForgeAdapter:
 
     # Omnisweep surface (issue-backed report + tree discovery). None/False
     # everywhere = degrade (findings live in state; the report retries).
-    def open_issue(self, repo: str, title: str, body: str) -> int | None:  # pragma: no cover - interface
+    def open_issue(self, repo: str, title: str, body: str) -> int | None:
         """Create an issue; return its number, or None when creation failed."""
-        raise NotImplementedError
+        try:
+            resp = self._call("POST", f"/repos/{repo}/issues", {"title": title, "body": body})
+        except ForgeError:
+            return None
+        # F7-D006: key presence is not a usable identifier — {'number': null}
+        # must read as an UNCERTAIN write (None -> caller retries), never a
+        # false success that later mints duplicate audit issues
+        if not isinstance(resp, dict):
+            return None
+        n = resp.get("number")
+        if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
+            return None  # F9-D004: True == 1 must never read as an issue id
+        return n
 
-    def update_issue(self, repo: str, number: int, body: str) -> bool:  # pragma: no cover - interface
+    def update_issue(self, repo: str, number: int, body: str) -> bool:
         """Edit an issue body in place (edit-in-place never re-notifies)."""
-        raise NotImplementedError
+        try:
+            self._call("PATCH", f"/repos/{repo}/issues/{number}", {"body": body})
+            return True
+        except ForgeError:
+            return False
 
     def list_tree_files(self, repo: str) -> tuple[list[tuple[str, int]], bool] | None:
         """([(path, size_bytes), ...], truncated) for the default-branch HEAD,
@@ -419,8 +462,43 @@ class ForgeAdapter:
         except (ValueError, UnicodeDecodeError, binascii.Error):
             return None
 
-    def get_persistent_comment(self, repo: str, number: int) -> tuple[int, str] | None:  # id, body  # pragma: no cover
-        raise NotImplementedError
+    def get_persistent_comment(self, repo: str, number: int) -> tuple[int, str] | None:
+        # max_pages=100: our persistent comment must stay findable even on
+        # pathological PRs (MECE round-4 M3 F4-D01: the 10-page default made
+        # it invisible past 1000 comments → duplicate post). Cost is zero on
+        # normal PRs — the loop stops at the first short page.
+        for c in self._paginated(
+            f"/repos/{repo}/issues/{number}/comments", page_size=self.comment_page_size, max_pages=100
+        ):
+            if not isinstance(c, dict):  # F6-312: row-shape guard
+                continue
+            cid = c.get("id")
+            cbody = c.get("body")
+            cuser = c.get("user")
+            # F14-D008: an OWN marked comment with an unusable id is
+            # UNCERTAIN, never absence — the engine used to create a duplicate
+            if isinstance(cbody, str) and isinstance(cuser, dict) \
+                    and isinstance(cuser.get("login"), str) \
+                    and any(prefix in cbody for prefix in renderer.LEGACY_MARKER_PREFIXES) \
+                    and is_own_identity(cuser.get("login"), self.bot_login) \
+                    and (isinstance(cid, bool) or not isinstance(cid, int) or cid <= 0):
+                raise ForgeError(
+                    f"{self.name} comment on {repo}#{number}: own marker with "
+                    "unusable id — refusing (at-most-once)")
+            if not isinstance(cid, int) or isinstance(cid, bool) or cid <= 0 \
+                    or not isinstance(cbody, str) \
+                    or not isinstance(cuser, dict) \
+                    or not isinstance(cuser.get("login"), str):
+                # F7-D005: rows need usable identity fields before marker
+                # matching — malformed forge content never escapes
+                log.warning(_log_row(self.name, "comment row malformed (skipped)", c))
+                continue
+            # Marker substring alone is hijackable by any commenter (review
+            # finding 2): require BOTH marker and our own authorship.
+            if any(prefix in cbody for prefix in renderer.LEGACY_MARKER_PREFIXES) \
+                    and is_own_identity(cuser["login"], self.bot_login):
+                return cid, cbody
+        return None
 
     def _row_pr(self, repo: str, p: dict) -> PullRequest | None:
         """ONE shared translation + guard for adapter PR rows (F10-D001/D002,
@@ -464,39 +542,22 @@ class ForgeAdapter:
             log.warning("%s PR row rejected (%s): %s", self.name, exc, _log_row(self.name, "", p))
             return None
 
-    def create_comment(self, repo: str, number: int, body: str) -> int:  # pragma: no cover
-        raise NotImplementedError
+    def create_comment(self, repo: str, number: int, body: str) -> int:
+        resp = self._call("POST", f"/repos/{repo}/issues/{number}/comments", {"body": body})
+        _cid = resp.get("id") if isinstance(resp, dict) else None
+        if not isinstance(_cid, int) or isinstance(_cid, bool) or _cid <= 0:
+            # F6-313/F9-D003: an absent/null/bool/zero id is an UNCERTAIN side
+            # effect — refuse (ForgeError defers the PR; at-most-once wins)
+            raise ForgeError(f"{self.name} POST comment {repo}#{number}: no usable id in response")
+        return _cid
 
-    def update_comment(self, repo: str, number: int, comment_id: int, body: str) -> None:  # pragma: no cover
-        raise NotImplementedError
+    def update_comment(self, repo: str, number: int, comment_id: int, body: str) -> None:
+        self._call("PATCH", f"/repos/{repo}/issues/comments/{comment_id}", {"body": body})
 
 
 class GitHubAdapter(ForgeAdapter):
     name = "github"
     supports_fork_ci_approval = True
-
-    def list_open_prs(self, repo: str) -> list[PullRequest]:
-        data = self._paginated(f"/repos/{repo}/pulls?state=open", page_size=50)
-        prs = []
-        self._pr_rows_dropped = 0
-        for p in data:
-            if not isinstance(p, dict):  # F7-D004/F10-D001: one bad row never
-                self._pr_rows_dropped += 1
-                continue  # kills the page translation (log-loud below)
-            pr = self._row_pr(repo, p)
-            if pr is None:
-                log.warning(_log_row(self.name, "open-pr row malformed (skipped)", p))
-                self._pr_rows_dropped += 1
-                continue
-            prs.append(pr)
-        # F14-D007: malformed rows were discarded — the enumeration is
-        # INCOMPLETE; returning a filtered list as complete lets the engine
-        # prune live state or advance watermarks past unseen rows
-        if getattr(self, "_pr_rows_dropped", 0):
-            raise ForgeError(
-                f"{self.name} list_open_prs on {repo}: listing incomplete "
-                f"({self._pr_rows_dropped} malformed row(s) dropped)")
-        return prs
 
     def list_merged_prs(self, repo: str, since_iso: str) -> list[PullRequest]:
         # state=closed includes unmerged (closed-without-merge) PRs: filter on
@@ -508,10 +569,10 @@ class GitHubAdapter(ForgeAdapter):
         )
         since = _parse_iso(since_iso)
         prs = []
-        self._pr_rows_dropped = 0
+        dropped = 0
         for p in data:
             if not isinstance(p, dict):  # F7-D004: row guard
-                self._pr_rows_dropped = getattr(self, "_pr_rows_dropped", 0) + 1
+                dropped += 1
                 continue
             merged_raw = p.get("merged_at")
             if not isinstance(merged_raw, str) or not merged_raw:
@@ -532,71 +593,18 @@ class GitHubAdapter(ForgeAdapter):
             pr = self._row_pr(repo, p)
             if pr is None:
                 log.warning(_log_row(self.name, "merged-pr row malformed (skipped)", p))
-                self._pr_rows_dropped += 1
+                dropped += 1
                 continue
             prs.append(pr)
         prs.sort(key=lambda pr: _parse_iso(pr.merged_at))  # oldest instant first
         # F14-D007: malformed rows were discarded — the enumeration is
         # INCOMPLETE; returning a filtered list as complete lets the engine
         # prune live state or advance watermarks past unseen rows
-        if getattr(self, "_pr_rows_dropped", 0):
+        if dropped:
             raise ForgeError(
                 f"{self.name} list_merged_prs on {repo}: listing incomplete "
-                f"({self._pr_rows_dropped} malformed row(s) dropped)")
+                f"({dropped} malformed row(s) dropped)")
         return prs
-
-    def get_persistent_comment(self, repo: str, number: int) -> tuple[int, str] | None:
-        # max_pages=100: our persistent comment must stay findable even on
-        # pathological PRs (MECE round-4 M3 F4-D01: the 10-page default made
-        # it invisible past 1000 comments → duplicate post). Cost is zero on
-        # normal PRs — the loop stops at the first short page.
-        for c in self._paginated(
-            f"/repos/{repo}/issues/{number}/comments", page_size=100, max_pages=100
-        ):
-            if not isinstance(c, dict):  # F6-312: row-shape guard
-                continue
-            cid = c.get("id")
-            cbody = c.get("body")
-            cuser = c.get("user")
-            # F14-D008: an OWN marked comment with an unusable id is
-            # UNCERTAIN, never absence — the engine used to create a duplicate
-            if isinstance(cbody, str) and isinstance(cuser, dict) \
-                    and isinstance(cuser.get("login"), str) \
-                    and any(prefix in cbody for prefix in renderer.LEGACY_MARKER_PREFIXES) \
-                    and is_own_identity(cuser.get("login"), self.bot_login) \
-                    and (isinstance(cid, bool) or not isinstance(cid, int) or cid <= 0):
-                raise ForgeError(
-                    f"{self.name} comment on {repo}#{number}: own marker with "
-                    "unusable id — refusing (at-most-once)")
-            if not isinstance(cid, int) or isinstance(cid, bool) or cid <= 0 \
-                    or not isinstance(cbody, str) \
-                    or not isinstance(cuser, dict) \
-                    or not isinstance(cuser.get("login"), str):
-                # F7-D005: rows need usable identity fields before marker
-                # matching — malformed forge content never escapes
-                log.warning(_log_row(self.name, "comment row malformed (skipped)", c))
-                continue
-            body = cbody
-            author = cuser.get("login").lower()
-            # Marker substring alone is hijackable by any commenter (review
-            # finding 2): require BOTH marker and our own authorship.
-            if any(prefix in body for prefix in renderer.LEGACY_MARKER_PREFIXES) and is_own_identity(
-                author, self.bot_login
-            ):
-                return cid, body
-        return None
-
-    def create_comment(self, repo: str, number: int, body: str) -> int:
-        resp = self._call("POST", f"/repos/{repo}/issues/{number}/comments", {"body": body})
-        _cid = resp.get("id") if isinstance(resp, dict) else None
-        if not isinstance(_cid, int) or isinstance(_cid, bool) or _cid <= 0:
-            # F6-313/F9-D003: an absent/null/bool/zero id is an UNCERTAIN side
-            # effect — refuse (ForgeError defers the PR; at-most-once wins)
-            raise ForgeError(f"{self.name} POST comment {repo}#{number}: no usable id in response")
-        return _cid
-
-    def update_comment(self, repo: str, number: int, comment_id: int, body: str) -> None:
-        self._call("PATCH", f"/repos/{repo}/issues/comments/{comment_id}", {"body": body})
 
     def head_check_runs(self, repo: str) -> tuple[str, list[dict]] | None:
         try:
@@ -652,28 +660,6 @@ class GitHubAdapter(ForgeAdapter):
         except ForgeError:
             return None
 
-    def open_issue(self, repo: str, title: str, body: str) -> int | None:
-        try:
-            resp = self._call("POST", f"/repos/{repo}/issues", {"title": title, "body": body})
-        except ForgeError:
-            return None
-        # F7-D006: key presence is not a usable identifier — {'number': null}
-        # must read as an UNCERTAIN write (None -> caller retries), never a
-        # false success that later mints duplicate audit issues
-        if not isinstance(resp, dict):
-            return None
-        n = resp.get("number")
-        if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
-            return None  # F9-D004: True == 1 must never read as an issue id
-        return n
-
-    def update_issue(self, repo: str, number: int, body: str) -> bool:
-        try:
-            self._call("PATCH", f"/repos/{repo}/issues/{number}", {"body": body})
-            return True
-        except ForgeError:
-            return False
-
 
 class ForgejoAdapter(ForgeAdapter):
     """Forgejo/Gitea share the v1 API shape; differences degrade to prose."""
@@ -684,29 +670,7 @@ class ForgejoAdapter(ForgeAdapter):
     # not `per_page` — the inherited value was silently ignored by the server,
     # capping every Forgejo list at the server default page size.
     page_size_param = "limit"
-
-    def list_open_prs(self, repo: str) -> list[PullRequest]:
-        data = self._paginated(f"/repos/{repo}/pulls?state=open", page_size=50)
-        prs = []
-        self._pr_rows_dropped = 0
-        for p in data:
-            if not isinstance(p, dict):  # F7-D004: row guard
-                self._pr_rows_dropped = getattr(self, "_pr_rows_dropped", 0) + 1
-                continue
-            pr = self._row_pr(repo, p)
-            if pr is None:
-                log.warning(_log_row(self.name, "open-pr row malformed (skipped)", p))
-                self._pr_rows_dropped += 1
-                continue
-            prs.append(pr)
-        # F14-D007: malformed rows were discarded — the enumeration is
-        # INCOMPLETE; returning a filtered list as complete lets the engine
-        # prune live state or advance watermarks past unseen rows
-        if getattr(self, "_pr_rows_dropped", 0):
-            raise ForgeError(
-                f"{self.name} list_open_prs on {repo}: listing incomplete "
-                f"({self._pr_rows_dropped} malformed row(s) dropped)")
-        return prs
+    comment_page_size = 50
 
     def list_merged_prs(self, repo: str, since_iso: str) -> list[PullRequest]:
         # Forgejo/Gitea: closed pulls carry `merged` + `merged_at`; same
@@ -714,10 +678,10 @@ class ForgejoAdapter(ForgeAdapter):
         data = self._paginated(f"/repos/{repo}/pulls?state=closed", page_size=50)
         since = _parse_iso(since_iso)
         prs = []
-        self._pr_rows_dropped = 0
+        dropped = 0
         for p in data:
             if not isinstance(p, dict):  # F8-004: per-row guard like GitHub
-                self._pr_rows_dropped = getattr(self, "_pr_rows_dropped", 0) + 1
+                dropped += 1
                 continue
             merged_raw = p.get("merged_at")
             if (not isinstance(merged_raw, str) or not merged_raw
@@ -737,66 +701,18 @@ class ForgejoAdapter(ForgeAdapter):
             pr = self._row_pr(repo, p)
             if pr is None:
                 log.warning(_log_row(self.name, "merged-pr row malformed (skipped)", p))
-                self._pr_rows_dropped += 1
+                dropped += 1
                 continue
             prs.append(pr)
         prs.sort(key=lambda pr: _parse_iso(pr.merged_at))
         # F14-D007: malformed rows were discarded — the enumeration is
         # INCOMPLETE; returning a filtered list as complete lets the engine
         # prune live state or advance watermarks past unseen rows
-        if getattr(self, "_pr_rows_dropped", 0):
+        if dropped:
             raise ForgeError(
                 f"{self.name} list_merged_prs on {repo}: listing incomplete "
-                f"({self._pr_rows_dropped} malformed row(s) dropped)")
+                f"({dropped} malformed row(s) dropped)")
         return prs
-
-    def get_persistent_comment(self, repo: str, number: int) -> tuple[int, str] | None:
-        # max_pages=100 (MECE round-4 M3 F4-D01): see GitHub variant — a
-        # persistent comment past page 10 must stay findable, never double-post
-        for c in self._paginated(
-            f"/repos/{repo}/issues/{number}/comments", page_size=50, max_pages=100
-        ):
-            if not isinstance(c, dict):  # F6-312: row-shape guard
-                continue
-            cid = c.get("id")
-            cbody = c.get("body")
-            cuser = c.get("user")
-            # F14-D008: an OWN marked comment with an unusable id is
-            # UNCERTAIN, never absence — the engine used to create a duplicate
-            if isinstance(cbody, str) and isinstance(cuser, dict) \
-                    and isinstance(cuser.get("login"), str) \
-                    and any(prefix in cbody for prefix in renderer.LEGACY_MARKER_PREFIXES) \
-                    and is_own_identity(cuser.get("login"), self.bot_login) \
-                    and (isinstance(cid, bool) or not isinstance(cid, int) or cid <= 0):
-                raise ForgeError(
-                    f"{self.name} comment on {repo}#{number}: own marker with "
-                    "unusable id — refusing (at-most-once)")
-            if not isinstance(cid, int) or isinstance(cid, bool) or cid <= 0 \
-                    or not isinstance(cbody, str) \
-                    or not isinstance(cuser, dict) \
-                    or not isinstance(cuser.get("login"), str):
-                # F7-D005: rows need usable identity fields before marker
-                # matching — malformed forge content never escapes
-                log.warning(_log_row(self.name, "comment row malformed (skipped)", c))
-                continue
-            body = cbody
-            author = cuser.get("login").lower()
-            if any(prefix in body for prefix in renderer.LEGACY_MARKER_PREFIXES) and is_own_identity(
-                author, self.bot_login
-            ):
-                return cid, body
-        return None
-
-    def create_comment(self, repo: str, number: int, body: str) -> int:
-        resp = self._call("POST", f"/repos/{repo}/issues/{number}/comments", {"body": body})
-        _cid = resp.get("id") if isinstance(resp, dict) else None
-        if not isinstance(_cid, int) or isinstance(_cid, bool) or _cid <= 0:
-            # F6-313/F9-D003: uncertain write — no usable id: degrade
-            raise ForgeError(f"{self.name} POST comment {repo}#{number}: no usable id in response")
-        return _cid
-
-    def update_comment(self, repo: str, number: int, comment_id: int, body: str) -> None:
-        self._call("PATCH", f"/repos/{repo}/issues/comments/{comment_id}", {"body": body})
 
     def head_check_runs(self, repo: str) -> tuple[str, list[dict]] | None:
         return None  # v1: check-runs (GHA) only; Forgejo commit statuses unsupported
@@ -949,28 +865,6 @@ class ForgejoAdapter(ForgeAdapter):
             return out, truncated
         except ForgeError:
             return None
-
-    def open_issue(self, repo: str, title: str, body: str) -> int | None:
-        try:
-            resp = self._call("POST", f"/repos/{repo}/issues", {"title": title, "body": body})
-        except ForgeError:
-            return None
-        # F7-D006: key presence is not a usable identifier — {'number': null}
-        # must read as an UNCERTAIN write (None -> caller retries), never a
-        # false success that later mints duplicate audit issues
-        if not isinstance(resp, dict):
-            return None
-        n = resp.get("number")
-        if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
-            return None  # F9-D004: True == 1 must never read as an issue id
-        return n
-
-    def update_issue(self, repo: str, number: int, body: str) -> bool:
-        try:
-            self._call("PATCH", f"/repos/{repo}/issues/{number}", {"body": body})
-            return True
-        except ForgeError:
-            return False
 
     def get_pr_diff(self, repo: str, number: int) -> tuple[set[str], str] | None:
         """(changed-file set, unified diff text) or None when unfetchable.

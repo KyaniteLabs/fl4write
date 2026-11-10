@@ -28,7 +28,7 @@ import logging
 
 from .analyzer import _call_model
 from .config import RepoConfig
-from .models import Finding
+from .models import VERIFIED_SECRET_CATEGORY, Finding
 
 log = logging.getLogger("fl4write.gatekeeper")
 
@@ -124,6 +124,16 @@ def filter_findings(findings: list[Finding], config: RepoConfig) -> tuple[list[F
     """
     if not findings:
         return findings, 0, False
+    # Owner decision (2026-11-10): a credential proven in the source is
+    # always Critical. The model filter never sees it, so it can neither
+    # drop nor demote it; it rides through in its original position.
+    protected = [f for f in findings if f.category == VERIFIED_SECRET_CATEGORY]
+    if protected:
+        rest = [f for f in findings if f.category != VERIFIED_SECRET_CATEGORY]
+        kept_rest, dropped, failed_open = filter_findings(rest, config) if rest \
+            else (rest, 0, False)
+        keep_ids = {id(f) for f in protected} | {id(f) for f in kept_rest}
+        return [f for f in findings if id(f) in keep_ids], dropped, failed_open
 
     # F12-A8: paths/messages are repo-controlled — every surface that leaves
     # the process (prompt, logs) is single-line scrubbed so a control-bearing

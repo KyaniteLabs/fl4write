@@ -15,6 +15,8 @@ call sites, not only in config:
 
 from __future__ import annotations
 
+import re
+
 from . import scrub
 from .config import RepoConfig
 from .forges import is_own_identity
@@ -49,9 +51,12 @@ def dependency_depth(pr: PullRequest, title: str, config: RepoConfig) -> str:
     title_l = title.lower()
     if config.fix.dependency_policy == "skip-all":
         return "skip"
-    if any(k in title_l for k in ("lockfile", "pin", "digest")):
+    # whole words only: substring matching skipped real bumps ("typing-
+    # extensions" contains "pin", "dispatcher" contains "patch") and missed
+    # Renovate's two-word "Lock file maintenance"
+    if re.search(r"\b(?:lock ?file|pin|pins|pinned|digest)\b", title_l):
         return "skip"
-    if config.fix.dependency_policy == "skip-patch" and "patch" in title_l:
+    if config.fix.dependency_policy == "skip-patch" and re.search(r"\bpatch\b", title_l):
         return "skip"
     return "shallow"
 
