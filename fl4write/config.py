@@ -15,7 +15,6 @@ import logging
 import re
 import types as _types
 import typing
-from typing import Iterator
 from pathlib import Path
 
 import yaml
@@ -477,26 +476,6 @@ def assert_credential_endpoints_trusted(config: RepoConfig, *, source: str) -> N
                 f"{name}.key_env {route.key_env!r} would send a host credential to "
                 f"untrusted endpoint {route.endpoint!r} (config: {source}); name that "
                 f"host in {TRUSTED_MODEL_ENDPOINTS_ENV} to authorize the destination")
-
-
-def _iter_model_fields(obj) -> Iterator[tuple[str, object]]:
-    """Yield (attribute-name, value) for bool-annotated fields of a pydantic
-    model, descending into nested models."""
-    import types as _types
-
-    for name, field in obj.model_fields.items():
-        ann = field.annotation
-        # unwrap Optional[bool]
-        origin = typing.get_origin(ann)
-        if origin is typing.Union or origin is _types.UnionType:
-            args = [a for a in typing.get_args(ann) if a is not type(None)]
-            ann = args[0] if len(args) == 1 and args[0] is bool else ann
-        if ann is bool:
-            yield name, getattr(obj, name)
-    for name, field in obj.model_fields.items():
-        val = getattr(obj, name)
-        if hasattr(val, "model_fields"):  # nested model
-            yield from _iter_model_fields(val)
 
 
 def _assert_strict_bools(raw: dict, model_cls) -> None:
