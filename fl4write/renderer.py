@@ -4,8 +4,9 @@ Persistent-comment law: ONE comment per PR, created once, then EDITED IN PLACE
 on every re-review (edit-in-place never re-notifies — Codecov's law). New
 findings get the 🆕 delta marker; findings present last cycle and gone now are
 listed under ✅ Resolved. Tone is a renderer-only preset: the analyzer is
-tone-blind; roast is internal-only and HARD-overridden for fork PRs and
-first-time contributors; security-urgency is always rendered regardless of tone.
+tone-blind; roast is internal-only and HARD-overridden for fork PRs (even a
+roast tone_fork_override renders balanced); security-urgency is always
+rendered regardless of tone.
 
 Design system v1: severity emoji badges, severity-count table header,
 collapsible fix proposals, visible branded footer, personality per tone.
@@ -63,8 +64,12 @@ _TONES = {
 
 
 def _tone_for(pr: PullRequest, config: RepoConfig) -> str:
+    """Forks render with tone_fork_override, but roast is a code rail, not a
+    config choice: an outside contributor is never roasted, whatever the
+    override says (README: forks are hard-overridden)."""
     if pr.is_fork:
-        return config.tone_fork_override
+        override = config.tone_fork_override
+        return "balanced" if override == "roast" else override
     return config.tone
 
 
