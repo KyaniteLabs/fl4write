@@ -692,3 +692,179 @@ def test_fix_isolation_unavailable_refuses_before_the_model(monkeypatch):
     monkeypatch.setattr(executor, "_test_isolation", lambda: ("unavailable", "no docker"))
     assert _fix() == {"status": "error", "reason": "test isolation unavailable: no docker"}
     assert rig.prompts == []
+
+
+# ---------------------------------------------------------------- _pytest_evidence
+from fl4write import exhaustive_sandbox as _sbx  # noqa: E402
+
+
+class EvidenceRun:
+    """Host-mode fake: records argv and writes the junit the 'suite' produced."""
+
+    def __init__(self, monkeypatch, junit, rc=0):
+        self.argv = None
+        self.kw = None
+        self.junit, self.rc = junit, rc
+        monkeypatch.setattr(executor, "_test_isolation", lambda: ("host", ""))
+        monkeypatch.setattr(executor, "_run", self)
+
+    def __call__(self, cmd, cwd=None, timeout=120, env=None):
+        self.argv, self.kw = cmd, {"cwd": cwd, "timeout": timeout, "env": env}
+        if self.junit is not None:
+            Path(cmd[cmd.index("--junitxml") + 1]).write_text(self.junit)
+        return subprocess.CompletedProcess(cmd, self.rc, "out", "err")
+
+
+def _evidence(tmp_path, argv=("pytest", "-q")):
+    return executor._pytest_evidence(list(argv), tmp_path, 33, {"HOME": "/h"},
+                                     tmp_path / "ev" / "results.xml")
+
+
+def test_evidence_strips_configured_junit_options_and_owns_the_path(monkeypatch, tmp_path):
+    (tmp_path / "ev").mkdir()
+    run = EvidenceRun(monkeypatch, '<testsuite tests="1"/>')
+    green, _ = _evidence(tmp_path, ["pytest", "--junitxml", "mine.xml", "-q",
+                                    "--junit-prefix", "p", "--junitxml=y.xml",
+                                    "--junit-prefix=q", "-x", "--", "t.py"])
+    assert green is True
+    assert run.argv == ["pytest", "-q", "-x", "--junitxml",
+                        str(tmp_path / "ev" / "results.xml"), "--", "t.py"]
+    assert run.kw == {"cwd": tmp_path, "timeout": 33, "env": {"HOME": "/h"}}
+
+
+@pytest.mark.parametrize("junit,green", [
+    ('<testsuite tests="2" failures="0" errors="0"/>', True),
+    ('<testsuites><testsuite tests="2"/><testsuite tests="1"/></testsuites>', True),
+    ('<testsuite tests="0"/>', False),                                   # nothing ran
+    ('<testsuite tests="2" failures="1"/>', False),                      # rc 0 but failures
+    ('<testsuite tests="2" errors="1"/>', False),                        # rc 0 but errors
+    ('<testsuites><testsuite tests="2"/><testsuite tests="1" failures="1"/></testsuites>',
+     False),                                                             # hidden in suite two
+    ('<testsuites><testsuite tests="2"/><testsuite tests="1" errors="1"/></testsuites>',
+     False),
+    ('<testsuites/>', False),                                            # no testsuite at all
+    ('<testsuite tests="" failures="" errors=""/>', False),              # blank counts
+    ("not xml", False),
+    (None, False),                                                       # exit 0, no junit
+])
+def test_evidence_exit_zero_is_green_only_with_complete_junit(monkeypatch, tmp_path,
+                                                              junit, green):
+    (tmp_path / "ev").mkdir()
+    EvidenceRun(monkeypatch, junit, rc=0)
+    assert _evidence(tmp_path)[0] is green
+
+
+def test_evidence_nonzero_exit_is_never_green(monkeypatch, tmp_path):
+    (tmp_path / "ev").mkdir()
+    EvidenceRun(monkeypatch, '<testsuite tests="2"/>', rc=1)
+    green, result = _evidence(tmp_path)
+    assert green is False and result.returncode == 1
+
+
+def test_evidence_refuses_when_isolation_is_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(executor, "_test_isolation", lambda: ("unavailable", "no runtime"))
+    green, result = _evidence(tmp_path)
+    assert green is False and result.returncode == 125 and result.stderr == "no runtime"
+
+
+def test_evidence_container_mode_hands_the_supervisor_a_placeholder(monkeypatch, tmp_path):
+    seen = {}
+
+    def run_isolated(argv, cwd, junit, timeout, image):
+        seen.update(argv=argv, cwd=cwd, junit=junit, timeout=timeout, image=image)
+        junit.parent.mkdir(parents=True, exist_ok=True)
+        junit.write_text('<testsuite tests="1"/>')
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(executor, "_test_isolation", lambda: ("container", "sha256:img"))
+    monkeypatch.setattr(_sbx, "run_isolated", run_isolated)
+    green, _ = _evidence(tmp_path, ["pytest", "--junitxml=evil", "-q", "--", "t.py"])
+    assert green is True
+    assert seen["argv"] == ["pytest", "-q", "--junitxml", "{junit}", "--", "t.py"]
+    assert (seen["cwd"], seen["timeout"], seen["image"]) == (tmp_path, 33, "sha256:img")
+    assert seen["junit"] == tmp_path / "ev" / "results.xml"
+
+
+def test_evidence_container_unavailable_drops_any_stale_junit(monkeypatch, tmp_path):
+    junit = tmp_path / "ev" / "results.xml"
+    junit.parent.mkdir()
+    junit.write_text('<testsuite tests="9"/>')                      # stale, must not count
+
+    def boom(*a, **k):
+        raise _sbx.SandboxUnavailable("docker gone")
+    monkeypatch.setattr(executor, "_test_isolation", lambda: ("container", "sha256:img"))
+    monkeypatch.setattr(_sbx, "run_isolated", boom)
+    green, result = _evidence(tmp_path)
+    assert green is False and not junit.exists()
+    assert (result.returncode, result.stdout, result.stderr) == (125, "", "docker gone")
+    assert result.args == ["pytest", "-q", "--junitxml", "{junit}"]
+
+
+def test_evidence_cleanup_pending_keeps_the_runs_own_verdict(monkeypatch, tmp_path):
+    def pending(argv, cwd, junit, timeout, image):
+        junit.parent.mkdir(parents=True, exist_ok=True)
+        junit.write_text('<testsuite tests="1"/>')
+        raise _sbx.SandboxCleanupPending("cleanup pending",
+                                         subprocess.CompletedProcess(argv, 0, "", ""))
+    monkeypatch.setattr(executor, "_test_isolation", lambda: ("container", "sha256:img"))
+    monkeypatch.setattr(_sbx, "run_isolated", pending)
+    assert _evidence(tmp_path)[0] is True
+
+
+# ---------------------------------------------------------------- _run_tests (fix gate)
+class GateRig:
+    def __init__(self, monkeypatch, green=True):
+        self.calls = []
+        self.green = green
+        monkeypatch.setattr(executor, "_pytest_evidence", self)
+
+    def __call__(self, argv, cwd, timeout, env, junit):
+        self.calls.append(dict(argv=argv, cwd=cwd, timeout=timeout, env=env, junit=junit))
+        assert Path(env["HOME"]).is_dir() and junit.name == "results.xml"
+        return self.green, None
+
+
+def test_fix_gate_default_cmd_comes_from_the_env_with_deselects(monkeypatch, tmp_path):
+    monkeypatch.delenv("CODESITTER_TEST_CMD", raising=False)
+    rig = GateRig(monkeypatch)
+    cfg = make_config(known_env_failures=["a::b", "c::d"], test_timeout=61)
+    assert executor._run_tests(tmp_path, cfg) is True
+    (c,) = rig.calls
+    assert c["argv"] == ["python3", "-m", "pytest", "tests/", "-x", "-q", "--tb=line",
+                         "--deselect", "a::b", "--deselect", "c::d"]
+    assert c["cwd"] == tmp_path and c["timeout"] == 61
+    assert c["env"]["HOME"] != os.path.expanduser("~")
+    assert not Path(c["env"]["HOME"]).exists() and not c["junit"].parent.exists()
+
+    monkeypatch.setenv("CODESITTER_TEST_CMD", "pytest -q 'my tests/'")
+    assert executor._run_tests(tmp_path, make_config()) is True
+    assert rig.calls[-1]["argv"] == ["pytest", "-q", "my tests/"]
+
+
+def test_fix_gate_red_evidence_is_red(monkeypatch, tmp_path):
+    GateRig(monkeypatch, green=False)
+    assert executor._run_tests(tmp_path, make_config(test_cmd="pytest")) is False
+
+
+@pytest.mark.parametrize("cmd", ["pytest && x", "pytest; x", "pytest | tee", "make test",
+                                 "pytest 'unclosed"])
+def test_fix_gate_fails_closed_without_running(monkeypatch, tmp_path, cmd):
+    rig = GateRig(monkeypatch)
+    assert executor._run_tests(tmp_path, make_config(test_cmd=cmd)) is False
+    assert rig.calls == []
+
+
+# ---------------------------------------------------------------- verify finding text
+def test_verify_finding_names_the_default_cmd_and_last_three_lines(monkeypatch):
+    VerifyRig(monkeypatch, stdout="l1\nl2\nl3\nl4\n" + "z" * 300)
+    f = _verify(files=())
+    assert f.path == "tests"
+    assert "cmd='python3 -m pytest'" in f.message and "files=[]" in f.message
+    tail = f.message.split("head=cccccccccc): ", 1)[1]
+    assert tail == ("l3 | l4 | " + "z" * 300)[:240]
+
+
+@pytest.mark.parametrize("junit", ['<testsuite tests="0" failures="0" errors="0"/>',
+                                   '<testsuite tests="0"/>'])
+def test_verify_empty_completed_suite_is_a_did_not_run_finding(monkeypatch, junit):
+    VerifyRig(monkeypatch, junit=junit, rc=5)
+    assert _verify() is not None
