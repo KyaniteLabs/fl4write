@@ -195,3 +195,24 @@ def test_control_bearing_paths_get_a_collision_free_prompt_identity(monkeypatch)
     prompt = m.calls[0][1]
     assert evil not in prompt and f"_{taken} => " in prompt
     assert [f.path for f in kept] == [evil] and dropped == 1 and failed is False
+
+
+def test_junk_rows_first_do_not_hide_later_valid_rows():
+    parsed = {"keep": ["junk", {"line": True}, {"path": "a.py", "line": 1}],
+              "demote": ["junk", {"path": "a.py", "line": False, "severity": "Nit"},
+                         {"path": "a.py", "line": 1, "rule_id": "r1", "severity": "Nit"}]}
+    assert gk._keep_sets(parsed) == ({("a.py", 1)}, {})
+    assert gk._demotions(parsed, VOCAB) == {("a.py", 1, "r1"): "Nit"}
+    assert gk._demotions({"demote": [{"path": "a.py", "line": 1, "severity": "Nit"}]}, VOCAB) \
+        == {("a.py", 1, ""): "Nit"}
+
+
+def test_telemetry_records_kept_dropped_and_demotions(monkeypatch):
+    from fl4write import telemetry
+    events = []
+    monkeypatch.setattr(telemetry, "emit", lambda kind, **kw: events.append((kind, kw)))
+    Model(monkeypatch, {"keep": [{"path": "a.py", "line": 1}], "demote": [
+        {"path": "a.py", "line": 1, "rule_id": "r1", "severity": "Minor"}]})
+    _run([_f(), _f(path="b.py")])
+    assert events == [("gatekeeper", {"repo": "KyaniteLabs/kinocut", "kept": 1, "dropped": 1,
+                                      "demoted": ["a.py:1 (r1) Major->Minor"]})]
