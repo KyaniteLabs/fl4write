@@ -219,3 +219,51 @@ def test_review_refuses_hidden_structure_from_model_text():
 
 def test_count_severities():
     assert r._count_severities([_f(), _f(), _f(severity="Nit")]) == {"Major": 2, "Nit": 1}
+
+
+def test_severity_table_counts_every_level_exactly():
+    fs = [_f(severity="Critical"), _f(severity="Minor"), _f(severity="Minor"),
+          _f(severity="Nit"), _f(severity="Nit"), _f(severity="Nit")]
+    assert r._severity_table(fs) == (
+        "| Severity | Count |\n|---|---|\n"
+        "| 🔴 Critical | 1 |\n| 🟠 Major | 0 |\n| 🟡 Minor | 2 |\n| 🔵 Nit | 3 |")
+    assert "| 🔴 Critical | 0 |" in r._severity_table([])
+
+
+def test_bad_rule_lines_do_not_stop_the_parse():
+    body = ("### 🔵 Nit — `w.py:6` — rule `bad\\q`\n"
+            "### 🔵 Nit — `v.py:7` — rule `a\\u0020b`\n"
+            "### 🟠 Major — `ok.py:8` — rule `fine`\n")
+    assert r.parse_finding_lines(body) == [("Major", "ok.py", 8, "fine")]
+
+
+def test_code_span_with_a_leading_backtick():
+    assert r._code_span("`a") == "``" + "`a" + "``"
+
+
+def test_rule_display_escapes_non_ascii():
+    assert r._rule_display("é") == "\\u00e9"
+
+
+def test_review_sections_and_resolved_lines_are_separated():
+    prev = [_f(path="x.py", line=1, rule_id="a"), _f(path="y.py", line=2, rule_id="b")]
+    body = r.render_review(make_pr(), [_f()], make_config(tone="quiet"), "h",
+                           previous_findings=prev)
+    assert "- ✅ `~x.py:1` (`a`)\n- ✅ `~y.py:2` (`b`)" in body
+    assert "too long\n\n---\n\n### ✅ Resolved" in body
+    assert "| 🔵 Nit | 0 |\n\n`KyaniteLabs" in body
+
+
+def test_clean_bodies_are_exact():
+    cfg = make_config(tone="quiet")
+    assert "\n\n## ✨ Clean review — nothing to fix.\n\nGo merge it. 🎉\n\n---\n*Reviewed" in \
+        r.render_review(make_pr(), [], cfg, "h")
+    assert "\n\n## ✨ Clean review — nothing to fix.\n\nMerged in good shape. ✅\n\n---\n*" in \
+        r.render_review(make_pr(), [], cfg, "h", post_merge=True)
+    assert "\n\nReview incomplete (diff truncated) — no merge signal.\n\n\n---\n*" in \
+        r.render_review(make_pr(), [], cfg, "h", diff_truncated=True)
+
+
+def test_urgency_and_proposal_are_blank_line_separated():
+    body = r.render_finding(_f(severity="Critical", proposal="p"), "q")
+    assert "too long\n\n<details>" in body and "</details>\n\n🚨" in body
