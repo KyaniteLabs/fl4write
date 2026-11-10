@@ -26,15 +26,6 @@ from .forges import ForgeAdapter, ForgeError, is_own_identity
 
 log = logging.getLogger("fl4write.issues")
 
-_TRIAGE_SYSTEM = (
-    "You are an issue triager. You receive an issue (title + body) and the "
-    'repo\'s context. Reply ONLY with JSON: {"labels": [str], "is_duplicate": bool, '
-    '"duplicate_hint": str|null, "draft_reply": str, "urgency": "low|medium|high|critical", '
-    '"is_regression": bool, "regression_version": str|null}. '
-    "The draft_reply should be helpful, grounded in the repo's law/docs, and "
-    "under 100 words. Never claim a fix exists unless the law mentions it."
-)
-
 _URGENCY_MARKER = {"high": "⚠️", "medium": "", "low": ""}
 # MECE round-2 (M3 DOM-B): the triage contract is low|medium|high — a
 # "critical" urgency the model was never asked for cannot exist
@@ -175,9 +166,11 @@ def render_triage_comment(issue_num: int, triage: dict[str, Any], config: RepoCo
     ]
 
     if triage.get("is_duplicate"):
-        parts.append(f"**Possible duplicate:** {_safe(triage.get('duplicate_hint', 'check similar issues'))}")
+        parts.append(f"**Possible duplicate:** "
+                     f"{_safe(triage.get('duplicate_hint') or 'check similar issues')}")
     if triage.get("is_regression"):
-        parts.append(f"**⚠️ Regression suspected** in: {_safe(triage.get('regression_version', 'unknown version'))}")
+        parts.append(f"**⚠️ Regression suspected** in: "
+                     f"{_safe(triage.get('regression_version') or 'unknown version')}")
 
     draft = _safe(triage.get("draft_reply", ""))
     if draft:
@@ -217,7 +210,8 @@ def find_existing_triage(forge: ForgeAdapter, repo: str, number: int, bot_login:
         if _row is None:
             continue  # malformed row skipped (F12-B010)
         cid, body, author = _row
-        author = author.lower()
+        # no lower(): logins are case-insensitive and is_own_identity owns
+        # that rule — lower-casing one side broke mixed-case bot logins
         if (
             "fl4write-triage:v1" in body or "codesitter-triage:v1" in body
         ) and is_own_identity(author, bot_login):
