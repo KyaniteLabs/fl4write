@@ -123,14 +123,6 @@ _KNOWN_IDENTIFIERS = {"documentQuerySelector", "getElementById", "getElementByCl
                       "FL4WRITE_TRUSTED_MODEL_ENDPOINTS"}
 
 
-def _entropy(s: str) -> float:
-    import math
-    if not s:
-        return 0.0
-    freq = {c: s.count(c) for c in set(s)}
-    return -sum((n / len(s)) * math.log2(n / len(s)) for n in freq.values())
-
-
 def redact_credentials(text: str) -> str:
     """Replace credential-shaped strings with [redacted]. Prefix runs always;
     16+ char runs always (a real secret, not an identifier).
