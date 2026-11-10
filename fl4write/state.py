@@ -7,9 +7,9 @@ are atomic (tmp+rename, kill-mid-write safe). A cycle lock prevents overlapping
 runs from double-posting.
 
 Audit 2026-09-01 hardening:
-- Lock files carry pid+epoch and are age-broken after LOCK_MAX_AGE — a pid-0
-  file (kill between open and write) or a reused pid can no longer wedge a
-  repo forever (previously invisible: the skip printed a normal cycle line).
+- The cycle lock is a kernel flock (see CycleLock): the kernel releases it
+  when the holder dies, so no stale lock can wedge a repo and no stale-breaker
+  can steal a live one.
 - mark_reviewed MERGES into the PR record — it used to replace it, wiping
   fix_depth so the per-PR fix cap never persisted across pushes.
 - load_state logs what it dropped; transient OSError aborts the cycle instead
@@ -29,7 +29,6 @@ from typing import Any
 log = logging.getLogger("fl4write.state")
 
 STATE_VERSION = 1
-LOCK_MAX_AGE = 2 * 60 * 60  # hours-scale; no legitimate cycle holds a lock this long
 
 
 class CycleLockHeld(RuntimeError):
@@ -56,7 +55,6 @@ class CycleLock:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._fd: int | None = None
-        self._held = False
         self._token = ""
 
     def _acquire(self) -> bool:
@@ -92,7 +90,6 @@ class CycleLock:
                 pass
             os.close(self._fd)
             self._fd = None
-            self._held = False
 
 
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
@@ -253,7 +250,10 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
                 # never ride the restart
                 log.warning("state omni_findings: dropping %d malformed rows — "
                             "sweep state reset (bounded reconcile)", len(bad))
-                out["omni_findings"] = [r for r in omni if r not in bad]
+                # identity, not equality: {"id": True} == {"id": 1}, so an
+                # equality filter dropped the valid twin of a malformed row
+                bad_ids = {id(r) for r in bad}
+                out["omni_findings"] = [r for r in omni if id(r) not in bad_ids]
                 for key in ("omni_complete", "omni_published", "omni_cursor",
                             "omni_head", "omni_fp", "omni_next_id", "omni_total",
                             "omni_scanned_total", "omni_file_fails",
@@ -331,13 +331,6 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
             if len(kept) != len(v):
                 log.warning("state %s: dropping non-int values (bounded reconcile)", key)
             out[key] = kept
-    for key in ("omni_scanned_total", "omni_next_id", "omni_total"):
-        v = out.get(key)
-        if v is None:
-            continue
-        if isinstance(v, bool) or not isinstance(v, int):
-            log.warning("state %s: non-int %r dropped (bounded reconcile)", key, v)
-            out.pop(key, None)
     for key in ("omni_complete", "omni_published", "retro_complete", "omni_aborted"):
         v = out.get(key)
         if v is not None and not isinstance(v, bool):
@@ -369,20 +362,20 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(out[k], bool):
             log.warning("state %s: non-bool dropped (bounded reconcile)", k)
             out.pop(k, None)
-    for key in ("retro_seen", "retro_parked", "pm_shadow_seen", "retro_shadow_seen",
-                "model_failures", "omni_file_fails"):
+    for key in ("retro_seen", "retro_parked", "pm_shadow_seen", "retro_shadow_seen"):
         v = out.get(key)
         if v is not None and not isinstance(v, dict):
             log.warning("state %s: non-dict %r dropped (bounded reconcile)", key, v)
             out.pop(key, None)
-    for key in ("retro_defer:",):  # prefix keys: retro_defer:<num>:<sha> -> int
-        for k in [k for k in out if k.startswith(key)]:
-            v = out[k]
-            try:
-                out[k] = int(v)
-            except (TypeError, ValueError, OverflowError):
-                log.warning("state %s: non-int %r dropped (bounded reconcile)", k, v)
-                out.pop(k, None)
+    # prefix keys retro_defer:<num>:<sha> -> a non-negative count. Booleans are
+    # not counts (True would read as one deferral), same as every other belt.
+    for k in [k for k in out if k.startswith("retro_defer:")]:
+        n = parse_number_key(out[k])
+        if n is None:
+            log.warning("state %s: non-count %r dropped (bounded reconcile)", k, out[k])
+            out.pop(k, None)
+        else:
+            out[k] = n
     return out
 
 
