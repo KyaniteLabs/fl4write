@@ -15,7 +15,6 @@ import logging
 import re
 import types as _types
 import typing
-from typing import Iterator
 from pathlib import Path
 
 import yaml
@@ -479,26 +478,6 @@ def assert_credential_endpoints_trusted(config: RepoConfig, *, source: str) -> N
                 f"host in {TRUSTED_MODEL_ENDPOINTS_ENV} to authorize the destination")
 
 
-def _iter_model_fields(obj) -> Iterator[tuple[str, object]]:
-    """Yield (attribute-name, value) for bool-annotated fields of a pydantic
-    model, descending into nested models."""
-    import types as _types
-
-    for name, field in obj.model_fields.items():
-        ann = field.annotation
-        # unwrap Optional[bool]
-        origin = typing.get_origin(ann)
-        if origin is typing.Union or origin is _types.UnionType:
-            args = [a for a in typing.get_args(ann) if a is not type(None)]
-            ann = args[0] if len(args) == 1 and args[0] is bool else ann
-        if ann is bool:
-            yield name, getattr(obj, name)
-    for name, field in obj.model_fields.items():
-        val = getattr(obj, name)
-        if hasattr(val, "model_fields"):  # nested model
-            yield from _iter_model_fields(val)
-
-
 def _assert_strict_bools(raw: dict, model_cls) -> None:
     """MECE round-7 (sol F7-D009): pydantic COERCES string booleans ('off' ->
     False) before validation ever sees them — 'strict' models only forbid
@@ -570,10 +549,33 @@ def _expand_env(value, source: str):
     return _ENV_REFERENCE.sub(substitute, value)
 
 
-def load_config(path: str | Path) -> RepoConfig:
-    """Fail-loud loader: config errors abort the cycle, never silently skip."""
+class UntrustedConfigError(ValueError):
+    """A config supplied by the reviewed tree asked for something only an
+    operator-owned config may have (host environment values)."""
+
+
+def _references_env(value) -> bool:
+    if isinstance(value, dict):
+        return any(_references_env(k) or _references_env(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_references_env(v) for v in value)
+    return isinstance(value, str) and _ENV_REFERENCE.search(value) is not None
+
+
+def load_config(path: str | Path, *, expand_env: bool = True) -> RepoConfig:
+    """Fail-loud loader: config errors abort the cycle, never silently skip.
+
+    expand_env=False is for configs the reviewed tree supplies: ${VAR}
+    expansion would let that tree copy ANY host secret into a field it
+    controls (an endpoint URL, a test command), around the credential
+    endpoint guard, so such a config may not reference the environment."""
     raw = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
-    raw = _expand_env(raw, source=str(path))
+    if expand_env:
+        raw = _expand_env(raw, source=str(path))
+    elif _references_env(raw):
+        raise UntrustedConfigError(
+            f"config supplied by the reviewed tree may not reference environment "
+            f"variables ({path}) — ${{VAR}} would expose host secrets to it")
     _assert_strict_bools(raw, RepoConfig)  # F7-D009: pre-validation
     config = RepoConfig.model_validate(raw)
     for rid in config.review:
