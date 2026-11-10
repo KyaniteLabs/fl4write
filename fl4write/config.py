@@ -570,10 +570,33 @@ def _expand_env(value, source: str):
     return _ENV_REFERENCE.sub(substitute, value)
 
 
-def load_config(path: str | Path) -> RepoConfig:
-    """Fail-loud loader: config errors abort the cycle, never silently skip."""
+class UntrustedConfigError(ValueError):
+    """A config supplied by the reviewed tree asked for something only an
+    operator-owned config may have (host environment values)."""
+
+
+def _references_env(value) -> bool:
+    if isinstance(value, dict):
+        return any(_references_env(k) or _references_env(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_references_env(v) for v in value)
+    return isinstance(value, str) and _ENV_REFERENCE.search(value) is not None
+
+
+def load_config(path: str | Path, *, expand_env: bool = True) -> RepoConfig:
+    """Fail-loud loader: config errors abort the cycle, never silently skip.
+
+    expand_env=False is for configs the reviewed tree supplies: ${VAR}
+    expansion would let that tree copy ANY host secret into a field it
+    controls (an endpoint URL, a test command), around the credential
+    endpoint guard, so such a config may not reference the environment."""
     raw = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
-    raw = _expand_env(raw, source=str(path))
+    if expand_env:
+        raw = _expand_env(raw, source=str(path))
+    elif _references_env(raw):
+        raise UntrustedConfigError(
+            f"config supplied by the reviewed tree may not reference environment "
+            f"variables ({path}) — ${{VAR}} would expose host secrets to it")
     _assert_strict_bools(raw, RepoConfig)  # F7-D009: pre-validation
     config = RepoConfig.model_validate(raw)
     for rid in config.review:
