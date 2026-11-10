@@ -117,7 +117,10 @@ class FakeForge:
     def __call__(self, method, path, data=None):
         if method == "PUT":
             self.puts.append((path, data))
+            if isinstance(self.merge_reply, list):
+                return self.merge_reply.pop(0)
             return self.merge_reply
+        assert method == "GET", (method, path)
         if "/pulls?" in path:
             page = int(path.rsplit("page=", 1)[1])
             return self.pages[page - 1] if page <= len(self.pages) else []
@@ -138,9 +141,9 @@ def merge_config():
     return make_config(fix={"enabled": True, "merge_own_prs": True})
 
 
-def _scan(monkeypatch, forge, config):
+def _scan(monkeypatch, forge, config, bot=BOT):
     monkeypatch.setattr(executor, "_gh_api", forge)
-    return executor.check_and_merge_own_prs(config, BOT)
+    return executor.check_and_merge_own_prs(config, bot)
 
 
 def test_merge_gate_merges_a_green_own_fix_pr(monkeypatch, merge_config):
@@ -311,3 +314,57 @@ def test_fetch_accepts_line_wrapped_base64_and_utf8(monkeypatch):
 def test_fetch_never_returns_a_fabricated_premise(monkeypatch, reply):
     out, _ = _fetch(monkeypatch, reply)
     assert out is None
+
+
+def test_merge_gate_honours_a_custom_bot_identity(monkeypatch, merge_config):
+    forge = FakeForge([[_pr(author="acme-reviewer[bot]")]])
+    assert _scan(monkeypatch, forge, merge_config, bot="acme-reviewer[bot]") == \
+        [{"pr": 5, "status": "merged"}]
+
+
+def test_pr_number_one_is_a_real_pr_and_zero_is_not(monkeypatch, merge_config):
+    forge = FakeForge([[_pr(number=0), _pr(number=1)]])
+    assert _scan(monkeypatch, forge, merge_config) == [{"pr": 1, "status": "merged"}]
+    assert [p.endswith("/pulls/1/merge") for p, _ in forge.puts] == [True]
+
+
+def test_pr_listing_keeps_page_one_rows(monkeypatch, merge_config):
+    page1 = [_pr(number=7)] + [_pr(number=100 + i, ref="feature/x") for i in range(99)]
+    forge = FakeForge([page1, [_pr(number=8, ref="feature/y")]])
+    assert _scan(monkeypatch, forge, merge_config) == [{"pr": 7, "status": "merged"}]
+
+
+def test_pr_listing_reads_exactly_twenty_pages(monkeypatch, merge_config):
+    def full(n, tail):
+        return [_pr(number=n, ref=tail)] + [_pr(number=10_000 * n + i, ref="feature/x")
+                                             for i in range(99)]
+    pages = [full(p, "feature/x") for p in range(1, 20)]
+    pages.append(full(20, "fl4write/fix-20"))     # last page inside the cap: merged
+    pages.append(full(21, "fl4write/fix-21"))     # past the cap: invisible
+    forge = FakeForge(pages)
+    assert _scan(monkeypatch, forge, merge_config) == [{"pr": 20, "status": "merged"}]
+
+
+def test_a_failing_check_on_page_one_blocks_the_merge(monkeypatch, merge_config):
+    page1 = [{"status": "completed", "conclusion": "failure"}] + GREEN * 99
+    forge = FakeForge([[_pr()]], runs={"h" * 40: [page1, GREEN]})
+    assert _scan(monkeypatch, forge, merge_config) == []
+
+
+def test_check_runs_cap_is_exactly_twenty_pages(monkeypatch, merge_config):
+    inside = FakeForge([[_pr()]], runs={"h" * 40: [GREEN * 100] * 19 + [GREEN]})
+    assert _scan(monkeypatch, inside, merge_config) == [{"pr": 5, "status": "merged"}]
+    at_cap = FakeForge([[_pr()]], runs={"h" * 40: [GREEN * 100] * 20})
+    assert _scan(monkeypatch, at_cap, merge_config) == []
+
+
+def test_an_unproven_merge_does_not_stop_later_prs(monkeypatch, merge_config):
+    forge = FakeForge([[_pr(number=5, sha="a" * 40), _pr(number=6, sha="b" * 40)]])
+    forge.merge_reply = [{"merged": False}, {"merged": True, "sha": "m" * 40}]
+    assert _scan(monkeypatch, forge, merge_config) == [{"pr": 6, "status": "merged"}]
+    assert len(forge.puts) == 2
+
+
+def test_a_blocked_pr_does_not_stop_later_prs(monkeypatch, merge_config):
+    forge = FakeForge([[_pr(number=5, author="mallory"), _pr(number=6)]])
+    assert _scan(monkeypatch, forge, merge_config) == [{"pr": 6, "status": "merged"}]
