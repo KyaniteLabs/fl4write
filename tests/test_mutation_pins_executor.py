@@ -368,3 +368,116 @@ def test_an_unproven_merge_does_not_stop_later_prs(monkeypatch, merge_config):
 def test_a_blocked_pr_does_not_stop_later_prs(monkeypatch, merge_config):
     forge = FakeForge([[_pr(number=5, author="mallory"), _pr(number=6)]])
     assert _scan(monkeypatch, forge, merge_config) == [{"pr": 6, "status": "merged"}]
+
+
+# ---------------------------------------------------------------- verify_diff_tests
+from test_fl4write import make_pr  # noqa: E402
+
+_JUNIT_FAIL = '<testsuite tests="3" failures="1" errors="0"/>'
+
+
+class VerifyRig:
+    """Fakes git (_run) and the evidence runner; records what each one got."""
+
+    def __init__(self, monkeypatch, green=False, rc=1, junit=_JUNIT_FAIL,
+                 stdout="E   assert 1 == 2\n1 failed, 2 passed"):
+        self.git: list = []
+        self.evidence: list = []
+        self.askpass_token = None
+        self.green, self.rc, self.junit, self.stdout = green, rc, junit, stdout
+        monkeypatch.setattr(executor, "_test_isolation", lambda: ("host", ""))
+        monkeypatch.setattr(executor, "_run", self._run)
+        monkeypatch.setattr(executor, "_pytest_evidence", self._evidence)
+
+    def _run(self, cmd, cwd=None, timeout=120, env=None):
+        self.git.append({"cmd": cmd, "cwd": cwd, "timeout": timeout, "env": env})
+        if env and env.get("GIT_ASKPASS"):
+            self.askpass_token = subprocess.run(
+                [env["GIT_ASKPASS"]], capture_output=True, text=True).stdout
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def _evidence(self, argv, cwd, timeout, env, junit):
+        self.evidence.append({"argv": list(argv), "cwd": cwd, "timeout": timeout, "env": env})
+        if self.junit is not None:
+            junit.write_text(self.junit)
+        return self.green, subprocess.CompletedProcess(argv, self.rc, self.stdout, "")
+
+
+def _verify(cfg=None, files=("tests/test_x.py",)):
+    return executor.verify_diff_tests(make_pr(head_sha="c" * 40), cfg or make_config(),
+                                      list(files))
+
+
+def test_verify_fetches_with_the_bot_token_and_runs_in_the_checkout(monkeypatch):
+    monkeypatch.setenv("CODESITTER_GITHUB_TOKEN", "tok-123")
+    rig = VerifyRig(monkeypatch)
+    finding = _verify(make_config(test_timeout=77))
+    fetch = next(g for g in rig.git if g["cmd"][:2] == ["git", "fetch"])
+    assert fetch["cmd"][-2:] == ["https://github.com/KyaniteLabs/kinocut.git", "c" * 40]
+    assert fetch["timeout"] == 180
+    assert rig.askpass_token == "tok-123\n"
+    workdir = rig.git[0]["cwd"]
+    assert workdir is not None and all(g["cwd"] == workdir for g in rig.git)
+    (ev,) = rig.evidence
+    assert ev["cwd"] == workdir and ev["timeout"] == 77
+    # tests run with a throwaway HOME and the sandbox allowlist — never the token
+    assert ev["env"]["HOME"] != os.path.expanduser("~")
+    assert "tok-123" not in "".join(ev["env"].values())
+    assert not Path(workdir).exists() and not Path(ev["env"]["HOME"]).exists()
+    assert finding is not None
+
+
+def test_verify_finding_is_critical_on_the_changed_file_with_its_evidence(monkeypatch):
+    VerifyRig(monkeypatch)
+    f = _verify()
+    assert (f.rule_id, f.severity, f.path, f.line, f.category) == \
+        ("tests", "Critical", "tests/test_x.py", 1, "CI")
+    assert "head=cccccccccc" in f.message and "1 failed, 2 passed" in f.message
+
+
+def test_verify_default_argv_targets_only_the_diffs_python_tests(monkeypatch):
+    rig = VerifyRig(monkeypatch)
+    _verify(make_config(known_env_failures=["tests/t.py::flaky"]),
+            files=("tests/test_a.py", "tests/data.json", "tests/test_b.py"))
+    assert rig.evidence[0]["argv"] == [
+        "python3", "-m", "pytest", "-q", "--tb=line", "--deselect", "tests/t.py::flaky",
+        "--", "tests/test_a.py", "tests/test_b.py"]
+
+
+def test_verify_explicit_pytest_cmd_keeps_options_before_the_separator(monkeypatch):
+    rig = VerifyRig(monkeypatch)
+    _verify(make_config(test_cmd="pytest -x tests/", known_env_failures=["a::b"]))
+    assert rig.evidence[0]["argv"] == ["pytest", "-x", "--deselect", "a::b",
+                                       "--", "tests/test_x.py"]
+
+
+def test_verify_no_changed_tests_runs_the_default_tests_dir(monkeypatch):
+    rig = VerifyRig(monkeypatch)
+    _verify(files=())
+    assert rig.evidence[0]["argv"] == ["python3", "-m", "pytest", "tests/", "-q", "--tb=line"]
+
+
+@pytest.mark.parametrize("junit,rc,expect_finding", [
+    ('<testsuite tests="3" failures="1" errors="2"/>', 1, True),   # real failures + errors
+    ('<testsuites><testsuite failures="0" errors="0"/>'
+     '<testsuite failures="1" errors="0"/></testsuites>', 1, True),  # failure in suite two
+    ('<testsuite tests="3" failures="0" errors="2"/>', 1, False),  # errors-only = infra
+    ("not xml", 1, False),                                          # unreadable = infra
+    (None, 2, False),                                               # no junit, rc!=0 = infra
+    (None, 0, True),                                                # no junit, rc 0 = killed suite
+])
+def test_verify_junit_decides_finding_vs_unverified(monkeypatch, junit, rc, expect_finding):
+    VerifyRig(monkeypatch, junit=junit, rc=rc)
+    assert (_verify() is not None) is expect_finding
+
+
+def test_verify_green_run_is_no_finding(monkeypatch):
+    VerifyRig(monkeypatch, green=True, rc=0, junit='<testsuite tests="1"/>')
+    assert _verify() is None
+
+
+@pytest.mark.parametrize("cmd", ["make test", "pytest x && echo", "npm test"])
+def test_verify_non_pytest_or_chained_cmds_never_run(monkeypatch, cmd):
+    rig = VerifyRig(monkeypatch)
+    assert _verify(make_config(test_cmd=cmd)) is None
+    assert rig.evidence == []
