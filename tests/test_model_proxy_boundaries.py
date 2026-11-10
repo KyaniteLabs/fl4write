@@ -128,11 +128,16 @@ def test_incomplete_clients_cannot_exceed_host_limit_and_capacity_recovers(provi
             assert rejected, 'excess incomplete client was admitted instead of closed'
             assert len(proxy.handlers) <= 2
             assert proxy.snapshot()['calls'] == 0 and not calls
+            # A handler leaves proxy.handlers inside handle(), but its admission
+            # slot is released later, in process_request_thread's finally. Wait
+            # for the handler THREADS to end: a thread only ends after its slot
+            # is released, so capacity has really recovered.
+            admitted = list(proxy.handlers)
             for peer in peers:
                 peer.close()
-            deadline = time.monotonic() + 1
-            while proxy.handlers and time.monotonic() < deadline:
-                time.sleep(0.01)
+            for thread in admitted:
+                thread.join(timeout=5)
+            assert not any(t.is_alive() for t in admitted), 'admitted handlers never finished'
             assert mp.request(str(proxy.socket_path), route.endpoint, payload)['choices']
     finally:
         for peer in peers:
