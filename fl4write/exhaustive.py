@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from . import scrub
-from .config import ModelRoute, assert_credential_endpoints_trusted, load_config
+from .config import (ModelRoute, UntrustedConfigError, assert_credential_endpoints_trusted,
+                     load_config)
 from .executor import _sandbox_env_for
 from .exhaustive_evidence import EvidenceError, recon_ledger_context, seal_bundle, verify_bundle
 from .exhaustive_adjudication import AdjudicationError, apply_decision, verified_findings
@@ -757,6 +758,23 @@ def _repo_supplied_config(config_path: Path, repo: Path) -> bool:
         return True  # unresolvable path: treat as untrusted, never as trusted
 
 
+def _load_run_config(config_path: Path, repo: Path):
+    """Load the run's config. A config inside the reviewed tree is untrusted:
+    it may neither reference host environment variables nor aim a host
+    credential at an endpoint the operator has not authorized."""
+    if not _repo_supplied_config(config_path, repo):
+        return load_config(config_path)
+    try:
+        config = load_config(config_path, expand_env=False)
+    except UntrustedConfigError as exc:
+        raise Deferred(str(exc)) from exc
+    try:
+        assert_credential_endpoints_trusted(config, source=str(config_path))
+    except ValueError as exc:
+        raise Deferred(str(exc)) from exc
+    return config
+
+
 def run(args: argparse.Namespace) -> int:
     repo, identity = _identity(args.repo.resolve())
     state_dir = args.state_dir.resolve() / identity
@@ -770,13 +788,7 @@ def run(args: argparse.Namespace) -> int:
                 raise Deferred("desk decisions must be in an external directory")
         with CycleLock(state_dir / "loop.lock"), ExitStack() as transports:
             state = _load_state(state_path, identity)
-            config_path = args.config or repo / ".fl4write.yaml"
-            config = load_config(config_path)
-            if _repo_supplied_config(config_path, repo):
-                try:
-                    assert_credential_endpoints_trusted(config, source=str(config_path))
-                except ValueError as exc:
-                    raise Deferred(str(exc)) from exc
+            config = _load_run_config(args.config or repo / ".fl4write.yaml", repo)
             request_sha = _request_identity(args, config)
             request_path = state_dir / "request-identity.json"
             if request_path.exists():
