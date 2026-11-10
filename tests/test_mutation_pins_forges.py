@@ -392,3 +392,327 @@ def test_adapter_routing_and_base_trim():
     assert isinstance(forges.adapter_for(_gh().binding), GitHubAdapter)
     assert isinstance(forges.adapter_for(_fj().binding), ForgejoAdapter)
     assert _gh().base == "https://api.github.com"
+
+
+# ---------------------------------------------------------------- merged PR listing
+def _merged(n, at, **over):
+    row = _pr_row(n, merged_at=at, merged=True)
+    row.update(over)
+    return row
+
+
+def test_list_merged_prs_window_order_and_paths(monkeypatch, adapter):
+    rows = [
+        _merged(1, "2026-01-01T00:00:05Z"),
+        _merged(2, "2026-01-01T00:00:00Z"),       # same second as the watermark: kept
+        _merged(3, "2025-12-31T23:59:59Z"),       # before: dropped
+        _merged(4, "2026-01-01T01:00:00+01:00"),  # same instant, other offset: kept
+        _merged(5, None),                          # closed, never merged
+        _merged(6, "yesterday"),                   # unparseable: not a merge event
+        _merged(7, 12345),
+    ]
+    calls = _route(monkeypatch, adapter, {("GET", "/repos/o/r/pulls?state=closed"): lambda p: rows})
+    prs = adapter.list_merged_prs("o/r", "2026-01-01T00:00:00Z")
+    assert [p.number for p in prs] in ([2, 4, 1], [4, 2, 1])
+    assert {p.number for p in prs} == {1, 2, 4} and prs[-1].number == 1
+    assert prs[-1].merged_at == "2026-01-01T00:00:05Z"
+    expect = ("/repos/o/r/pulls?state=closed&sort=updated&direction=desc"
+              if adapter.name == "github" else "/repos/o/r/pulls?state=closed")
+    param = "per_page" if adapter.name == "github" else "limit"
+    assert calls.seen[0][1] == f"{expect}&page=1&{param}=50"
+
+
+def test_list_merged_prs_without_a_watermark_lists_everything(monkeypatch, adapter):
+    rows = [_merged(1, "2020-01-01T00:00:00Z"), _merged(2, "2019-01-01T00:00:00Z")]
+    _route(monkeypatch, adapter, {("GET", "/repos/o/r/pulls?state=closed"): lambda p: rows})
+    assert [p.number for p in adapter.list_merged_prs("o/r", "")] == [2, 1]
+
+
+def test_forgejo_needs_merged_true_not_just_a_timestamp(monkeypatch):
+    fj = _fj()
+    rows = [_merged(1, "2026-01-02T00:00:00Z", merged="true"),
+            _merged(2, "2026-01-02T00:00:00Z", merged=False),
+            _merged(3, "2026-01-02T00:00:00Z")]
+    _route(monkeypatch, fj, {("GET", "/repos/o/r/pulls?state=closed"): lambda p: rows})
+    assert [p.number for p in fj.list_merged_prs("o/r", "2026-01-01T00:00:00Z")] == [3]
+
+
+@pytest.mark.parametrize("bad", ["junk", _merged(9, "2026-01-02T00:00:00Z", number=True),
+                                 _merged(9, "2026-01-02T00:00:00Z", head={"sha": ""})])
+def test_list_merged_prs_refuses_an_incomplete_listing(monkeypatch, adapter, bad):
+    rows = [_merged(1, "2026-01-02T00:00:00Z"), bad]
+    _route(monkeypatch, adapter, {("GET", "/repos/o/r/pulls?state=closed"): lambda p: rows})
+    with pytest.raises(ForgeError, match=r"list_merged_prs on o/r: listing incomplete \(1 "):
+        adapter.list_merged_prs("o/r", "2026-01-01T00:00:00Z")
+
+
+# ---------------------------------------------------------------- row translation
+@pytest.mark.parametrize("over,ok", [
+    ({}, True),
+    ({"number": 0}, False), ({"number": -3}, False), ({"number": "4"}, False),
+    ({"number": True}, False),
+    ({"head": None}, False), ({"head": {"sha": 5}}, False), ({"head": {"sha": ""}}, False),
+    ({"title": 5}, False), ({"body": ["x"]}, False),
+    ({"user": {"login": 3}}, False),
+    ({"title": None, "body": None, "user": None}, True),
+])
+def test_row_pr_validates_scalars_before_construction(adapter, over, ok):
+    row = _pr_row(4)
+    row.update(over)
+    assert (adapter._row_pr("o/r", row) is not None) is ok
+
+
+def test_row_pr_defaults_and_bot_type(adapter):
+    # time-rot-safe: merged_at is only echoed back, never compared to the clock
+    row = _pr_row(4, title=None, body=None, user={"type": "BOT"}, merged_at="2026-01-01T00:00:00Z")
+    pr = adapter._row_pr("o/r", row)
+    assert (pr.title, pr.body, pr.author, pr.is_bot_author, pr.merged_at, pr.repo) == \
+        ("", "", "", True, "2026-01-01T00:00:00Z", "o/r")
+    pr = adapter._row_pr("o/r", _pr_row(4, head={"sha": "s", "repo": {"full_name": "fork/r"}}))
+    assert pr.is_fork is True and pr.author == "dev" and pr.is_bot_author is False
+
+
+# ---------------------------------------------------------------- GitHub check runs
+def _ci_routes(runs_pages, repo_info=None, commit=None):
+    def runs(path):
+        page = int(path.rsplit("page=", 1)[1])
+        return runs_pages[page - 1] if page <= len(runs_pages) else {"check_runs": []}
+    return {("GET", "/repos/o/r/commits/sha1/check-runs"): runs,
+            ("GET", "/repos/o/r/commits/"): commit if commit is not None else {"sha": "sha1"},
+            ("GET", "/repos/o/r"): repo_info if repo_info is not None else
+            {"default_branch": "rel/2"}}
+
+
+def test_head_check_runs_reads_every_page_of_the_quoted_branch_head(monkeypatch):
+    gh = _gh()
+    full = {"check_runs": [{"id": i} for i in range(100)]}
+    calls = _route(monkeypatch, gh, _ci_routes([full, {"check_runs": [{"id": "last"}]}]))
+    sha, runs = gh.head_check_runs("o/r")
+    assert sha == "sha1" and len(runs) == 101 and runs[-1] == {"id": "last"}
+    assert [c[1] for c in calls.seen] == [
+        "/repos/o/r", "/repos/o/r/commits/rel%2F2",
+        "/repos/o/r/commits/sha1/check-runs?per_page=100&page=1",
+        "/repos/o/r/commits/sha1/check-runs?per_page=100&page=2"]
+
+
+def test_head_check_runs_cap_is_exactly_one_hundred_pages(monkeypatch):
+    gh = _gh()
+    full = {"check_runs": [{"id": i} for i in range(100)]}
+    _route(monkeypatch, gh, _ci_routes([full] * 99))
+    assert len(gh.head_check_runs("o/r")[1]) == 9900
+    _route(monkeypatch, gh, _ci_routes([full] * 100))
+    assert gh.head_check_runs("o/r") is None              # capped evidence is incomplete
+
+
+@pytest.mark.parametrize("routes", [
+    _ci_routes([{"check_runs": []}], repo_info=[]),
+    _ci_routes([{"check_runs": []}], commit=["x"]),
+    _ci_routes([{"check_runs": []}], commit={"sha": ""}),
+    _ci_routes([["not", "a", "dict"]]),
+    _ci_routes([{"check_runs": "nope"}]),
+    _ci_routes([{"check_runs": [{"id": 1}, "junk"]}]),
+])
+def test_head_check_runs_untrustworthy_evidence_is_none(monkeypatch, routes):
+    gh = _gh()
+    _route(monkeypatch, gh, routes)
+    assert gh.head_check_runs("o/r") is None
+
+
+def test_head_check_runs_odd_branch_falls_back_to_main(monkeypatch):
+    gh = _gh()
+    calls = _route(monkeypatch, gh, _ci_routes([{"check_runs": []}], repo_info={"default_branch": 1}))
+    assert gh.head_check_runs("o/r") == ("sha1", [])
+    assert calls.seen[1][1] == "/repos/o/r/commits/main"
+
+
+# ---------------------------------------------------------------- recursive tree (GitHub/base)
+def _tree_routes(tree, commit=None, repo_info=None):
+    return {("GET", "/repos/o/r/git/trees/"): tree,
+            ("GET", "/repos/o/r/commits/"): commit if commit is not None else {"sha": "t1"},
+            ("GET", "/repos/o/r"): repo_info if repo_info is not None else
+            {"default_branch": "a/b"}}
+
+
+def test_recursive_tree_lists_blobs_and_flags_truncation(monkeypatch):
+    gh = _gh()
+    tree = {"truncated": False, "tree": [
+        {"type": "blob", "path": "a.py", "size": 3},
+        {"type": "tree", "path": "pkg", "sha": "x"},
+        {"type": "blob", "path": "pkg/b.py", "size": 0}]}
+    calls = _route(monkeypatch, gh, _tree_routes(tree))
+    assert gh.list_tree_files("o/r") == ([("a.py", 3), ("pkg/b.py", 0)], False)
+    assert [c[1] for c in calls.seen] == ["/repos/o/r", "/repos/o/r/commits/a%2Fb",
+                                          "/repos/o/r/git/trees/t1?recursive=1"]
+    _route(monkeypatch, gh, _tree_routes(dict(tree, truncated=True)))
+    assert gh.list_tree_files("o/r")[1] is True
+
+
+@pytest.mark.parametrize("row", [
+    "junk", {"type": "blob", "path": "", "size": 1}, {"type": "blob", "path": 3, "size": 1},
+    {"type": "blob", "path": "x", "size": True}, {"type": "blob", "path": "x", "size": -1},
+    {"type": "blob", "path": "x", "size": "1"}])
+def test_recursive_tree_malformed_rows_mark_truncated(monkeypatch, row):
+    gh = _gh()
+    _route(monkeypatch, gh, _tree_routes({"tree": [{"type": "blob", "path": "ok", "size": 1}, row]}))
+    assert gh.list_tree_files("o/r") == ([("ok", 1)], True)
+
+
+@pytest.mark.parametrize("routes", [
+    _tree_routes({"tree": []}, repo_info=[]),
+    _tree_routes({"tree": []}, commit=[]),
+    _tree_routes({"tree": []}, commit={"sha": ""}),
+    _tree_routes({"tree": "nope"}),
+    _tree_routes(["nope"]),
+])
+def test_recursive_tree_unqueryable_is_none(monkeypatch, routes):
+    gh = _gh()
+    _route(monkeypatch, gh, routes)
+    assert gh.list_tree_files("o/r") is None
+
+
+# ---------------------------------------------------------------- Forgejo manual tree walk
+def _walk(monkeypatch, trees, repo_info=None):
+    fj = _fj()
+
+    def tree(path):
+        return trees[path.rsplit("/", 1)[1]]
+    calls = _route(monkeypatch, fj, {("GET", "/repos/o/r/git/trees/"): tree,
+                                     ("GET", "/repos/o/r"): repo_info or {"default_branch": "dev/x"}})
+    return fj.list_tree_files("o/r"), calls
+
+
+def _b(path, size=1):
+    return {"type": "blob", "path": path, "size": size}
+
+
+def _t(path, sha):
+    return {"type": "tree", "path": path, "sha": sha}
+
+
+def test_forgejo_walk_descends_subtrees_with_prefixes(monkeypatch):
+    trees = {"dev%2Fx": {"tree": [_b("top.py", 5), _t("src", "S")]},
+             "S": {"tree": [_b("a.py", 2), _t("deep", "D")]},
+             "D": {"tree": [_b("z.py", 7)]}}
+    (files, truncated), calls = _walk(monkeypatch, trees)
+    assert sorted(files) == [("src/a.py", 2), ("src/deep/z.py", 7), ("top.py", 5)]
+    assert truncated is False
+    assert calls.seen[1][1] == "/repos/o/r/git/trees/dev%2Fx"
+
+
+def test_forgejo_walk_replays_a_shared_subtree_under_each_prefix(monkeypatch):
+    trees = {"main": {"tree": [_t("a", "S"), _t("b", "S")]}, "S": {"tree": [_b("f")]}}
+    (files, truncated), calls = _walk(monkeypatch, trees, {"default_branch": None})
+    assert sorted(files) == [("a/f", 1), ("b/f", 1)] and truncated is False
+    assert [c[1] for c in calls.seen].count("/repos/o/r/git/trees/S") == 1   # cached
+
+
+def test_forgejo_walk_ancestor_cycle_truncates(monkeypatch):
+    trees = {"dev%2Fx": {"tree": [_t("a", "A")]}, "A": {"tree": [_b("f"), _t("loop", "A")]}}
+    (files, truncated), _ = _walk(monkeypatch, trees)
+    assert files == [("a/f", 1)] and truncated is True
+
+
+@pytest.mark.parametrize("trees", [
+    {"dev%2Fx": {"tree": [_b("ok"), "junk"]}},
+    {"dev%2Fx": {"tree": [_b("ok"), {"type": "tree", "path": "t", "sha": ""}]}},
+    {"dev%2Fx": {"tree": [_b("ok"), _b("bad", -1)]}},
+    {"dev%2Fx": {"tree": [_b("ok")], "truncated": True}},
+    {"dev%2Fx": {"tree": [_b("ok"), _t("s", "S")]}, "S": {"tree": "nope"}},
+    {"dev%2Fx": {"tree": [_b("ok"), _t("s", "S")]}, "S": {"tree": [], "truncated": True}},
+    {"dev%2Fx": {"tree": [_b("ok"), _t("s", "S")]}, "S": {"tree": ["junk"]}},
+    {"dev%2Fx": {"tree": [_b("ok"), _t("s", "S")]}, "S": {"tree": [_t("u", None)]}},
+])
+def test_forgejo_walk_any_doubt_marks_truncated(monkeypatch, trees):
+    (files, truncated), _ = _walk(monkeypatch, trees)
+    assert ("ok", 1) in files and truncated is True
+
+
+def test_forgejo_walk_bad_root_is_truncated_empty_and_errors_are_none(monkeypatch):
+    assert _walk(monkeypatch, {"dev%2Fx": ["x"]})[0] == ([], True)
+    fj = _fj()
+    _route(monkeypatch, fj, {("GET", "/repos/o/r"): ForgeError("down")})
+    assert fj.list_tree_files("o/r") is None
+    _route(monkeypatch, fj, {("GET", "/repos/o/r"): ["x"]})
+    assert fj.list_tree_files("o/r") is None
+
+
+# ---------------------------------------------------------------- contents + annotations
+@pytest.mark.parametrize("reply,exists,is_file", [
+    ({"type": "file", "encoding": "base64", "content": ""}, True, True),   # zero-byte file
+    ({"sha": "x", "encoding": "base64", "content": "eA=="}, True, True),
+    ({"content": None, "encoding": "base64"}, True, False),
+    ({"type": "file", "encoding": "none", "content": ""}, True, False),
+    ([{"name": "a"}], True, False),                                          # directory
+    ({"message": "weird"}, None, False),
+    (None, None, None),
+    (ForgeError("x HTTP 404"), False, False),
+    (ForgeError("x HTTP 500"), None, None),
+])
+def test_path_exists_and_is_file(monkeypatch, adapter, reply, exists, is_file):
+    calls = _route(monkeypatch, adapter, {("GET", "/repos/o/r/contents/"): reply})
+    assert adapter.path_exists("o/r", "a b/c.py", "rel/1") is exists
+    assert adapter.path_is_file("o/r", "a b/c.py", "rel/1") is is_file
+    assert calls.seen[0][1] == "/repos/o/r/contents/a%20b%2Fc.py?ref=rel%2F1"
+    calls.seen.clear()
+    adapter.path_exists("o/r", "x", None)
+    adapter.path_is_file("o/r", "x")
+    assert [c[1] for c in calls.seen] == ["/repos/o/r/contents/x"] * 2
+
+
+@pytest.mark.parametrize("reply,out", [
+    ({"encoding": "base64", "content": "eD0x\nCg==\n"}, "x=1\n"),
+    ({"encoding": "base64", "content": " \n "}, None),
+    ({"encoding": "base64", "content": "!!!"}, None),
+    ({"encoding": "base64", "content": "//4="}, None),           # not utf-8
+    ({"encoding": "none", "content": "eA=="}, None),
+    ({"encoding": "base64", "content": 5}, None),
+    ({"encoding": "base64", "content": ""}, None),
+    (["x"], None),
+    (ForgeError("x"), None),
+])
+def test_get_file_contract(monkeypatch, adapter, reply, out):
+    calls = _route(monkeypatch, adapter, {("GET", "/repos/o/r/contents/"): reply})
+    assert adapter.get_file("o/r", "d/f.py", "feat/1") == out
+    assert calls.seen[0][1] == "/repos/o/r/contents/d%2Ff.py?ref=feat%2F1"
+
+
+def test_check_annotations_normalizes_rows(monkeypatch, adapter):
+    rows = [{"path": "a.py", "start_line": 4, "message": "m", "annotation_level": "failure"},
+            {"line": 9}, None, "junk"]
+    calls = _route(monkeypatch, adapter, {("GET", "/repos/o/r/check-runs/7/annotations"):
+                                          lambda p: rows})
+    assert adapter.check_annotations("o/r", 7) == [
+        {"path": "a.py", "start_line": 4, "message": "m", "level": "failure"},
+        {"path": "", "start_line": 9, "message": "", "level": ""}]
+    assert calls.seen[0][1].endswith(f"page=1&{adapter.page_size_param}=50")
+    _route(monkeypatch, adapter, {("GET", "/repos/o/r/check-runs/7/annotations"): ForgeError("x")})
+    assert adapter.check_annotations("o/r", 7) is None
+
+
+def test_reaction_summary_counts_valid_rows_only(monkeypatch, adapter):
+    rows = [{"content": "+1", "user": {"login": "a"}}, {"content": "+1", "user": {"login": "b"}},
+            {"content": "+1", "user": {"login": "a"}}, {"content": "", "user": {"login": "c"}},
+            {"content": "-1", "user": "d"}, {"content": "-1", "user": {"login": ""}},
+            "junk", {"content": "heart", "user": {"login": "e"}}]
+    calls = _route(monkeypatch, adapter, {("GET", "/repos/o/r/issues/comments/3/reactions"):
+                                          lambda p: rows})
+    assert adapter.reaction_summary("o/r", 3) == {"+1": {"a": 1, "b": 1}, "heart": {"e": 1}}
+    assert calls.seen[0][1].endswith(f"page=1&{adapter.page_size_param}=100")
+    _route(monkeypatch, adapter, {("GET", "/repos/o/r/issues/comments/3/reactions"):
+                                  ForgeError("disabled")})
+    assert adapter.reaction_summary("o/r", 3) is None
+
+
+@pytest.mark.parametrize("base,github", [
+    ("https://api.github.com", True), ("https://api.github.com:443/", True),
+    ("http://api.github.com", False), ("https://api.github.com.evil.io", False),
+    ("https://api.github.com:8443", False), ("https://api.github.com:bad", False),
+    ("https://git.example/api/v1", False)])
+def test_github_route_needs_exact_https_host(base, github):
+    assert forges._is_github_base(base) is github
+
+
+def test_log_row_redacts_before_truncating():
+    out = forges._log_row("github", "bad row", {"t": "token=" + "A" * 40})
+    assert out.startswith("github bad row: ") and "A" * 40 not in out
+    assert len(out) <= len("github bad row: ") + 120
