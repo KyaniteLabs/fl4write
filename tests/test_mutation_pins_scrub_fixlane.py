@@ -72,6 +72,10 @@ def test_redact_returns_non_text_and_empty_unchanged(value):
     ('password = "abcdef"', 'password = "[redacted]"'),
     ("token: 'abcdef'", "token: '[redacted]'"),
     ("secret=abcdef", "secret=[redacted]"),
+    # key names are case-insensitive (env/YAML style); values keep any case
+    ("API_KEY=abc123", "API_KEY=[redacted]"),
+    ('Token: "short1"', 'Token: "[redacted]"'),
+    ("password=ABCDEF", "password=[redacted]"),
 ])
 def test_redact_assignment_keeps_its_closing_quote(text, expected):
     assert scrub.redact_credentials(text) == expected

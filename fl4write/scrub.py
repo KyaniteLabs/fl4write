@@ -147,7 +147,9 @@ def redact_credentials(text: str) -> str:
         tail = m.group(0)[-1] if m.group(0) else ""
         closing = tail if tail in ("'", '"') else ""
         return out[m.start():m.start(1)] + "[redacted]" + closing
-    out = _re.sub(_ASSIGN_KEY, _assign_sub, out)
+    # key names match case-insensitively: API_KEY=… / Token: … are the common
+    # env/YAML spellings, and the analyzer's own check already ignores case
+    out = _re.sub(_ASSIGN_KEY, _assign_sub, out, flags=_re.IGNORECASE)
 
     # D4: secrets split by '.' (JWT) or '/' (AWS secret key) defeat the 16+
     # contiguous-run rule and leak partial credential material. A JWT is
