@@ -305,12 +305,8 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
             log.warning("state omni core %s: non-int %r — sweep state reset", key, v)
             _omni_core_bad = True
     if _omni_core_bad:
-        for key in ("omni_complete", "omni_published", "omni_cursor", "omni_head",
-                    "omni_fp", "omni_findings", "omni_next_id", "omni_total",
-                    "omni_scanned_total", "omni_unscannable", "omni_unfetchable",
-                    "omni_file_fails"):
-            out.pop(key, None)
-        # omni_issue is deliberately kept: the next audit reuses the issue
+        from .omni_lifecycle import reset as _omni_reset
+        _omni_reset(out)  # every sweep key; omni_issue is kept for reuse
 
     # F11-C009 (reopened F5-204): numeric VALUES inside failure maps are
     # consumed by raw int() — normalize the map values, not just containers
@@ -327,7 +323,7 @@ def _normalize_aux(data: dict[str, Any]) -> dict[str, Any]:
             if len(kept) != len(v):
                 log.warning("state %s: dropping non-int values (bounded reconcile)", key)
             out[key] = kept
-    for key in ("omni_complete", "omni_published", "retro_complete", "omni_aborted"):
+    for key in ("omni_complete", "omni_published", "retro_complete"):
         v = out.get(key)
         if v is not None and not isinstance(v, bool):
             # a truthy STRING ("false") falsely terminalized lanes
