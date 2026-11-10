@@ -7,6 +7,7 @@ import json
 from contextlib import contextmanager
 from pathlib import Path
 
+from .exhaustive_lifecycle import CertStatus, ObsoletePublication
 from .exhaustive_publication import PublicationError, inspect_owned, ledger_body, publish_owned
 
 
@@ -104,12 +105,14 @@ def replay_publication(repo: Path, state_path: Path, adapter, config, issue: int
         if _git(repo, "rev-parse", "HEAD") != state["head"]:
             with _publication_adapter(adapter, config) as authenticated:
                 observed = inspect_owned(authenticated, config.repo, issue, config.bot_login)
-            outcome = "old_body_observed" if observed["body"] == request["body"] else "old_body_not_observed"
+            outcome = (ObsoletePublication.OLD_BODY_OBSERVED if observed["body"] == request["body"]
+                       else ObsoletePublication.OLD_BODY_NOT_OBSERVED)
             _atomic_json(state_path.parent / ("publication-obsolete-" + request["candidate_sha256"] + ".json"),
                          {"status": outcome, "previous_head": state["head"],
                           "body_sha256": request["body_sha256"], "issue": issue})
             _atomic_json(state_path.parent / "certification.json",
-                         {"status": "invalidated", "previous_sha": state["head"], "reason": "HEAD moved"})
+                         {"status": CertStatus.INVALIDATED, "previous_sha": state["head"],
+                          "reason": "HEAD moved"})
             pending.unlink()
             return False
         with _publication_adapter(adapter, config) as authenticated:
@@ -117,7 +120,7 @@ def replay_publication(repo: Path, state_path: Path, adapter, config, issue: int
         _atomic_json(state_path, state)
         if request["certification"]:
             _atomic_json(state_path.parent / "certification.json", {
-                "status": "forge_published", "sha": state["certified_sha"], "ledger_issue": issue,
+                "status": CertStatus.FORGE_PUBLISHED, "sha": state["certified_sha"], "ledger_issue": issue,
             })
         pending.unlink()
         return True

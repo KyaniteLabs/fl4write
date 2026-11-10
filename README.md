@@ -82,7 +82,7 @@ Current fleet state (2026-09-05; recovered [audit ledger](docs/pm-recovery/ROUND
 across GitHub + Forgejo in hourly cycles; the tier scheduler selects due repos
 (`run-cycle.sh`, hourly crontab, single-host law — LEARNINGS #17).
 
-The merged suite (exhaustive-loop candidate + main) is **2353 passing + 4 skipped** — count stamped by the doc-truth verifier run on a clean tree; hand-editing this figure is a false receipt (REVIEW LAWS 2026-09-19).
+The merged suite (exhaustive-loop candidate + main) is **2369 passing + 4 skipped** — count stamped by the doc-truth verifier run on a clean tree; hand-editing this figure is a false receipt (REVIEW LAWS 2026-09-19).
 
 Older candidate and round counts (round 13 through the 2026-09-16
 integration pass) are history; they live in the
