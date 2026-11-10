@@ -481,3 +481,214 @@ def test_verify_non_pytest_or_chained_cmds_never_run(monkeypatch, cmd):
     rig = VerifyRig(monkeypatch)
     assert _verify(make_config(test_cmd=cmd)) is None
     assert rig.evidence == []
+
+
+# ---------------------------------------------------------------- attempt_fix
+import json as _json  # noqa: E402
+
+from fl4write.models import Finding  # noqa: E402
+
+HEAD = "d" * 40
+
+
+def _finding(**over):
+    base = dict(rule_id="loc-ceiling", severity="Major", path="pkg/mod.py", line=3,
+                category="General", message="off by one", proposal="return 1")
+    base.update(over)
+    return Finding(**base)
+
+
+class FixRig:
+    """Fake git + forge + model for attempt_fix; every call is recorded."""
+
+    def __init__(self, monkeypatch, *, content="x = 2\n", fixed="x = 1\n", tests=True,
+                 rc=None, stdout=None, model=None):
+        self.calls: list = []
+        self.prompts: list = []
+        self.api: list = []
+        self.tokens: list = []
+        self.rc = rc or {}
+        self.stdout = {"rev-parse HEAD": HEAD, "write-tree": "T1", "rev-parse HEAD^{tree}": "T1"}
+        self.stdout.update(stdout or {})
+        monkeypatch.setenv("CODESITTER_GITHUB_TOKEN", "tok-fix")
+        monkeypatch.setattr(executor, "_test_isolation", lambda: ("host", ""))
+        monkeypatch.setattr(executor, "_get_file_content", lambda r, p, ref: content)
+        monkeypatch.setattr(executor, "_run_tests", lambda cwd, cfg: tests)
+        monkeypatch.setattr(executor, "_run", self._run)
+        monkeypatch.setattr(executor, "_default_branch", lambda repo: "trunk")
+        monkeypatch.setattr(executor, "_gh_api", self._api)
+        reply = model if model is not None else _json.dumps({"fixed_content": fixed})
+
+        def call_model(route, prompt, system=None, **kw):
+            self.prompts.append((route.model, prompt, system))
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+        monkeypatch.setattr(executor, "_call_model", call_model)
+
+    def _key(self, cmd):
+        return " ".join(cmd[1:3]) if cmd[0] == "git" else cmd[0]
+
+    def _run(self, cmd, cwd=None, timeout=120, env=None):
+        self.calls.append({"cmd": cmd, "cwd": cwd, "timeout": timeout, "env": env})
+        if env and env.get("GIT_ASKPASS") and Path(env["GIT_ASKPASS"]).exists():
+            self.tokens.append(subprocess.run([env["GIT_ASKPASS"]], capture_output=True,
+                                              text=True).stdout)
+        key = self._key(cmd)
+        rc = self.rc.get(key, 0)
+        if callable(rc):
+            rc = rc()
+        out = self.stdout.get(key, "")
+        if cmd[:2] == ["git", "rev-parse"]:
+            out = self.stdout.get(" ".join(cmd[1:3]), "")
+        return subprocess.CompletedProcess(cmd, rc, out, "err-tail" if rc else "")
+
+    def _api(self, method, path, data=None):
+        self.api.append((method, path, data))
+        return {"number": 41, "html_url": "https://x/pr/41"}
+
+    def cmds(self, name):
+        return [c for c in self.calls if c["cmd"][:2] == ["git", name]]
+
+
+def _fix(cfg=None, finding=None, pr=None):
+    cfg = cfg or make_config(fix={"enabled": True})
+    pr = pr or make_pr(head_sha=HEAD, number=12)
+    return executor.attempt_fix(pr, finding or _finding(), cfg)
+
+
+def test_fix_happy_path_opens_one_pr_from_a_hashed_bot_branch(monkeypatch):
+    import hashlib
+    rig = FixRig(monkeypatch)
+    out = _fix()
+    tag = hashlib.blake2b(f"{HEAD}:loc-ceiling:pkg/mod.py:3".encode(), digest_size=6).hexdigest()
+    branch = f"fl4write/fix-12-{tag}"
+    assert out == {"status": "pr_opened", "reason": "", "pr_number": 41,
+                   "pr_url": "https://x/pr/41", "branch": branch}
+    (push,) = rig.cmds("push")
+    assert push["cmd"] == ["git", "push", "-q", "https://github.com/KyaniteLabs/kinocut.git",
+                           f"HEAD:refs/heads/{branch}"]
+    assert push["timeout"] == 120
+    assert rig.tokens == ["tok-fix\n", "tok-fix\n"]           # fetch + push only
+    (fetch,) = rig.cmds("fetch")
+    assert fetch["cmd"][-2:] == ["https://github.com/KyaniteLabs/kinocut.git", HEAD]
+    assert fetch["timeout"] == 180
+    assert fetch["env"]["GIT_CONFIG_GLOBAL"] == os.devnull and \
+        push["env"]["GIT_CONFIG_GLOBAL"] == os.devnull
+    (add,) = rig.cmds("add")
+    assert add["cmd"] == ["git", "add", "--", "pkg/mod.py"]
+    (commit,) = rig.cmds("commit")
+    env = commit["env"]
+    assert env["GIT_AUTHOR_NAME"] == env["GIT_COMMITTER_NAME"] == "fl4write[bot]"
+    assert env["GIT_AUTHOR_EMAIL"] == env["GIT_COMMITTER_EMAIL"] == "fl4write@kyanitelabs.tech"
+    assert env["GIT_CONFIG_GLOBAL"] == os.devnull and "tok-fix" not in "".join(env.values())
+    assert commit["cmd"][4].startswith("fix(loc-ceiling): off by one\n\nCo-authored-by: fl4write")
+    workdir = rig.calls[0]["cwd"]
+    assert all(c["cwd"] == workdir for c in rig.calls) and not Path(workdir).exists()
+    ((method, path, body),) = rig.api
+    assert (method, path) == ("POST", "/repos/KyaniteLabs/kinocut/pulls")
+    assert body["head"] == branch and body["base"] == "trunk"
+    assert body["title"] == "fix(loc-ceiling): off by one"
+    assert "[Major] pkg/mod.py:3" in body["body"] and "return 1" in body["body"]
+
+
+def test_fix_prompt_fences_the_exact_file_bytes(monkeypatch):
+    rig = FixRig(monkeypatch, content="s = '```'\n")
+    _fix()
+    (_, prompt, system) = rig.prompts[0]
+    assert "FINDING: [Major] pkg/mod.py:3 — off by one" in prompt
+    assert "PROPOSAL: return 1" in prompt
+    assert "````\ns = '```'\n\n````" in prompt                 # fence widened past the content
+    assert system.startswith(executor.PATCH_SYSTEM)
+
+
+def test_fix_falls_back_to_the_second_model_route(monkeypatch):
+    calls = []
+    rig = FixRig(monkeypatch)
+
+    def flaky(route, prompt, system=None, **kw):
+        calls.append(route.model)
+        if route.model == "test-model":
+            raise RuntimeError("402")
+        return _json.dumps({"fixed_content": "x = 1\n"})
+    monkeypatch.setattr(executor, "_call_model", flaky)
+    cfg = make_config(fix={"enabled": True},
+                      fallback_model={"endpoint": "http://m2/v1", "model": "fb", "key_env": "K2"})
+    assert _fix(cfg)["status"] == "pr_opened"
+    assert calls == ["test-model", "fb"]
+    assert rig.prompts == []
+
+
+def test_fix_same_route_fallback_is_not_called_twice(monkeypatch):
+    rig = FixRig(monkeypatch, model=RuntimeError("down"))
+    cfg = make_config(fix={"enabled": True}, fallback_model={
+        "endpoint": "http://model/v1/chat/completions", "model": "test-model", "key_env": "MK"})
+    out = _fix(cfg)
+    assert out["status"] == "error" and out["reason"].startswith("model unavailable: down")
+    assert len(rig.prompts) == 1
+
+
+@pytest.mark.parametrize("over,status,reason", [
+    (dict(model="no json at all"), "error", "model output unparseable"),
+    (dict(model=_json.dumps({"fixed_content": None})), "nofix", "model returned no fix"),
+    (dict(model=_json.dumps({"fixed_content": 7})), "nofix", "model returned no fix"),
+    (dict(fixed="x = 2\n"), "nofix", "model patch identical to original (no-op)"),
+    (dict(content=None), "error", "cannot fetch pkg/mod.py@dddddddd"),
+    (dict(tests=False), "testfail", "tests failed with fix applied"),
+    (dict(rc={"init -q": 1}), "error", "git init failed"),
+    (dict(rc={"fetch -q": 1}), "error", "fetch of PR head failed: err-tail"),
+    (dict(rc={"checkout -q": 1}), "error", "checkout of PR head failed"),
+    (dict(stdout={"rev-parse HEAD": "e" * 40}), "error", "checked-out SHA does not match"),
+    (dict(rc={"cp": 1}), "error", "test-tree copy failed"),
+    (dict(rc={"add --": 1}), "error", "git add failed: err-tail"),
+    (dict(rc={"write-tree": 1}), "error", "cannot capture pre-commit tree"),
+    (dict(stdout={"write-tree": ""}), "error", "cannot capture pre-commit tree"),
+    (dict(rc={"commit -q": 1}), "error", "git commit failed: err-tail"),
+    (dict(stdout={"rev-parse HEAD^{tree}": "T2"}), "error", "committed tree differs"),
+])
+def test_fix_every_failure_is_a_terminal_outcome_with_no_pr(monkeypatch, over, status, reason):
+    rig = FixRig(monkeypatch, **over)
+    out = _fix()
+    assert out["status"] == status and out["reason"].startswith(reason)
+    assert rig.api == [] and rig.cmds("push") == []
+
+
+def test_fix_whitespace_only_change_is_a_real_fix(monkeypatch):
+    FixRig(monkeypatch, content="def f():\n  return 1\n", fixed="def f():\n    return 1\n")
+    assert _fix()["status"] == "pr_opened"
+
+
+def test_fix_rejected_push_retries_once_with_lease_and_a_fresh_token(monkeypatch):
+    pushes = iter([1, 0])
+    rig = FixRig(monkeypatch, rc={"push -q": lambda: next(pushes)})
+    assert _fix()["status"] == "pr_opened"
+    first, second = rig.cmds("push")
+    assert "--force-with-lease" not in first["cmd"]
+    assert second["cmd"][3] == "--force-with-lease" and second["timeout"] == 120
+    assert rig.tokens == ["tok-fix\n"] * 3
+
+
+def test_fix_push_failing_twice_is_an_error(monkeypatch):
+    rig = FixRig(monkeypatch, rc={"push -q": 1})
+    out = _fix()
+    assert out == {"status": "error", "reason": "push failed: err-tail"}
+    assert len(rig.cmds("push")) == 2 and rig.api == []
+
+
+@pytest.mark.parametrize("pr_over,cfg,status", [
+    (dict(is_fork=True), {"enabled": True}, "blocked"),
+    ({}, {"enabled": False}, "blocked"),
+    (dict(is_bot_author=True, title="bump lockfile"), {"enabled": True}, "blocked"),
+])
+def test_fix_rails_block_before_any_model_or_git(monkeypatch, pr_over, cfg, status):
+    rig = FixRig(monkeypatch)
+    out = _fix(make_config(fix=cfg), pr=make_pr(head_sha=HEAD, **pr_over))
+    assert out["status"] == status and "escalation" in out
+    assert rig.prompts == [] and rig.calls == []
+
+
+def test_fix_isolation_unavailable_refuses_before_the_model(monkeypatch):
+    rig = FixRig(monkeypatch)
+    monkeypatch.setattr(executor, "_test_isolation", lambda: ("unavailable", "no docker"))
+    assert _fix() == {"status": "error", "reason": "test isolation unavailable: no docker"}
+    assert rig.prompts == []
