@@ -4166,9 +4166,11 @@ class TestMECERound11Engine2:
         src = (REPO_ROOT / "fl4write/engine.py").read_text()
         # bounded shadow belt
         assert "len(pm_shadow) > 200" in src
-        # defer counters die with their reason (terminal success)
-        assert 'f"retro_defer:{pr.number}:{pr.head_sha[:10]}"' in src
-        assert "retro_defer" in src
+        # defer counters die with their reason (terminal success): the key
+        # has one home (sweep_lifecycle) and the engine clears it on success
+        life = (REPO_ROOT / "fl4write/sweep_lifecycle.py").read_text()
+        assert 'f"retro_defer:{number}:{head_sha[:10]}"' in life
+        assert "sweeps.retro_done(st, parked, pr.number, pr.head_sha)" in src
 
     def test_shadow_dependency_skip_never_touches_live_state(self, tmp_path, monkeypatch):
         import fl4write.engine as eng
