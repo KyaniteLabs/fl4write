@@ -23,6 +23,7 @@ from typing import Any
 
 from .config import ForgeBinding
 from . import renderer
+from . import writeguard
 from .models import PullRequest
 from .timestamps import parse_iso as _parse_iso
 
@@ -107,7 +108,12 @@ class ForgeAdapter:
               _retry: bool = True) -> Any:
         """One API call. GETs retry ONCE on throttle/transient (403/429/5xx),
         honoring Retry-After up to 30s; POSTs never blind-retry (double-post
-        risk). Every failure names the forge, method, and path."""
+        risk). Every failure names the forge, method, and path.
+
+        Every MUTATING method is checked by the outbound write guard before
+        the request (and socket) is built: a target outside the allowlist
+        raises OutOfBoundsWrite and never leaves the process."""
+        writeguard.check_forge_write(self.base, method, path, caller=f"{self.name}._call")
         req = urllib.request.Request(
             f"{self.base}{path}",
             data=json.dumps(payload).encode() if payload is not None else None,
@@ -147,7 +153,8 @@ class ForgeAdapter:
     def _call_text(self, method: str, path: str, _retry: bool = True) -> str:
         """One API call returning RAW TEXT (the Gitea .diff endpoint is
         text/plain — json.loads would crash on it). Same retry/throttle
-        semantics as _call."""
+        semantics as _call; mutating methods cross the same write guard."""
+        writeguard.check_forge_write(self.base, method, path, caller=f"{self.name}._call_text")
         req = urllib.request.Request(
             f"{self.base}{path}", headers=self._headers(), method=method
         )

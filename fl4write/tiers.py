@@ -32,6 +32,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from . import writeguard
+
 TIER_CADENCE_S = {"hot": 3600, "warm": 4 * 3600, "cold": 24 * 3600}
 STATE_DIR = Path.home() / ".fl4write"
 try:
@@ -232,12 +234,19 @@ def main() -> int:
 
     parsed = []
     alerts: list[str] = []
+    parked = 0
     for f in args.configs:
         try:
             c = load_config(f)
-            github = "api.github.com" in next(
-                b.api_base for b in c.forges.values() if b.role == "primary"
-            )
+            primary = next(b for b in c.forges.values() if b.role == "primary")
+            github = "api.github.com" in primary.api_base
+            if not writeguard.write_allowed(primary.api_base, c.repo):
+                # The outbound write guard refuses every mutating call to this
+                # target (card t_c7791d3f). Scheduling it would only produce
+                # refused writes every cycle, so it leaves the plan — visibly,
+                # as one aggregate ALERT, never silently.
+                parked += 1
+                continue
             parsed.append((f, c.repo, github))
         except Exception as exc:  # noqa: BLE001 — a bad config cycles anyway
             alerts.append(f"config {f} unparseable ({str(exc)[:60]}) — scheduled hot as fallback")
@@ -257,6 +266,12 @@ def main() -> int:
         if line.startswith("ALERT: "):
             alerts.append(line[len("ALERT: "):])
     summary = next((ln for ln in buf.getvalue().splitlines() if ln.startswith("tiers: ")), "")
+    if parked:
+        alerts.append(
+            f"{parked} config(s) parked by the outbound write guard — primary target "
+            f"outside KyaniteLabs (fl4write/writeguard.py); not scheduled"
+        )
+        summary += f" — {parked} parked (non-allowlisted)"
     if args.plan:
         print(json.dumps({"due": due_files, "alerts": alerts, "summary": summary}))
     elif args.json:

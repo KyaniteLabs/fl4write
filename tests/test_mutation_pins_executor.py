@@ -958,8 +958,8 @@ def test_gh_api_sends_an_authenticated_json_request(monkeypatch):
         return Resp(b'{"ok": 1}')
     monkeypatch.setenv("CODESITTER_GITHUB_TOKEN", "t0k")
     monkeypatch.setattr(executor.urllib.request, "urlopen", urlopen)
-    assert executor._gh_api("PUT", "/repos/o/r/x", {"a": 1}) == {"ok": 1}
-    assert seen == {"url": "https://api.github.com/repos/o/r/x", "method": "PUT",
+    assert executor._gh_api("PUT", "/repos/KyaniteLabs/r/x", {"a": 1}) == {"ok": 1}
+    assert seen == {"url": "https://api.github.com/repos/KyaniteLabs/r/x", "method": "PUT",
                     "data": b'{"a": 1}', "auth": "token t0k",
                     "ctype": "application/json", "timeout": 30}
     assert executor._gh_api("GET", "/x") == {"ok": 1}

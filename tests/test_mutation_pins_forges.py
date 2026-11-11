@@ -236,9 +236,11 @@ class Net:
 def test_call_sends_auth_json_and_parses(monkeypatch):
     monkeypatch.setenv("GHT", "tok")
     net = Net(monkeypatch, [b'{"a": 1}'])
-    assert _gh()._call("POST", "/x", {"k": "v"}) == {"a": 1}
+    # allowlisted target (write guard): a real repo write, still one request
+    assert _gh()._call("POST", "/repos/KyaniteLabs/x/issues", {"k": "v"}) == {"a": 1}
     (req, timeout), = net.reqs
-    assert req.full_url == "https://api.github.com/x" and req.get_method() == "POST"
+    assert req.full_url == "https://api.github.com/repos/KyaniteLabs/x/issues"
+    assert req.get_method() == "POST"
     assert req.data == b'{"k": "v"}' and timeout == 30
     assert req.get_header("Authorization") == "token tok"
     assert req.get_header("Content-type") == "application/json"
@@ -286,7 +288,7 @@ def test_call_second_failure_is_a_named_forge_error(monkeypatch):
 def test_call_writes_never_blind_retry(monkeypatch, method):
     net = Net(monkeypatch, [_http_error(503)])
     with pytest.raises(ForgeError, match="HTTP 503"):
-        _gh()._call(method, "/x", {})
+        _gh()._call(method, "/repos/KyaniteLabs/x/issues", {})
     assert len(net.reqs) == 1 and net.sleeps == []
 
 
@@ -306,7 +308,7 @@ def test_call_transport_errors_retry_get_once_then_wrap(monkeypatch, exc):
     assert len(net.reqs) == 2 and net.sleeps == [1]
     net = Net(monkeypatch, [exc])
     with pytest.raises(ForgeError):
-        _gh()._call("POST", "/x", {})
+        _gh()._call("POST", "/repos/KyaniteLabs/x/issues", {})
     assert len(net.reqs) == 1 and net.sleeps == []
 
 

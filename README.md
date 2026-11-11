@@ -69,7 +69,7 @@ its image id (`FL4WRITE_TEST_IMAGE=sha256:...`, env or `~/.bashrc`); see
 lanes refuse to execute code. `FL4WRITE_TEST_ISOLATION=host` restores the old
 same-user host execution as an explicit, logged opt-out.
 
-## Status — v0.4+ production (fleet of 130 central configs; see PILOT.md)
+## Status — v0.4+ production (fleet of 86 central configs + 44 parked personal-fork configs; see PILOT.md)
 
 All five review modes live (open-PR, post-merge, retro audit, ci_watch,
 omnisweep) plus gatekeeper, verify-tests and acceptance metrics. The issues
@@ -78,11 +78,11 @@ no fleet repo has enabled it yet — luna F3-004 doc truth).
 **Usage:** `python3 -m fl4write.cli <config> [--live] [--fixes] [--issues] [--omni]`
 (mode flag typos are refused — unknown flags exit 2).
 
-Current fleet state (2026-09-05; recovered [audit ledger](docs/pm-recovery/ROUND-LEDGER.md)): **130 central configs**
+Current fleet state (2026-09-05; recovered [audit ledger](docs/pm-recovery/ROUND-LEDGER.md)): **86 central configs** (+44 personal-account fork configs in `parked-forks/`, outside the `*.fl4write.yaml` planner glob — FL4WRITE writes only to KyaniteLabs)
 across GitHub + Forgejo in hourly cycles; the tier scheduler selects due repos
 (`run-cycle.sh`, hourly crontab, single-host law — LEARNINGS #17).
 
-The merged suite (exhaustive-loop candidate + main) is **2401 passing + 4 skipped** — count stamped by the doc-truth verifier run on a clean tree; hand-editing this figure is a false receipt (REVIEW LAWS 2026-09-19).
+The merged suite (exhaustive-loop candidate + main) is **2375 passing + 4 skipped** — count stamped by the doc-truth verifier run on a clean tree; hand-editing this figure is a false receipt (REVIEW LAWS 2026-09-19).
 
 Older candidate and round counts (round 13 through the 2026-09-16
 integration pass) are history; they live in the
