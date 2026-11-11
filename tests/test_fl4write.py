@@ -15,6 +15,7 @@ from fl4write.analyzer import ModelUnavailable, analyze
 from fl4write.engine import run_cycle
 from fl4write.forges import ForgeAdapter
 from fl4write.models import Finding, PullRequest
+from fl4write.outcomes import ReviewMark
 
 
 # ---------------------------------------------------------------- helpers
@@ -131,7 +132,7 @@ class TestState:
     def test_headsha_predicate_selfheals(self, tmp_path):
         st = state.load_state(tmp_path / "s.json")
         assert state.needs_review(st, 1, "sha-1")
-        state.mark_reviewed(st, 1, "sha-1", "ok")
+        state.mark_reviewed(st, 1, "sha-1", ReviewMark.REVIEWED, 0)
         assert not state.needs_review(st, 1, "sha-1")
         assert state.needs_review(st, 1, "sha-2")  # divergence = re-review
         st["prs"].pop("1")
@@ -672,7 +673,7 @@ class TestAuditRegressions:
     def test_state_mark_reviewed_preserves_fix_depth(self):
         """The fix cap must persist across pushes (record was replaced before)."""
         st = {"version": 1, "prs": {"7": {"last_reviewed_sha": "aaa", "last_outcome": "reviewed:1", "fix_depth": 2}}}
-        state.mark_reviewed(st, 7, "bbb", "reviewed:1")
+        state.mark_reviewed(st, 7, "bbb", ReviewMark.REVIEWED, 1)
         assert st["prs"]["7"]["fix_depth"] == 2
 
     def test_stale_empty_lock_is_broken(self, tmp_path):

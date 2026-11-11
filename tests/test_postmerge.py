@@ -23,6 +23,7 @@ from fl4write import renderer, state
 from fl4write.engine import run_cycle
 from fl4write.forges import ForgeAdapter
 from fl4write.models import PullRequest
+from fl4write.outcomes import ReviewMark
 
 
 # ---------------------------------------------------------------- helpers
@@ -262,7 +263,7 @@ class TestPostMergeSweep:
         initial_watermark = _hours_ago(3, "12:00:00")
         st["merged_since"] = initial_watermark
         for pr in forge.merged_prs[2:]:
-            state.mark_reviewed(st, pr.number, pr.head_sha, "reviewed:0")
+            state.mark_reviewed(st, pr.number, pr.head_sha, ReviewMark.REVIEWED, 0)
         state.save_state(state_path, st)
 
         _run(tmp_path, forge, monkeypatch, shadow=True)

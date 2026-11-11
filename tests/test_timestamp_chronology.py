@@ -6,6 +6,7 @@ import pytest
 from fl4write import engine, state
 from fl4write.config import ForgeBinding
 from fl4write.forges import ForgejoAdapter, GitHubAdapter
+from fl4write.outcomes import ReviewMark
 from test_postmerge import make_config
 
 
@@ -67,7 +68,7 @@ def test_actual_adapters_capped_postmerge_reviews_every_pr(tmp_path, monkeypatch
 
     def review(pr, *args, **kwargs):
         reviewed.append(pr.number)
-        state.mark_reviewed(st, pr.number, pr.head_sha, 'reviewed:0')
+        state.mark_reviewed(st, pr.number, pr.head_sha, ReviewMark.REVIEWED, 0)
         return 'reviewed'
 
     monkeypatch.setattr(engine, '_review_pr', review)
@@ -111,7 +112,7 @@ def test_retro_cursor_capped_cycles_use_instant_order(tmp_path, monkeypatch, kin
 
     def review(pr, *args):
         reviewed.append(pr.number)
-        state.mark_reviewed(st, pr.number, pr.head_sha, 'reviewed:0')
+        state.mark_reviewed(st, pr.number, pr.head_sha, ReviewMark.REVIEWED, 0)
         return 'reviewed'
 
     monkeypatch.setattr(engine, '_retro_review_pr', review)

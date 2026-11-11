@@ -197,10 +197,11 @@ def test_needs_review_on_new_unknown_or_shadow_heads():
 
 def test_mark_reviewed_merges_into_the_record():
     s = {"prs": {"3": {"fix_depth": 2, "last_reviewed_sha": "old"}}}
-    st.mark_reviewed(s, 3, "new", "posted")
-    st.mark_reviewed(s, 4, "h", "shadow")
-    assert s["prs"] == {"3": {"fix_depth": 2, "last_reviewed_sha": "new", "last_outcome": "posted"},
-                        "4": {"last_reviewed_sha": "h", "last_outcome": "shadow"}}
+    from fl4write.outcomes import ReviewMark
+    st.mark_reviewed(s, 3, "new", ReviewMark.REVIEWED, 2)
+    st.mark_reviewed(s, 4, "h", ReviewMark.SHADOW, 0)
+    assert s["prs"] == {"3": {"fix_depth": 2, "last_reviewed_sha": "new", "last_outcome": "reviewed:2"},
+                        "4": {"last_reviewed_sha": "h", "last_outcome": "shadow:0"}}
 
 
 # ---------------------------------------------------------------- pruning

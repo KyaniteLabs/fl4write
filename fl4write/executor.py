@@ -52,6 +52,7 @@ from .analyzer import _call_model
 from .config import RepoConfig
 from .fixlane import FixLaneBlocked, dependency_depth, escalate, fix_allowed, merge_own_pr
 from .models import Finding, PullRequest
+from .outcomes import FixStatus
 
 log = logging.getLogger("fl4write.executor")
 
@@ -412,7 +413,8 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
 
     _t0 = __import__("time").time()
 
-    def _finish(status: str, reason: str = "", **extra) -> dict[str, Any]:
+    def _finish(status: FixStatus, reason: str = "", **extra) -> dict[str, Any]:
+        status = FixStatus(status)  # only an enumerated outcome leaves this lane
         # F10-B002: ONE guarded terminal fix_attempt outcome event per attempt.
         # Infrastructure error returns used to omit the event entirely and
         # telemetry undercounted failures; every path records exactly once.
@@ -429,24 +431,24 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
 
     blocked_reason = fix_allowed(pr, config, 0)
     if blocked_reason:
-        return _finish("blocked", blocked_reason,
+        return _finish(FixStatus.BLOCKED, blocked_reason,
                        escalation=escalate(pr, [finding], blocked_reason))
 
     if dependency_depth(pr, pr.title, config) == "skip":
-        return _finish("skipped", "dependency PR")
+        return _finish(FixStatus.SKIPPED, "dependency PR")
 
     _iso_mode, _iso_detail = _test_isolation()
     if _iso_mode == "unavailable":
         # every push is gated on executed tests; refuse before the model call
-        return _finish("error", f"test isolation unavailable: {_iso_detail}")
+        return _finish(FixStatus.ERROR, f"test isolation unavailable: {_iso_detail}")
 
     try:
         content = _get_file_content(pr.repo, finding.path, pr.head_sha)
     except Exception as exc:  # noqa: BLE001 - F11-B001: containment belt
         log.warning("file fetch crashed for %s@%s: %s", finding.path, pr.head_sha[:8], exc)
-        return _finish("error", f"cannot fetch {finding.path}@{pr.head_sha[:8]}: {type(exc).__name__}")
+        return _finish(FixStatus.ERROR, f"cannot fetch {finding.path}@{pr.head_sha[:8]}: {type(exc).__name__}")
     if content is None:
-        return _finish("error", f"cannot fetch {finding.path}@{pr.head_sha[:8]}")
+        return _finish(FixStatus.ERROR, f"cannot fetch {finding.path}@{pr.head_sha[:8]}")
 
     from .renderer import path_display  # MECE round-5 (terra F5-002): raw
     # paths in the fix prompt can carry control/credential-shaped content —
@@ -499,14 +501,14 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
     except ValueError as exc:  # parse-level (UltraQA round 2): ambiguous or
         # unparseable model output is NOT a transport failure — label it so ops
         # triage doesn't chase the model route for a parse problem
-        return _finish("error", f"model output unparseable: {str(exc)[:120]}")
+        return _finish(FixStatus.ERROR, f"model output unparseable: {str(exc)[:120]}")
     except Exception as exc:  # audit A6: network/HTTP/RuntimeError classes
         # crashed whole cycles through the narrow tuple — fail-open means
         # except Exception or it isn't (LEARNINGS #25c)
-        return _finish("error", f"model unavailable: {str(exc)[:120]}")
+        return _finish(FixStatus.ERROR, f"model unavailable: {str(exc)[:120]}")
 
     if fixed is None or not isinstance(fixed, str):
-        return _finish("nofix", "model returned no fix")
+        return _finish(FixStatus.NOFIX, "model returned no fix")
     if fixed == content:
         # F10-E001: the no-op compare is EXACT bytes — a whitespace-only
         # (indentation) change is a REAL fix and must reach the tree. The old
@@ -514,7 +516,7 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
         # Live-caught (first real attempt, 2026-09-02): a no-op patch flowed
         # through worktree→commit→push→PR and died as an opaque 422. A patch
         # identical to the original is a nofix, caught BEFORE any writes.
-        return _finish("nofix", "model patch identical to original (no-op)")
+        return _finish(FixStatus.NOFIX, "model patch identical to original (no-op)")
 
     token = os.environ.get("CODESITTER_GITHUB_TOKEN", "")
     workdir = Path(tempfile.mkdtemp(prefix="fl4write-fix-"))
@@ -524,7 +526,7 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
         # invalid ref; cloning the default branch reverted main-side changes).
         fetch_url = f"https://github.com/{pr.repo}.git"
         if _run(["git", "init", "-q"], cwd=workdir).returncode != 0:
-            return _finish("error", "git init failed")
+            return _finish(FixStatus.ERROR, "git init failed")
         pull_env = _git_hardened_env(_push_token_env(workdir, token))
         askpass_envs.append(pull_env)
         fetch = _run(
@@ -533,16 +535,16 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
         )
         _drop_askpass(pull_env)  # token helper gone before any code checkout
         if fetch.returncode != 0:
-            return _finish("error", f"fetch of PR head failed: {fetch.stderr[-100:]}")
+            return _finish(FixStatus.ERROR, f"fetch of PR head failed: {fetch.stderr[-100:]}")
         if _run(["git", "checkout", "-q", "--detach", "FETCH_HEAD"], cwd=workdir).returncode != 0:
-            return _finish("error", "checkout of PR head failed")
+            return _finish(FixStatus.ERROR, "checkout of PR head failed")
         head_verify = _run(["git", "rev-parse", "HEAD"], cwd=workdir)
         if head_verify.stdout.strip() != pr.head_sha:
-            return _finish("error", "checked-out SHA does not match PR head — refusing")
+            return _finish(FixStatus.ERROR, "checked-out SHA does not match PR head — refusing")
 
         err = _write_contained(workdir, finding.path, fixed)
         if err:
-            return _finish("error", err)
+            return _finish(FixStatus.ERROR, err)
 
         # F8-002: untrusted test code must never run in the tree we commit
         # from — copy the tree (minus .git) and execute the suite there, so
@@ -551,14 +553,14 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
         try:
             copy = _run(["cp", "-a", f"{workdir}/.", f"{testdir}/"], cwd=workdir)
             if copy.returncode != 0:
-                return _finish("error", "test-tree copy failed")
+                return _finish(FixStatus.ERROR, "test-tree copy failed")
             import shutil as _sh
             _sh.rmtree(testdir / ".git", ignore_errors=True)
             tested = _run_tests(testdir, config)
         finally:
             shutil.rmtree(testdir, ignore_errors=True)
         if not tested:
-            return _finish("testfail", "tests failed with fix applied")
+            return _finish(FixStatus.TESTFAIL, "tests failed with fix applied")
 
         # F8-002 + F10-E001: the bytes about to be staged must still be the
         # model-tested patch, byte for byte (tests ran in an isolated copy;
@@ -568,12 +570,12 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
         try:
             staged_now = (workdir / finding.path).read_bytes().decode("utf-8")
         except OSError:
-            return _finish("error", "target unreadable before staging (integrity) — refused")
+            return _finish(FixStatus.ERROR, "target unreadable before staging (integrity) — refused")
         if staged_now != fixed:
-            return _finish("error", "target changed after tests (integrity) — refused")
+            return _finish(FixStatus.ERROR, "target changed after tests (integrity) — refused")
         staged = _run(["git", "add", "--", finding.path], cwd=workdir)
         if staged.returncode != 0:
-            return _finish("error", f"git add failed: {staged.stderr[-80:]}")
+            return _finish(FixStatus.ERROR, f"git add failed: {staged.stderr[-80:]}")
         # F12-B001: privileged git ignores global/system config and hooks
         # (test-polluted HOME .gitconfig must never steer the real commit)
         commit_env = _git_hardened_env(_sandbox_env())
@@ -592,7 +594,7 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
         # never ride into the commit)
         tree_before = _run(["git", "write-tree"], cwd=workdir, env=commit_env)
         if tree_before.returncode != 0 or not tree_before.stdout.strip():
-            return _finish("error", "cannot capture pre-commit tree (integrity) — refused")
+            return _finish(FixStatus.ERROR, "cannot capture pre-commit tree (integrity) — refused")
         commit = _run(
             ["git", "commit", "-q", "-m",
              f"fix({finding.rule_id}): {scrub.inline(finding.message, 60)}\n\n"
@@ -603,13 +605,13 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
             # empty commit vs environmental failure must be told apart (A8):
             # nofix would misroute ops triage and the ci-watch break heuristic
             if "nothing to commit" in (commit.stderr or ""):
-                return _finish("nofix", "nothing to commit (patch was a no-op)")
-            return _finish("error", f"git commit failed: {commit.stderr[-80:]}")
+                return _finish(FixStatus.NOFIX, "nothing to commit (patch was a no-op)")
+            return _finish(FixStatus.ERROR, f"git commit failed: {commit.stderr[-80:]}")
         tree_after = _run(["git", "rev-parse", "HEAD^{tree}"], cwd=workdir, env=commit_env)
         if tree_after.returncode != 0 or tree_after.stdout.strip() != tree_before.stdout.strip():
             # F12-B001: committed tree != the tree whose bytes were tested —
             # something modified content between staging and commit
-            return _finish("error", "committed tree differs from staged tree (integrity) — refused")
+            return _finish(FixStatus.ERROR, "committed tree differs from staged tree (integrity) — refused")
         # F8-003: a stable hash of head/rule/path/line — plain rule-id
         # branches collided across fix rounds and findings (non-fast-forward
         # pushes failed silently)
@@ -646,7 +648,7 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
             )
             _drop_askpass(push2_env)
             if push2.returncode != 0:
-                return _finish("error", f"push failed: {push2.stderr[-100:]}")
+                return _finish(FixStatus.ERROR, f"push failed: {push2.stderr[-100:]}")
 
         base = _default_branch(pr.repo)
         from .renderer import _md_escape_block, path_plain  # heading-safe
@@ -662,10 +664,10 @@ def attempt_fix(pr: PullRequest, finding: Finding, config: RepoConfig) -> dict[s
                 f"Proposal: {_md_escape_block(finding.proposal)}\n\nTests pass. Review and merge."
             ),
         })
-        return _finish("pr_opened", "", pr_number=new_pr["number"],
+        return _finish(FixStatus.PR_OPENED, "", pr_number=new_pr["number"],
                        pr_url=new_pr["html_url"], branch=branch)
     except Exception as exc:  # contained into a result dict
-        return _finish("error", str(exc)[:200])
+        return _finish(FixStatus.ERROR, str(exc)[:200])
     finally:
         # MECE round-1 (luna F1-04): token-bearing askpass helpers lived in
         # sibling temp dirs and survived EXCEPTION paths (timeouts etc.) —
