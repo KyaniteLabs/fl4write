@@ -3,7 +3,9 @@
 The public entry point deliberately keeps model/test execution separate from
 forge authentication.  It prepares and proves a multi-file patch in disposable
 local clones, then publishes and merges only a bot-owned, non-fork PR whose
-base and head still match the proved commit.
+base and head still match the proved commit AND whose changed-file list the
+platform-owned protected-merge policy allows (SEC-E2-1: this lane is a live
+merge client, so it classifies before it merges).
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from typing import Any, Callable, Iterator
 
 from .exhaustive_lifecycle import RECOVERABLE_PHASES, FixOutcome, MergePhase
 from .config import ForgeBinding, RepoConfig
+from . import mergepolicy
+from .fixlane import FixLaneBlocked, merge_own_pr
 
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -528,6 +532,23 @@ class _Forge:
             return {}
         return {"merged": True, "sha": observed.get("merge_commit_sha")}
 
+    def changed_files(self, repo: str, number: int) -> list[dict] | None:
+        """The PR's changed-file list — the ONLY input to protected-path
+        classification (SEC-E2-1). ``None`` means the list could not be read
+        COMPLETELY (transport error, non-list page, 20-page cap): partial
+        evidence never authorizes a merge, so the caller fails closed."""
+        rows: list[dict] = []
+        for page in range(1, 21):
+            param = "per_page" if self.github else "limit"
+            value = self.call(
+                "GET", f"/repos/{repo}/pulls/{number}/files?{param}=100&page={page}")
+            if not isinstance(value, list) or any(not isinstance(row, dict) for row in value):
+                return None
+            rows.extend(value)
+            if len(value) < 100:
+                return rows
+        return None
+
 
 def _remote_url(binding: ForgeBinding, repo: str) -> str:
     if _is_github(binding):
@@ -600,7 +621,31 @@ def _prepared_patch(config, reviewed_head, findings, repo, evidence_dir, test_co
     return files, regressions
 
 
+def _protected_decision(forge, config: RepoConfig, number: int, head: str):
+    """Classify one PR the exhaustive lane is about to merge (SEC-E2-1).
+
+    This lane is a SECOND live merge client, so it reaches the same classifier
+    as ``executor.check_and_merge_own_prs``. Its only input is the PR's
+    changed-file list through the selected forge; any transport / parse
+    failure is NO EVIDENCE and ``mergepolicy.decide`` fails closed
+    (``files_unavailable``), exactly like the merge scan.
+    """
+    try:
+        files = forge.changed_files(config.repo, number)
+    except Exception:  # noqa: BLE001 — unreadable changed-file list = fail closed
+        files = None
+    return mergepolicy.decide(repo=config.repo, pr=number, head=head,
+                               changed_files=files)
+
+
 def _recover_merge(forge, config, reviewed_head, commit_sha, author, default, evidence_dir):
+    """Verify a merge a PREVIOUS attempt already requested — never initiate one.
+
+    SEC-E2-1 note: this path only reads. It returns a MERGED result only when
+    the forge itself reports the PR merged and the merge commit on the default
+    branch; a receipt in the MERGING phase whose PR is still open returns None
+    and the caller continues to the ordinary, classified merge path.
+    """
     receipt = evidence_dir / _RECEIPT
     if not receipt.exists():
         return None
@@ -849,6 +894,23 @@ def attempt_fix_with_regression_pin(
                     or (((current.get("base") or {}).get("repo") or {}).get("full_name") != config.repo) \
                     or (((current.get("head") or {}).get("repo") or {}).get("full_name") != config.repo):
                 return _result(FixOutcome.BLOCKED, "PR changed before merge", reviewed_head, **proof)
+            # SEC-E2-1 (E2): the exhaustive lane is a live merge client too.
+            # Classify the PR's changed-file list with the SAME classifier the
+            # own-PR scan uses, then pass the decision through the SAME gate
+            # (fixlane.merge_own_pr), which emits the single merge_blocked
+            # event and refuses a protected / unevidenced decision. The refusal
+            # happens BEFORE the merge-request receipt, so no forge write
+            # follows it and a retry re-classifies from scratch.
+            merge_decision = _protected_decision(forge, config, number, commit_sha)
+            try:
+                merge_own_pr(author=author, bot_identity=config.bot_login,
+                             ci_green=True, config=config,
+                             merge_decision=merge_decision)
+            except FixLaneBlocked as exc:
+                result = _result(FixOutcome.BLOCKED,
+                                 f"protected-merge policy: {exc}", reviewed_head, **proof)
+                _receipt(evidence_dir, result)
+                return result
             proof["phase"] = MergePhase.MERGING
             result = _result(FixOutcome.PENDING, "merge requested; outcome requires verification", reviewed_head, **proof)
             _receipt(evidence_dir, result)

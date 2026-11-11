@@ -11,6 +11,7 @@ import pytest
 
 from fl4write.config import RepoConfig
 from fl4write import exhaustive_fix as ef
+from fl4write import telemetry
 from fl4write.exhaustive import NonGreen, _junit
 
 
@@ -45,6 +46,20 @@ def _config(*, github: bool = True, enabled: bool = True) -> RepoConfig:
         "fix": {"enabled": enabled, "merge_own_prs": True},
         "bot_login": "fl4write[bot]",
     })
+
+
+@pytest.fixture
+def tel(tmp_path, monkeypatch):
+    path = tmp_path / "telemetry.jsonl"
+    monkeypatch.setattr(telemetry, "_STREAM", path)
+    return path
+
+
+def _events(path):
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()]
 
 
 @pytest.mark.parametrize("github", [True, False])
@@ -377,6 +392,7 @@ class _FakeForge:
     merged_calls = 0
     has_existing = False
     target = "main"
+    files = [{"filename": "calc.py", "status": "modified"}]
 
     def __init__(self, binding, token): pass
     def repo(self, repo):
@@ -399,13 +415,27 @@ class _FakeForge:
         return self.find_pr(repo, branch)
     def required_contexts(self, repo, branch): return set()
     def checks_green(self, repo, sha, required=None): return self.ci
+    def changed_files(self, repo, number): return self.files
     def merge(self, repo, number, sha):
         type(self).merged_calls += 1
         return self.merge_response
 
 
-def _flow(tmp_path, monkeypatch, forge=_FakeForge, github=True, base_branch=None):
+def _flow(tmp_path, monkeypatch, forge=_FakeForge, github=True, base_branch=None,
+          install_policy=True):
     repo, head = _repo(tmp_path)
+    if install_policy:
+        # E2/SEC-E2-1: the exhaustive lane classifies before it merges, so a
+        # successful flow needs the platform-owned policy like production does.
+        policy = tmp_path / "protected-paths.json"
+        policy.write_text(json.dumps({"protected_paths": [
+            "fl4write/appauth.py", "fl4write/executor.py", "fl4write/exhaustive_fix.py",
+            "fl4write/fixlane.py", "fl4write/forges.py", "fl4write/mergepolicy.py",
+            "fl4write/scrub.py", "fl4write/telemetry.py", ".github/workflows/**"]}),
+            encoding="utf-8")
+        monkeypatch.setenv("FL4WRITE_PROTECTED_PATHS", str(policy))
+    else:
+        monkeypatch.delenv("FL4WRITE_PROTECTED_PATHS", raising=False)
     forge.base = head
     forge.merged_calls = forge.created = 0
     forge.merged = "e" * 40
@@ -702,3 +732,81 @@ def test_idempotent_existing_owned_pr_is_reused(tmp_path, monkeypatch):
     result, forge = _flow(tmp_path, monkeypatch, Existing)
     assert result["status"] == "merged"
     assert forge.created == 0
+
+
+# ---------------------------------------------------------------- SEC-E2-1:
+# the exhaustive-fix lane is a SECOND live merge client; it must reach the
+# same protected-path classifier and the same gate as the own-PR scan.
+PROTECTED_FILE = [{"filename": "fl4write/executor.py", "status": "modified",
+                   "patch": "@@ -1 +1 @@\n-x\n+y"}]
+
+
+def test_protected_patch_never_merges_through_the_exhaustive_lane(tmp_path, monkeypatch, tel):
+    class Protected(_FakeForge):
+        files = PROTECTED_FILE
+
+    result, forge = _flow(tmp_path, monkeypatch, forge=Protected)
+    assert result["status"] == "blocked", result
+    assert "protected_path" in result["reason"] and "fl4write/executor.py" in result["reason"]
+    assert forge.merged_calls == 0  # zero merge writes
+    assert forge.created == 1       # the fix PR itself; no second PR after a refusal
+    events = _events(tel)
+    assert len(events) == 1
+    event = events[0]
+    assert event["kind"] == "merge_blocked"
+    assert event["repo"] == "acme/widget" and event["pr"] == 7
+    assert event["head"] == forge.commit
+    assert event["matched_paths"] == ["fl4write/executor.py"]
+    assert event["reason"] == "protected_path"
+    receipt = json.loads((tmp_path / "evidence" / "exhaustive-fix.json").read_text())
+    # a refusal must never masquerade as a merge request (no phase=merging)
+    assert receipt["status"] == "blocked" and "phase" not in receipt
+
+
+def test_docs_only_patch_merges_through_the_exhaustive_lane(tmp_path, monkeypatch, tel):
+    result, forge = _flow(tmp_path, monkeypatch)
+    assert result["status"] == "merged", result["reason"]
+    assert forge.merged_calls == 1
+    assert _events(tel) == []
+
+
+def test_absent_policy_refuses_the_exhaustive_merge(tmp_path, monkeypatch, tel):
+    result, forge = _flow(tmp_path, monkeypatch, install_policy=False)
+    assert result["status"] == "blocked", result
+    assert "policy_unavailable" in result["reason"]
+    assert forge.merged_calls == 0
+    events = _events(tel)
+    assert len(events) == 1 and events[0]["reason"] == "policy_unavailable"
+    assert events[0]["matched_paths"] == []
+
+
+def test_unreadable_changed_file_list_refuses_the_exhaustive_merge(tmp_path, monkeypatch, tel):
+    class Blind(_FakeForge):
+        def changed_files(self, repo, number):
+            raise ef.FixError("forge GET /pulls/7/files: unavailable")
+
+    result, forge = _flow(tmp_path, monkeypatch, forge=Blind)
+    assert result["status"] == "blocked", result
+    assert "files_unavailable" in result["reason"]
+    assert forge.merged_calls == 0
+    assert [e["reason"] for e in _events(tel)] == ["files_unavailable"]
+
+
+def test_retry_after_a_refusal_never_inherits_merge_permission(tmp_path, monkeypatch, tel):
+    """SEC-E2-1 names `_recover_merge`: the retry path only VERIFIES a merge
+    already requested. A refusal writes no `phase`, so a retry re-classifies
+    from scratch — it can never inherit permission from the earlier attempt."""
+    class Protected(_FakeForge):
+        files = PROTECTED_FILE
+
+    first, forge = _flow(tmp_path, monkeypatch, forge=Protected)
+    assert first["status"] == "blocked" and forge.merged_calls == 0
+    # Same evidence dir, same head, same forge: a second attempt must refuse
+    # again without a single merge call.
+    second = ef.attempt_fix_with_regression_pin(
+        tmp_path / "repo", _config(), forge.base, [{"id": "F1", "path": "calc.py"}],
+        ["pytest"], tmp_path / "evidence", verify_suite=_verify)
+    assert second["status"] == "blocked", second.get("reason")
+    assert "protected_path" in second["reason"]
+    assert forge.merged_calls == 0
+    assert [e["reason"] for e in _events(tel)] == ["protected_path", "protected_path"]

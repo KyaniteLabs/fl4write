@@ -25,7 +25,8 @@ Policy document (JSON object):
         "fl4write/writeguard.py",           # E1's outbound guard
         ".github/workflows/**",
         "fl4write/mergepolicy.py",          # this classifier
-        "fl4write/fixlane.py"               # merge_own_pr, THE gate
+        "fl4write/fixlane.py",              # merge_own_pr, THE gate
+        "fl4write/exhaustive_fix.py"        # second merge client (SEC-E2-1)
     ]}
 
 ``protected_paths`` is a non-empty list of POSIX glob patterns matched against

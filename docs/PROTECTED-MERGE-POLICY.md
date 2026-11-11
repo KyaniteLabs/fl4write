@@ -34,7 +34,8 @@ required behaviour, not a regression.
     "fl4write/writeguard.py",
     ".github/workflows/**",
     "fl4write/mergepolicy.py",
-    "fl4write/fixlane.py"
+    "fl4write/fixlane.py",
+    "fl4write/exhaustive_fix.py"
   ]
 }
 ```
@@ -42,13 +43,41 @@ required behaviour, not a regression.
 Patterns are POSIX globs matched case-sensitively against each changed file
 name (`fnmatch`; `*` spans `/`). The first eight entries are the Product-fixed
 set for card `t_5a7e1b77` (E1's outbound guard is `fl4write/writeguard.py`).
-`fl4write/mergepolicy.py` (this classifier) and `fl4write/fixlane.py`
-(`merge_own_pr`, the gate) are **required additions**: without them the
-mechanism could be edited by an unprotected PR.
+`fl4write/mergepolicy.py` (this classifier), `fl4write/fixlane.py`
+(`merge_own_pr`, the gate) and `fl4write/exhaustive_fix.py` (the second merge
+client) are **required additions**: without them the mechanism could be
+edited by an unprotected PR.
 
 A changed `*.fl4write.yaml` is protected when its diff adds or removes a
 `repo:` binding, or when the file itself is added, deleted or renamed. Other
 edits in that file are unaffected.
+
+## The two live merge clients
+
+FL4WRITE has exactly two code paths that can request a merge of a bot-owned
+PR. Both classify the PR's changed-file list against this policy **before**
+they request a merge, and both pass the decision through the same gate
+(`fixlane.merge_own_pr`):
+
+1. `executor.check_and_merge_own_prs` — the periodic own-PR scan
+   (`fix.merge_own_prs`). Cheap gate checks first (`fixlane.merge_precheck`),
+   then `GET /pulls/{n}/files` (paginated) -> `mergepolicy.decide` ->
+   `fixlane.merge_own_pr` -> the merge request.
+2. `exhaustive_fix.attempt_fix_with_regression_pin` — the atomic repair lane
+   (`SEC-E2-1`). After its fix PR is pushed and the required checks are
+   re-verified green, it reads the same changed-file list through the selected
+   forge (`_Forge.changed_files`), classifies with `mergepolicy.decide`, and
+   passes the decision to `fixlane.merge_own_pr` before `forge.merge`. A
+   refusal happens BEFORE the merge-request receipt, so no forge write follows
+   it and a retry re-classifies from scratch.
+
+`exhaustive_fix._recover_merge` cannot initiate a merge. It only verifies a
+merge a previous attempt already requested: it returns a MERGED result only
+when the forge reports the PR merged and the merge commit on the default
+branch; an open PR returns `None` and the ordinary, classified path runs.
+
+The rest of this section describes the scan; the exhaustive lane follows the
+same rules with the same classifier and the same gate.
 
 ## The enforcement path
 

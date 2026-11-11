@@ -19,9 +19,11 @@ from test_fl4write import make_config
 
 BOT = "fl4write[bot]"
 HEAD = "h" * 40
-PROTECTED = [
+PROTECTED_PATH_PATTERNS = [
     "fl4write/appauth.py",
     "fl4write/executor.py",
+    "fl4write/exhaustive_fix.py",
+    "fl4write/fixlane.py",
     "fl4write/forges.py",
     "fl4write/gatekeeper.py",
     "fl4write/mergepolicy.py",
@@ -46,7 +48,7 @@ def tel(tmp_path, monkeypatch):
 def _policy(tmp_path, monkeypatch, doc=None, raw=None):
     path = tmp_path / "protected-paths.json"
     text = raw if raw is not None else json.dumps(
-        doc if doc is not None else {"protected_paths": PROTECTED})
+        doc if doc is not None else {"protected_paths": PROTECTED_PATH_PATTERNS})
     path.write_text(text, encoding="utf-8")
     monkeypatch.setenv("FL4WRITE_PROTECTED_PATHS", str(path))
     return path
@@ -127,12 +129,12 @@ def test_executor_change_with_all_checks_green_is_refused_and_stays_open(tmp_pat
 
 
 @pytest.mark.parametrize("path", [
-    "fl4write/appauth.py", "fl4write/forges.py", "fl4write/gatekeeper.py",
-    "fl4write/telemetry.py", "fl4write/scrub.py", "fl4write/writeguard.py",
-    "fl4write/mergepolicy.py", "fl4write/fixlane.py",
+    "fl4write/appauth.py", "fl4write/exhaustive_fix.py", "fl4write/forges.py",
+    "fl4write/gatekeeper.py", "fl4write/telemetry.py", "fl4write/scrub.py",
+    "fl4write/writeguard.py", "fl4write/mergepolicy.py", "fl4write/fixlane.py",
 ])
 def test_every_named_protected_module_is_refused(tmp_path, monkeypatch, tel, path):
-    _policy(tmp_path, monkeypatch, {"protected_paths": PROTECTED + ["fl4write/fixlane.py"]})
+    _policy(tmp_path, monkeypatch, {"protected_paths": PROTECTED_PATH_PATTERNS})
     api = FakeGitHub(files=[{"filename": path, "status": "modified", "patch": "@@\n-x\n+y"}])
     assert _scan(monkeypatch, api) == []
     assert api.puts == []
