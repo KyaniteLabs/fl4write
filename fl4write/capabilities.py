@@ -60,6 +60,10 @@ CAPABILITIES = [
      "AI/agent behavior is bounded; prompts don't leak secrets; outputs are validated before use."),
     ("privacy-compliance", "Security & Privacy", 18,
      "PII collection is minimized and documented; deletion paths exist; consent tracked."),
+    ("state-machines", "Data & Storage", 18,
+     "Every lifecycle (job, sync, review, payment, publish, retry) is an explicit state machine: "
+     "states named once in an enum, every change through one named transition, illegal moves "
+     "refused. No flag soup, no status free text, no copy-pasted transitions, no dead state."),
     ("production-readiness", "Overall", 10,
      "The app can handle real users without data loss, security breach, or unrecoverable outage."),
 ]
@@ -99,7 +103,7 @@ CAP_MISSING_CRITICAL = 84
 
 
 def default_review_rules() -> dict[str, str]:
-    """The 19 capabilities as FL4WRITE review rules (rule_id -> prose law)."""
+    """The capabilities as FL4WRITE review rules (rule_id -> prose law)."""
     return {rid: law for rid, _, _, law in CAPABILITIES}
 
 
