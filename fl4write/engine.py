@@ -38,7 +38,7 @@ from . import fixlane, gatekeeper, renderer, state
 from . import omni_lifecycle as omni
 from .omni_lifecycle import OmniFix, OmniPhase
 from . import sweep_lifecycle as sweeps
-from .sweep_lifecycle import RetroPhase
+from .sweep_lifecycle import CIHead, RetroPhase
 from .analyzer import MAX_FILE_BYTES
 from .config import RepoConfig
 from .forges import ForgeAdapter, ForgeError, adapter_for
@@ -1531,11 +1531,11 @@ def _ci_watch_step(
         if conclusion not in _CI_BENIGN:
             failing.append(dict(r, conclusion=conclusion, name=name, id=run_id))
     failing = failing[: config.ci_watch.max_checks]
-    if not failing:
-        st.pop("ci_red_sha", None)
+    head_state = sweeps.ci_head_state(st, head, failing=bool(failing))
+    if head_state is CIHead.GREEN:
         return
     report.ci_red_heads += 1
-    if st.get(f"ci_acted:{head}"):
+    if head_state is CIHead.ACTED:
         return  # already acted at this SHA — a new commit re-arms the watch
     # MECE round-2 (terra F2-004): acted is set only after a SUCCESSFUL
     # action below; an escalation failure stays un-acted and retries.
@@ -1671,17 +1671,17 @@ def _ci_watch_step(
                 ),
             )
             report.ci_escalations += 1
-            st[f"ci_acted:{head}"] = True
+            sweeps.ci_mark_acted(st, head)
         except Exception as exc:  # noqa: BLE001 — escalation must not kill the cycle
             report.alerts.append(f"ci_watch escalation failed for {config.repo}: {exc}")
     elif opened:
-        st[f"ci_acted:{head}"] = True
+        sweeps.ci_mark_acted(st, head)
     elif not config.shadow:
         # no fix opened and no escalation channel: acting again next cycle
         # changes nothing — mark acted to keep the red-head count honest (one
         # summon per SHA). MECE round-6 (luna-max F6-C004): shadow runs never
         # persist the live belt — the live cutover must still act on the head
-        st[f"ci_acted:{head}"] = True
+        sweeps.ci_mark_acted(st, head)
 
 
 def run_cycle(

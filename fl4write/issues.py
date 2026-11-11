@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import time
 import logging
+from enum import Enum
 from typing import Any
 
 from . import scrub
@@ -29,6 +30,48 @@ log = logging.getLogger("fl4write.issues")
 _URGENCY_MARKER = {"high": "⚠️", "medium": "", "low": ""}
 # MECE round-2 (M3 DOM-B): the triage contract is low|medium|high — a
 # "critical" urgency the model was never asked for cannot exist
+
+
+class IssueState(str, Enum):
+    """Where one issue stands in the triage lane (derived, never stored).
+
+    NEW ─triaged─▶ TRIAGED (watermark passes it)
+     │
+     ├─triage/post failed─▶ RETRY ─later success─▶ TRIAGED
+     └─foreign marker─▶ QUARANTINED (kept in the retry belt, never re-triaged
+                                     by the model, never buried by the watermark)
+    """
+
+    NEW = "new"
+    RETRY = "retry"
+    QUARANTINED = "quarantined"
+    TRIAGED = "triaged"
+
+
+QUARANTINE_CAP = 200
+
+
+def issue_state(st: dict[str, Any], number: int) -> IssueState:
+    retry = st.get("issues_retry") if isinstance(st.get("issues_retry"), list) else []
+    quarantined = st.get("issues_foreign_quarantined")
+    quarantined = quarantined if isinstance(quarantined, list) else []
+    if number in retry:
+        return IssueState.QUARANTINED if number in quarantined else IssueState.RETRY
+    watermark = st.get("last_triaged_number")
+    if isinstance(watermark, int) and not isinstance(watermark, bool) and number <= watermark:
+        return IssueState.TRIAGED
+    return IssueState.NEW
+
+
+def _quarantine(st: dict[str, Any], number: int, retry: set[int]) -> None:
+    """-> QUARANTINED: recorded in the bounded quarantine list and kept in the
+    retry belt, so the watermark can never bury it while the marker exists."""
+    q = st.setdefault("issues_foreign_quarantined", [])
+    if number not in q:
+        q.append(number)
+        if len(q) > QUARANTINE_CAP:
+            q.pop(0)  # bounded state: oldest quarantine forgotten
+    retry.add(number)
 
 
 class _IssueList(list):
@@ -306,18 +349,12 @@ def run_issues_cycle(config: RepoConfig, st: dict[str, Any], forge: ForgeAdapter
             summary["errors"] += 1
             retry.add(num)
             continue
-        if foreign_marker:
+        if foreign_marker:  # (never true under shadow: see foreign_marker above)
             summary["quarantined"] += 1
             log.warning(
                 "issue #%s: foreign triage marker quarantined pre-triage "
                 "(no model spend)", num)
-            q = st.setdefault("issues_foreign_quarantined", [])
-            if num not in q:
-                q.append(num)
-                if len(q) > 200:
-                    q.pop(0)
-            if not config.shadow:
-                retry.add(num)
+            _quarantine(st, num, retry)
             continue
         try:
             triage = triage_issue(issue, config)
@@ -364,13 +401,7 @@ def run_issues_cycle(config: RepoConfig, st: dict[str, Any], forge: ForgeAdapter
                 log.warning(
                     "issue #%s: foreign triage marker quarantined (no duplicate, "
                     "watermark NOT advanced)", num)
-                q = st.setdefault("issues_foreign_quarantined", [])
-                if num not in q:
-                    q.append(num)
-                    if len(q) > 200:
-                        q.pop(0)  # bounded state: oldest quarantine forgotten
-                retry.add(num)  # stays collected: per-cycle visibility, and
-                # the watermark can never bury it while the marker exists
+                _quarantine(st, num, retry)
                 continue
             else:
                 forge.create_comment(config.repo, num, body)

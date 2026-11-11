@@ -113,3 +113,31 @@ def pm_belt_entry(head_sha: str, *, dependency: bool = False) -> str:
 def pm_belt_hit(entry: object, head_sha: str) -> bool:
     """Has the shadow run already handled this PR at this head?"""
     return isinstance(entry, str) and entry in (head_sha, f"{head_sha}:dep")
+
+
+# ---------------------------------------------------------------- CI watch
+class CIHead(str, Enum):
+    """The CI watch's view of one default-branch HEAD.
+
+    GREEN ─checks fail─▶ RED ─fix PR opened / issue escalated / nothing to do─▶ ACTED
+    A new commit is a new HEAD and starts over; there is no way back to RED
+    for the same HEAD (one summon per SHA)."""
+
+    GREEN = "green"
+    RED = "red"
+    ACTED = "acted"
+
+
+def _ci_key(head: str) -> str:
+    return f"ci_acted:{head}"
+
+
+def ci_head_state(st: dict[str, Any], head: str, *, failing: bool) -> CIHead:
+    if not failing:
+        return CIHead.GREEN
+    return CIHead.ACTED if st.get(_ci_key(head)) is True else CIHead.RED
+
+
+def ci_mark_acted(st: dict[str, Any], head: str) -> None:
+    """RED -> ACTED for this HEAD (persisted, bounded by state.prune_closed)."""
+    st[_ci_key(head)] = True
