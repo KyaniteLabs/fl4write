@@ -20,11 +20,160 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+import socket
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
+from . import scrub as _scrub
+
 _STREAM: Path | None = None
+
+# --- custody sink (card t_dd1d922a) -----------------------------------------
+# The stream has TWO possible destinations, chosen by FL4WRITE_TELEMETRY:
+#
+#   journald:<IDENT>   append to the systemd journal over its AF_UNIX
+#                      datagram socket (DEFAULT for the runner). The journal
+#                      files are root:systemd-journal and the ingest socket
+#                      rejects open(O_TRUNC) — the producing process (uid
+#                      simon) can APPEND and READ but cannot truncate,
+#                      rewrite, delete or rotate a record. Rotation/eviction
+#                      is journald's (uid 0) alone. This is the custody sink.
+#   /path/...jsonl     append to a file. Kept for tests, ad-hoc runs and
+#                      historical replay. NOT a custody sink: the writer
+#                      owns the file and can rewrite it, so guard-refusal
+#                      records must never land here in the runner.
+#
+# Every record is scrubbed at this boundary BEFORE it is written, whichever
+# sink is in use: `scrub.scrub()` (control/bidi/exfil/injection classes) plus
+# `scrub.redact_credentials()` (credential material) on free-text values.
+# Structured identity values (repo, commit sha, kind, model, ts) keep their
+# exact bytes only when they match their strict shape — otherwise they are
+# redacted like any other text (fail-closed: an unexpected shape is treated
+# as potentially hostile).
+DEFAULT_JOURNAL_SINK = "journald:fl4write-telemetry"
+JOURNAL_SOCKET = "/run/systemd/journal/socket"
+LEGACY_TELEMETRY = Path.home() / ".fl4write" / "telemetry.jsonl"
+
+# Kinds that are compliance records, not metrics. A custody write failure for
+# these MUST NOT be swallowed: the caller has to abort. Everything else keeps
+# the historical best-effort contract (a lost metric line beats a lost cycle).
+_CUSTODY_KINDS = frozenset({"guard_refusal", "merge_blocked",
+                            "telemetry_custody_gap"})
+
+_MAX_LINE = 32 * 1024
+_SHA_RE = re.compile(r"^[0-9a-fA-F]{4,64}$")
+_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}/[A-Za-z0-9_.-]{1,64}$")
+_PLAIN_RE = re.compile(r"^[A-Za-z0-9_.:@/+=-]{1,128}$")
+_SHA_KEYS = frozenset({"head", "base", "sha", "commit", "merge_sha",
+                        "head_sha", "base_sha"})
+_PLAIN_KEYS = frozenset({"ts", "kind", "lane", "model", "route", "status",
+                         "outcome", "verdict"})
+_IDENT_RE = re.compile(r"^[A-Za-z0-9_-]{1,48}$")
+# The probe nonce is a GENERATED id (never untrusted text), and the probe is
+# unreadable without it — so it is shape-exempt from the run redactor. Strict
+# shape: lowercase hex only, so nothing credential-shaped can ride along.
+_PROBE_KEYS = frozenset({"nonce"})
+_PROBE_NONCE_RE = re.compile(r"^[0-9a-f]{8,24}$")
+
+
+class TelemetryCustodyError(RuntimeError):
+    """A custody record (guard_refusal / merge_blocked) did not reach the
+    append-only sink. Callers MUST treat this as a hard stop: proceeding
+    would mean acting without a durable refusal record."""
+
+
+def _sink() -> tuple[str, str]:
+    """Resolve the destination from FL4WRITE_TELEMETRY on every call.
+
+    Returns ("journald", ident) or ("file", path). Deliberately uncached: a
+    long-lived process (the runner) may be re-pointed, and tests flip the
+    variable per test."""
+    raw = (os.environ.get("FL4WRITE_TELEMETRY") or "").strip()
+    if raw.startswith("journald:"):
+        ident = raw.split(":", 1)[1].strip()
+        if _IDENT_RE.match(ident):
+            return "journald", ident
+        # fail SAFE, not silent-open: an unusable journald value names no
+        # sink, so fall back to the file destination and let the shape guard
+        # in _path() decide. _sink_is_custody() reports False either way.
+    return "file", str(_path())
+
+
+def _sink_is_custody() -> bool:
+    return _sink()[0] == "journald"
+
+
+def _scrub_value(key: str, value: Any) -> Any:
+    """Boundary scrub for one field value. Never raises."""
+    if not isinstance(value, str):
+        return value
+    try:
+        s = _scrub.controls(value)
+        if key in _SHA_KEYS and _SHA_RE.match(s):
+            return s
+        if key in _PROBE_KEYS and _PROBE_NONCE_RE.match(s):
+            return s
+        if key == "repo" and _REPO_RE.match(s):
+            return s
+        if key in _PLAIN_KEYS and _PLAIN_RE.match(s):
+            return s
+        return _scrub.redact_credentials(_scrub.scrub(s))
+    except Exception:  # noqa: BLE001 — a scrub bug must not lose the record
+        return "[unscrubbable]"
+
+
+def scrub_record(event: dict[str, Any]) -> dict[str, Any]:
+    """Apply the boundary scrub to every value of a record (recursively for
+    one level of dict/list, which is all the emitters use)."""
+    out: dict[str, Any] = {}
+    for k, v in event.items():
+        key = str(k)
+        if isinstance(v, dict):
+            out[key] = {str(kk): _scrub_value(str(kk), vv) for kk, vv in v.items()}
+        elif isinstance(v, (list, tuple)):
+            out[key] = [_scrub_value(key, x) for x in v]
+        else:
+            out[key] = _scrub_value(key, v)
+    return out
+
+
+def _serialize(event: dict[str, Any]) -> str:
+    """JSONL line, bounded. Truncation keeps the record (with a marker)
+    rather than dropping it: a truncated failure record still proves the
+    failure happened."""
+    line = json.dumps(event, default=str)
+    if len(line) > _MAX_LINE:
+        trimmed = {}
+        for k, v in event.items():
+            trimmed[k] = v if not isinstance(v, str) else v[:2000]
+        trimmed["truncated"] = True
+        line = json.dumps(trimmed, default=str)[:_MAX_LINE]
+    return line
+
+
+def _send_journald(ident: str, line: str) -> None:
+    """Append one MESSAGE to the journal. Raises on failure — journald is
+    the only writable path, and a closed socket means no record."""
+    payload = ("SYSLOG_IDENTIFIER=%s\nPRIORITY=6\nMESSAGE=%s\n"
+               % (ident, line)).encode("utf-8", "replace")
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    try:
+        sock.settimeout(2.0)
+        sock.sendto(payload, JOURNAL_SOCKET)
+    finally:
+        sock.close()
+
+
+def _write_line(line: str) -> None:
+    kind, target = _sink()
+    if kind == "journald":
+        _send_journald(target, line)
+        return
+    with Path(target).open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
 
 
 def _path() -> Path:
@@ -52,15 +201,25 @@ def _path() -> Path:
 
 
 def emit(kind: str, **fields: Any) -> None:
-    """Append one event. Telemetry must never take the product down: every
-    failure is swallowed (a lost metric line beats a lost review cycle)."""
+    """Append one event, scrubbed at the boundary BEFORE it is written.
+
+    Metrics stay best-effort (a lost metric line beats a lost review cycle).
+    CUSTODY kinds (guard_refusal / merge_blocked / telemetry_custody_gap) are
+    compliance records: if one did not reach the append-only sink this raises
+    TelemetryCustodyError and the caller MUST abort. Nothing is buffered
+    locally — a buffer the producing account can rewrite would defeat the
+    custody property the record exists to provide."""
+    custody = kind in _CUSTODY_KINDS
     try:
         event = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                  "kind": kind, **fields}
-        with _path().open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(event, default=str) + "\n")
-    except Exception:  # noqa: BLE001 — telemetry is best-effort by contract
-        pass
+        _write_line(_serialize(scrub_record(event)))
+    except Exception as exc:  # noqa: BLE001 — telemetry never takes the product down
+        if custody:
+            raise TelemetryCustodyError(
+                "custody record %r did not reach the %s sink: %s"
+                % (kind, _sink()[0], exc)) from exc
+        return
 
 
 def route_stats() -> dict[str, dict[str, float]]:
@@ -141,7 +300,7 @@ def calibration_snapshot(recent: int = 500) -> dict[str, Any]:
         # process on the way out.
         # MECE round-8 (sol F8-012): read a BOUNDED tail (the stream is
         # append-only and never truncated) instead of loading it whole.
-        chunk = _read_tail(_path(), max_bytes=8 * 1024 * 1024)
+        chunk = _read_stream(max_bytes=8 * 1024 * 1024)
         # F11-B006 (round 11, luna DOM-B, reopened F8-011): the BYTE-bounded
         # tail is the bound — slicing [-recent*12:] by LINES discarded
         # qualifying model_call events whenever noise events outnumbered the
@@ -198,3 +357,92 @@ def calibration_snapshot(recent: int = 500) -> dict[str, Any]:
     for m, st in models.items():
         out[m] = f"{st['calls'] - st['fails']}/{st['calls']} ok, {st['tokens']} tok"
     return out
+
+
+# --- reading the stream back ------------------------------------------------
+def _journal_lines(ident: str, max_lines: int = 20000,
+                   timeout: float = 30.0) -> str:
+    """Read the MESSAGE payloads of our own journal entries, oldest-first.
+
+    `-o cat` prints MESSAGE only, which for this sink is exactly the JSONL
+    line that was written. Unreadable journal (or a missing journalctl) is an
+    empty stream, never an exception: reading must not take the cycle down."""
+    try:
+        cp = subprocess.run(
+            ["journalctl", "--no-pager", "-o", "cat", "-n", str(max_lines),
+             "SYSLOG_IDENTIFIER=" + ident],
+            capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return cp.stdout if cp.returncode == 0 else ""
+
+
+def _read_stream(max_bytes: int = 8 * 1024 * 1024) -> str:
+    """The stream as text for consumers (calibration, registry generation).
+    Same bytes as the sink holds; the custody sink is read back through
+    journalctl, a file sink through the file."""
+    kind, target = _sink()
+    if kind == "journald":
+        return _journal_lines(target)[-max_bytes:]
+    return _read_tail(Path(target), max_bytes=max_bytes)
+
+
+def read_events(limit: int = 500) -> list[dict[str, Any]]:
+    """Parsed events, oldest-first, last `limit` records. Malformed lines are
+    skipped (a kill mid-append is not a reason to lose the rest)."""
+    evs: list[dict[str, Any]] = []
+    for ln in _read_stream().splitlines():
+        try:
+            ev = json.loads(ln)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(ev, dict):
+            evs.append(ev)
+    return evs[-limit:] if limit and limit > 0 else evs
+
+
+def sink_probe() -> dict[str, Any]:
+    """Write one probe record and READ IT BACK from the sink. This is the
+    preflight the runner uses: `python3 -m fl4write.telemetry --probe`.
+    A probe that was written but not read back means the sink is not durable
+    as seen by this identity, and custody records must not be attempted."""
+    kind, target = _sink()
+    nonce = "%x" % ((os.getpid() << 48) ^ time.time_ns())
+    try:
+        event = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                 "kind": "sink_probe", "nonce": nonce}
+        _write_line(_serialize(scrub_record(event)))
+    except Exception as exc:  # noqa: BLE001 — reported, not raised
+        return {"ok": False, "sink": "%s:%s" % (kind, target),
+                "stage": "write", "error": str(exc)}
+    seen = any(ev.get("nonce") == nonce for ev in read_events(limit=200))
+    return {"ok": seen, "sink": "%s:%s" % (kind, target),
+            "custody": kind == "journald", "nonce": nonce,
+            **({} if seen else {"stage": "readback",
+                                "error": "probe not readable from the sink"})}
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(
+        prog="python3 -m fl4write.telemetry",
+        description="telemetry sink probe / JSONL export (custody preflight)")
+    ap.add_argument("--probe", action="store_true",
+                    help="write one probe record and read it back; exit 1 on failure")
+    ap.add_argument("--export", type=int, default=0, metavar="N",
+                    help="print the last N records as JSONL (read-only view)")
+    args = ap.parse_args(argv)
+    if args.probe:
+        res = sink_probe()
+        print(json.dumps(res))
+        return 0 if res.get("ok") else 1
+    if args.export:
+        for ev in read_events(limit=args.export):
+            print(json.dumps(ev, default=str))
+        return 0
+    ap.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

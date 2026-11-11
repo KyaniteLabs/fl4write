@@ -97,6 +97,18 @@ if [ -z "${FL4WRITE_MODEL_ENDPOINT:-}" ]; then
     export FL4WRITE_MODEL_ENDPOINT=http://127.0.0.1:46399/v1/chat/completions
 fi
 
+# Telemetry custody (card t_dd1d922a): refusal/compliance records MUST reach
+# the append-only sink (FL4WRITE_TELEMETRY=journald:<ident>) before the cycle
+# may act. Probe the sink — write a record and READ IT BACK — and refuse to
+# cycle when it is not durable. Fail-closed by design: a local buffer would be
+# writable by this same account and would defeat the custody property.
+# Undo = delete this block.
+if ! CUSTODY_PROBE=$(python3 -m fl4write.telemetry --probe 2>>"$LOG"); then
+    echo "$(date -Iseconds) CUSTODY-GAP: telemetry sink not durable — cycle ABORTED (no writes without a custody record): $CUSTODY_PROBE" >> "$LOG"
+    exit 1
+fi
+echo "$(date -Iseconds) custody: $CUSTODY_PROBE" >> "$LOG"
+
 # SCALE Phase 2: tiered due-list + process pool (consensus-gated, #6).
 # The scheduler is invoked EXACTLY ONCE (Sol#2: three invocations = 3x the
 # probe cost + fragile grep-splitting); its JSON envelope carries due files,
