@@ -210,3 +210,8 @@ AWS-secret-key minimum) while keeping the 24-char floor for dotted tokens
   FAILED [redacted]::[redacted] - a...
   1 failed in 0.11s
   ```
+- 2026-11-11T20:49:50Z `guard_refusal` `guardrail` KyaniteLabs/fl4write@8d073143c644e0c5257eb831b7de77210e1ed8e9 — cmd `python3 -m pytest tests/test_selftest_failure_loop.py -q --tb=line` — event `b16551958e7d16c9` — guard refused to write fl4write/guard.py: protected path
+
+  ```text
+
+  ```
