@@ -169,7 +169,7 @@ def test_allowed_simon_org_forgejo_write_passes(tel, monkeypatch):
     seen = _ok_net(monkeypatch, b'{"id": 3}')
     binding = cfg.ForgeBinding(role="primary",
                                api_base="https://git.kyanitelabs.tech/api/v1",
-                               token_env="FJT")
+                               token_env="GHT")
     adapter = forges.ForgejoAdapter(binding)
     assert adapter._call("POST", "/repos/simon/CNCL/issues",
                          {"title": "t"}) == {"id": 3}
@@ -184,7 +184,7 @@ def test_tailnet_api_base_is_the_same_org_forgejo(tel, monkeypatch):
     seen = _ok_net(monkeypatch, b'{"id": 4}')
     binding = cfg.ForgeBinding(role="primary",
                                api_base="http://203.0.113.10:3000/api/v1",
-                               token_env="FJT")
+                               token_env="GHT")
     assert forges.ForgejoAdapter(binding)._call(
         "POST", "/repos/KyaniteLabs/x/issues", {"title": "t"}) == {"id": 4}
     assert len(seen) == 1
@@ -194,7 +194,7 @@ def test_forgejo_personal_namespace_elsewhere_is_refused(tel, monkeypatch):
     calls = _no_net(monkeypatch)
     binding = cfg.ForgeBinding(role="primary",
                                api_base="https://git.example.com/api/v1",
-                               token_env="FJT")
+                               token_env="GHT")
     with pytest.raises(writeguard.OutOfBoundsWrite) as excinfo:
         forges.ForgejoAdapter(binding)._call("POST", "/repos/KyaniteLabs/x/issues", {})
     assert calls == []
@@ -206,7 +206,7 @@ def test_personal_owner_on_the_org_forgejo_is_refused(tel, monkeypatch):
     calls = _no_net(monkeypatch)
     binding = cfg.ForgeBinding(role="primary",
                                api_base="https://git.kyanitelabs.tech/api/v1",
-                               token_env="FJT")
+                               token_env="GHT")
     with pytest.raises(writeguard.OutOfBoundsWrite) as excinfo:
         forges.ForgejoAdapter(binding)._call("POST", "/repos/mallory/x/issues", {})
     assert calls == []
