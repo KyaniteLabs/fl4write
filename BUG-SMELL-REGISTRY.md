@@ -188,3 +188,25 @@ AWS-secret-key minimum) while keeping the 24-char floor for dotted tokens
 **Status:** FIXED (2026-09-20, commit c3c0dcb — recovered from the interrupted-cycle stash after the 09-19 claim was found false; refined to pure-slash-only 16-char floor so file paths survive) — reproduced: `key=wJalrXUtnFEMI/K7MDENG`
 (16 chars) leaked; fix landed (per-separator floor) + regression test
 `tests/test_fl4write.py::test_redact_credentials_short_slash_secret`.
+
+> **FROZEN HISTORY.** Everything above the generated-rows marker is the
+> hand-written record (2026-08-31 .. 2026-11-11) and is never edited
+> again. New rows are generated from telemetry by
+> `fl4write/failure_loop.py`, one per failure event, and appended below
+> the marker. Only `failure_loop` writes here.
+
+<!-- fl4write:generated-rows:begin -->
+## Generated failure rows (append-only, from telemetry)
+- 2026-11-11T20:42:11Z `test_failure` KyaniteLabs/fl4write@8d073143c644e0c5257eb831b7de77210e1ed8e9 — cmd `python3 -m pytest tests/test_selftest_failure_loop.py -q --tb=line` — event `91660cac61f3b202` — node `tests/test_selftest_failure_loop.py::test_injected_wrong_assertion`
+
+  ```text
+  F                                                                        [100%]
+  [redacted] FAILURES [redacted]
+  E   assert (2 + 2) == 5
+  [redacted] Captured stdout call [redacted]
+  GITHUB_TOKEN=[redacted]
+  ~/.[redacted]:14: assert (2 + 2) == 5
+  [redacted] short test summary info [redacted]
+  FAILED [redacted]::[redacted] - a...
+  1 failed in 0.11s
+  ```

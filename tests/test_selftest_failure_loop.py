@@ -11,4 +11,4 @@ import os
 
 def test_injected_wrong_assertion():
     print("GITHUB_TOKEN=" + os.environ.get("SELFTEST_FAKE_SECRET", ""))
-    assert 2 + 2 == 5
+    assert 2 + 2 == 4
