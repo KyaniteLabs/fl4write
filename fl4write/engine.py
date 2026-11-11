@@ -37,6 +37,8 @@ from typing import Any, Callable
 from . import fixlane, gatekeeper, renderer, state
 from . import omni_lifecycle as omni
 from .omni_lifecycle import OmniFix, OmniPhase
+from . import sweep_lifecycle as sweeps
+from .sweep_lifecycle import RetroPhase
 from .analyzer import MAX_FILE_BYTES
 from .config import RepoConfig
 from .forges import ForgeAdapter, ForgeError, adapter_for
@@ -535,10 +537,8 @@ def _post_merge_sweep(
             pm_shadow = {str(k): v for k, v in sb.items() if isinstance(v, str)}
     for pr in merged_prs:
         considered.add(pr.number)
-        _belt = pm_shadow.get(str(pr.number))
-        if _belt == pr.head_sha or (_belt or "").startswith(pr.head_sha + ":dep"):
-            # F13-C007: dependency skips are recorded as '<sha>:dep' — the
-            # bare compare re-considered the same shadow dependency every cycle
+        if sweeps.pm_belt_hit(pm_shadow.get(str(pr.number)), pr.head_sha):
+            # F13-C007: shadow dependency skips count as handled too
             continue  # already shadow-reviewed at this SHA — belt, not terminal
         if deadline is not None and (deadline - time.monotonic()) < REVIEW_BUDGET_S:
             report.alerts.append("post-merge sweep deferred — cycle deadline reached")
@@ -551,7 +551,7 @@ def _post_merge_sweep(
                 # per-PR terminal state nor advances the live watermark —
                 # the old dependency-skip branch did both, so a live cutover
                 # could miss a shadow-processed PR entirely
-                pm_shadow[str(pr.number)] = pr.head_sha + ":dep"
+                pm_shadow[str(pr.number)] = sweeps.pm_belt_entry(pr.head_sha, dependency=True)
                 continue
             state.mark_reviewed(st, pr.number, pr.head_sha, ReviewMark.DEPENDENCY_SKIP)
             terminal += 1
@@ -609,7 +609,7 @@ def _post_merge_sweep(
         state.save_state(state_path, st)  # checkpoint after each merged PR
         reviewed_budget += 1
         if outcome is ReviewStep.SHADOW:
-            pm_shadow[str(pr.number)] = pr.head_sha
+            pm_shadow[str(pr.number)] = sweeps.pm_belt_entry(pr.head_sha)
             report.postmerge_reviewed += 1
             continue  # NOT terminal — the live cutover re-reviews and posts
         if outcome is ReviewStep.FIX_DEFERRED:
@@ -1252,17 +1252,12 @@ def _retro_sweep(
     from datetime import datetime, timedelta, timezone
 
     if config.shadow:
-        # MECE round-6 (luna-max F6-C006): retro under shadow is a dry run —
-        # ARCH-2 NOTE (2026-09-16): this early return SUBSUMES the
-        # retro_shadow_seen belt machinery below (belt load/write and the
-        # per-PR shadow branch are unreachable while this return stands);
-        # they are retained for history. Do not "restore" shadow retro by
-        # deleting this return without deleting the belt code too.
-        # with no consumer and every outcome path leaked live state (seen
-        # belts, cursors, clean/deferred/park records) — skip entirely.
+        # MECE round-6 (luna-max F6-C006): retro under shadow is a dry run
+        # with no consumer, and every outcome path would touch live state
+        # (seen belts, cursors, clean/deferred/park records) — skip entirely.
         log.info("retro: shadow mode — sweep skipped (dry-run law)")
         return set()
-    if st.get("retro_complete"):
+    if sweeps.retro_phase(st) is RetroPhase.COMPLETE:
         return set()
     boundary = (
         datetime.now(timezone.utc) - timedelta(days=config.retro_audit.lookback_days)
@@ -1310,37 +1305,17 @@ def _retro_sweep(
     listed = [p for p in listed if isinstance(p, PullRequest) and parse_iso(p.merged_at) is not None]
 
     # MECE round-2 (terra F2-002): JSON persistence turns int keys into
-    # strings — the seen-set belt was comparing int numbers against str keys
-    # and NEVER excluded (masked by the strict '<' cursor). Normalize here.
-    _rs = st.get("retro_seen")
-    if not isinstance(_rs, dict):
-        _rs = {}  # MECE round-4 (luna F4-003): null/wrong-shape state degrades
-    seen: set[int] = {number for k in _rs if (number := state.parse_number_key(k)) is not None}
-    # MECE round-5 (sol F5-001): shadow runs keep their own dedupe belt and
-    # never touch live cursors/belts — the live cutover must re-audit what
-    # shadow only looked at
-    shadow_belt: dict[str, str] = {}  # unreachable under the F6-C006 early return (ARCH-2)
-    if config.shadow:
-        sb = st.get("retro_shadow_seen")
-        if isinstance(sb, dict):
-            shadow_belt = {str(k): v for k, v in sb.items() if isinstance(v, str)}
-    parked = st.get("retro_parked", {})
-    if not isinstance(parked, dict):
-        parked = {}
-    parked = {str(number): expiry for k, v in parked.items()
-              if (number := state.parse_number_key(k)) is not None
-              and (expiry := state.parse_number_key(v)) is not None}
-    now_i = int(time.time())
+    # strings — the seen-set belt compares normalized numbers.
+    # MECE round-4 (luna F4-003): null/wrong-shape belts degrade to empty.
+    seen = sweeps.load_seen(st)
+    parked = sweeps.load_parked(st)
     # MECE round-5 (sol F5-009): parked PRs re-arm AUTOMATICALLY after their
-    # window — no false "re-arms on the next repo commit" promise, no manual
-    # reset needed
-    active_park = {int(k) for k, v in parked.items() if v > now_i}
-    expired_park = {int(k) for k, v in parked.items() if v <= now_i}
+    # window — no manual reset needed
+    active_park, expired_park = sweeps.park_split(parked)
     pending = sorted(
         (p for p in listed
-         if (parse_iso(p.merged_at) <= cursor_instant or p.number in expired_park) and p.number not in seen
-         and p.number not in active_park
-         and (not config.shadow or shadow_belt.get(str(p.number)) != p.head_sha)),
+         if (parse_iso(p.merged_at) <= cursor_instant or p.number in expired_park)
+         and p.number not in seen and p.number not in active_park),
         key=lambda p: parse_iso(p.merged_at),
         reverse=True,  # newest unprocessed first: recent mistakes matter most
     )[: config.retro_audit.max_per_cycle]
@@ -1356,16 +1331,11 @@ def _retro_sweep(
             report.alerts.append("retro sweep deferred — cycle deadline reached")
             break
         seen.add(pr.number)
-        if not config.shadow:  # MECE round-6 (sol F6-E01): shadow runs never
-            # touch the LIVE seen belt — the local set dedupes the run only
-            st["retro_seen"] = {int(n): True for n in seen}
+        sweeps.store_seen(st, seen)
         if not state.needs_review(st, pr.number, pr.head_sha):
             report.already_done += 1  # poll-invariant no-op: counted, never silent
-            if not config.shadow:
-                parked.pop(str(pr.number), None)
-                parked.pop(pr.number, None)
-                st["retro_parked"] = parked
-                oldest_processed = pr.merged_at
+            sweeps.retro_done(st, parked, pr.number, pr.head_sha)
+            oldest_processed = pr.merged_at
             continue  # already reviewed at this SHA while it was open — nothing to catch
         try:
             outcome = ReviewStep(_retro_review_pr(
@@ -1376,65 +1346,39 @@ def _retro_sweep(
             # a forge hiccup defers THIS PR, never crashes the cycle
             report.alerts.append(f"retro #{pr.number}: forge error contained: {exc}")
             seen.discard(pr.number)
-            if not config.shadow:
-                st["retro_seen"] = {int(n): True for n in seen}
+            sweeps.store_seen(st, seen)
             state.save_state(state_path, st)
             break
-        if outcome is ReviewStep.SHADOW:
-            shadow_belt[str(pr.number)] = pr.head_sha
-            if not config.shadow:
-                oldest_processed = pr.merged_at
-            continue
         if outcome is ReviewStep.DEFERRED:
             seen.discard(pr.number)  # retry next cycle
-            if not config.shadow:
-                st["retro_seen"] = {n: True for n in seen}
-            # MECE round-4 (luna F4-004): consecutive deferrals on one PR burn
-            # the lane every cycle while the model/env is down — park after a
-            # bounded retry count, surfaced by the alert
-            key = f"retro_defer:{pr.number}:{pr.head_sha[:10]}"
-            tries = int(st.get(key, 0)) + 1
-            st[key] = tries
-            if tries >= 3:
-                # MECE round-5 (sol F5-009): parked entries carry an expiry —
-                # the PR is retried automatically after the window, re-parked
-                # only while the deferral cause persists
-                st.pop(key, None)
-                st["retro_parked"] = {**{str(k): v for k, v in parked.items()},
-                                      str(pr.number): int(time.time()) + 86400}
-                parked = st["retro_parked"]
+            sweeps.store_seen(st, seen)
+            # MECE round-4/5 (luna F4-004, sol F5-009): repeated deferrals on
+            # one PR burn the lane while the model/env is down — park it for
+            # a window after a bounded retry count, surfaced by the alert
+            tries, parked_now = sweeps.retro_deferred(st, parked, pr.number, pr.head_sha)
+            if parked_now:
                 report.alerts.append(
                     f"retro #{pr.number}: deferred {tries}x (model/env) — parked 24h; "
                     "retried automatically after the window")
             state.save_state(state_path, st)  # MECE round-5 (sol F5-003): the
-            # corrected seen-set/park state is saved HERE — the old
-            # save-before-classification checkpointed the pre-discard seen-set
-            # (a kill between the two left the PR permanently skipped)
+            # corrected seen-set/park state is saved HERE
             break
-        # F11-C016: a deferred retry counter dies with its reason — terminal
-        # success clears it (one- or two-attempt counters used to survive
-        # successful reviews forever)
-        st.pop(f"retro_defer:{pr.number}:{pr.head_sha[:10]}", None)
-        parked.pop(str(pr.number), None)
-        parked.pop(pr.number, None)
-        st["retro_parked"] = parked
+        # REVIEWED (the only other outcome a live retro review returns).
+        # F11-C016: a deferral counter dies with its reason.
+        sweeps.retro_done(st, parked, pr.number, pr.head_sha)
         oldest_processed = pr.merged_at
 
-    if config.shadow and shadow_belt:
-        st["retro_shadow_seen"] = shadow_belt
-        while len(st["retro_shadow_seen"]) > 2000:  # bounded belt
-            st["retro_shadow_seen"].pop(next(iter(st["retro_shadow_seen"])))
-    elif not config.shadow and isinstance(st.get("retro_shadow_seen"), dict):
-        st.pop("retro_shadow_seen", None)  # live runs stop honoring the belt
+    # Retro never runs under shadow (early return above), so a legacy shadow
+    # belt left by older versions has no reader: drop it.
+    st.pop("retro_shadow_seen", None)
     if oldest_processed:
         st["retro_cursor"] = min(cursor, oldest_processed, key=parse_iso)
-    if oldest_processed is None and not pending and not active_park and not config.shadow:
+    if oldest_processed is None and not pending and not active_park:
         # window exhausted between boundary and cursor — nothing left to audit
         # (also fires for repos with no merges in the window: stop re-listing).
-        # MECE round-6 (sol F6-E01): shadow runs never set live completion;
-        # F10-C001: neither do malformed listings
+        # F10-C001: never on a malformed listing
         if not _dropped_rows:
-            st["retro_complete"] = True
+            sweeps.retro_finish(st)
             report.alerts.append(
                 f"retro audit complete: {len(seen)} merged PRs within "
                 f"{config.retro_audit.lookback_days}d swept"
