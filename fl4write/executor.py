@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from . import scrub
+from . import writeguard
 from .analyzer import _call_model
 from .config import RepoConfig
 from .fixlane import FixLaneBlocked, dependency_depth, escalate, fix_allowed, merge_own_pr
@@ -170,7 +171,13 @@ def _git_hardened_env(base: dict[str, str]) -> dict[str, str]:
 
 
 def _gh_api(method: str, path: str, data: dict | None = None) -> Any:
-    """One GitHub API call using the CODESITTER_GITHUB_TOKEN env var."""
+    """One GitHub API call using the CODESITTER_GITHUB_TOKEN env var.
+
+    Every mutating method passes the outbound write guard FIRST: a target
+    outside KyaniteLabs raises OutOfBoundsWrite before the request object —
+    and therefore any socket — exists.
+    """
+    writeguard.check_github_write(method, path, caller="executor._gh_api")
     token = os.environ.get("CODESITTER_GITHUB_TOKEN", "")
     req = urllib.request.Request(
 

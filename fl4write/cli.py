@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+from . import writeguard
 from .config import load_config
 from .engine import run_cycle
 from .models import PullRequest
@@ -301,6 +302,25 @@ def main() -> int:
                     os.environ[binding.token_env] = os.environ.get("CODESITTER_GITHUB_TOKEN", "")
             config = config.model_copy(update={"bot_login": "fl4write[bot]"})
         except Exception as exc:
+            # PAT fallback is a WRITE path: it must never hand a personal
+            # account's full-scope token to a repo outside KyaniteLabs. Fail
+            # closed there (card t_c7791d3f) instead of running the cycle as
+            # simongonzalezdc when the App installation is missing/revoked.
+            if not writeguard.write_allowed(primary_binding.api_base, config.repo):
+                if not isinstance(exc, writeguard.OutOfBoundsWrite):
+                    # OutOfBoundsWrite already emitted its own refusal in
+                    # appauth; any other App failure gets one here.
+                    err = writeguard.refuse(
+                        "pat_fallback_not_allowlisted",
+                        writeguard.host_of(primary_binding.api_base),
+                        config.repo, "POST", "cli.main")
+                    detail = err
+                else:
+                    detail = exc
+                print(f"ERROR: GitHub App auth failed ({detail}); {config.repo} is "
+                      f"outside the write allowlist — refusing the PAT fallback "
+                      f"and skipping this repo", file=sys.stderr)
+                return 2
             print(f"WARNING: GitHub App auth failed ({exc}); falling back to PAT", file=sys.stderr)
             # The configured identity belongs to the selected PAT account.
             # Keep it so existing comments remain recognizable on fallback.

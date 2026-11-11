@@ -26,6 +26,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from . import writeguard
+
 APP_ID = 3592379
 DEFAULT_INSTALLATION_ID = 129423294  # KyaniteLabs org — used when no repo given
 KEY_PATH = Path.home() / ".sinter" / "forgejo" / "github-app-key.pem"
@@ -62,7 +64,14 @@ def _api(url: str, method: str = "GET") -> dict:
 
 
 def resolve_installation_id(repo: str) -> int:
-    """Return the installation ID covering `owner/repo` (org OR user account)."""
+    """Return the installation ID covering `owner/repo` (org OR user account).
+
+    The outbound write guard runs FIRST: resolving (and later minting) a
+    token for a repo outside KyaniteLabs raises OutOfBoundsWrite before the
+    App key is read or any JWT exists — the personal-account installation is
+    unreachable for FL4WRITE writes.
+    """
+    writeguard.check_github_installation_repo(repo, caller="appauth.resolve_installation_id")
     try:
         data = _api(f"https://api.github.com/repos/{repo}/installation")
     except urllib.error.HTTPError as exc:

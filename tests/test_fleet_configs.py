@@ -32,7 +32,10 @@ def _repo_key(path: pathlib.Path) -> str:
 
 
 def test_fleet_configs_present() -> None:
-    assert len(CONFIGS) > 100, "fleet checkout expected (central configs live in the repo root)"
+    # 44 personal-account fork configs moved to parked-forks/ by the write-
+    # containment card (t_c7791d3f) — root glob = 86 at that change. A partial
+    # checkout still trips this floor.
+    assert len(CONFIGS) >= 80, "fleet checkout expected (central configs live in the repo root)"
 
 
 def test_every_fleet_config_parses_with_repo_key() -> None:
