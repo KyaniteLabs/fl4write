@@ -47,10 +47,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from . import scrub
+from . import mergepolicy, scrub
 from .analyzer import _call_model
 from .config import RepoConfig
-from .fixlane import FixLaneBlocked, dependency_depth, escalate, fix_allowed, merge_own_pr
+from .fixlane import FixLaneBlocked, dependency_depth, escalate, fix_allowed, merge_own_pr, merge_precheck
 from .models import Finding, PullRequest
 from .outcomes import FixStatus
 
@@ -996,6 +996,37 @@ def open_issue(repo: str, title: str, body: str) -> int:
     return _gh_api("POST", f"/repos/{repo}/issues", {"title": title, "body": body})["number"]
 
 
+def _pr_changed_files(repo: str, number: int) -> list[dict] | None:
+    """The PR's changed-file list — the ONLY input to protected-path classification.
+
+    Returns None when the list cannot be read COMPLETELY (transport error,
+    non-list payload, or the 20-page cap). The classifier treats None as
+    "every merge is protected" (fail closed): partial evidence must never
+    authorize a merge.
+    """
+    files: list[dict] = []
+    page = 1
+    while True:
+        if page > 20:  # same liveness bound as the check-run scan
+            log.warning("changed-file scan on %s#%s: >20 full pages — capped "
+                        "(merge forced closed)", repo, number)
+            return None
+        try:
+            batch = _gh_api("GET",
+                            f"/repos/{repo}/pulls/{number}/files?per_page=100&page={page}")
+        except Exception as exc:  # noqa: BLE001 — unreadable evidence = fail closed
+            log.warning("changed-file scan failed for %s#%s: %s", repo, number, exc)
+            return None
+        if not isinstance(batch, list):
+            log.warning("changed-file scan for %s#%s returned %s — merge forced closed",
+                        repo, number, type(batch).__name__)
+            return None
+        files += batch
+        if len(batch) < 100:
+            return files
+        page += 1
+
+
 def check_and_merge_own_prs(config: RepoConfig, bot_identity: str) -> list[dict]:
     """Check our own open fix PRs; merge those with ALL checks completed green.
 
@@ -1089,7 +1120,18 @@ def check_and_merge_own_prs(config: RepoConfig, bot_identity: str) -> list[dict]
                 ci_green = False
             # The gate re-verifies authorship + CI IN CODE. is_own_identity
             # accepts the current + legacy bot slugs across renames.
-            merge_own_pr(author=author, bot_identity=bot_identity, ci_green=ci_green, config=config)
+            # E2 (t_5a7e1b77): guard/auth/merge changes NEVER auto-merge. The
+            # cheap gate checks run first (no API call for a PR that cannot
+            # merge anyway); the classifier then decides from the PR's
+            # changed-file list ONLY — never from title, commit message or
+            # author. merge_own_pr re-checks the decision at the gate itself.
+            merge_precheck(author=author, bot_identity=bot_identity,
+                           ci_green=ci_green, config=config)
+            merge_decision = mergepolicy.decide(
+                repo=config.repo, pr=number, head=pr_data["head"]["sha"],
+                changed_files=_pr_changed_files(config.repo, number))
+            merge_own_pr(author=author, bot_identity=bot_identity, ci_green=ci_green,
+                         config=config, merge_decision=merge_decision)
             _resp = _gh_api("PUT", f"/repos/{config.repo}/pulls/{number}/merge", {
                 "merge_method": "squash",
                 "sha": pr_data["head"]["sha"],  # F8-004: precondition

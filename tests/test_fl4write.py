@@ -346,7 +346,10 @@ class TestFixLane:
 
     def test_merge_ok_when_own_and_green(self):
         c = make_config(fix={"enabled": True, "merge_own_prs": True})
-        fixlane.merge_own_pr(author="codesitter-bot", bot_identity="codesitter-bot", ci_green=True, config=c)
+        from fl4write import mergepolicy
+        allow = mergepolicy.MergeDecision(True, "", c.repo, 1, "a" * 40)
+        fixlane.merge_own_pr(author="codesitter-bot", bot_identity="codesitter-bot", ci_green=True,
+                             config=c, merge_decision=allow)
 
 
 # ---------------------------------------------------------------- engine cycle (#67)
@@ -834,8 +837,10 @@ class TestModuleGaps:
         c = make_config()
         c = c.model_copy(update={"fix": c.fix.model_copy(update={"merge_own_prs": True})})
         # legacy-slug-authored PR is OURS — must not raise
+        from fl4write import mergepolicy
+        allow = mergepolicy.MergeDecision(True, "", c.repo, 1, "a" * 40)
         fixlane.merge_own_pr(author="kyanitelabs[bot]", bot_identity="fl4write[bot]",
-                             ci_green=True, config=c)
+                             ci_green=True, config=c, merge_decision=allow)
 
 
 def test_redact_credentials_multi_word_value():

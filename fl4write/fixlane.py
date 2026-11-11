@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 
-from . import scrub
+from . import mergepolicy, scrub
 from .config import RepoConfig
 from .forges import is_own_identity
 from .models import Finding, PullRequest
@@ -61,19 +61,47 @@ def dependency_depth(pr: PullRequest, title: str, config: RepoConfig) -> str:
     return "shallow"
 
 
-def merge_own_pr(
+def merge_precheck(
     author: str,
     bot_identity: str,
     ci_green: bool,
     config: RepoConfig,
 ) -> None:
-    """THE merge gate. Config cannot open this: authorship is re-verified here."""
+    """The non-I/O half of THE merge gate.
+
+    Shared with the merge scan so a PR that cannot merge (config off, foreign
+    author, red CI) never spends API calls on protected-path classification —
+    while both paths agree on the exact same rules.
+    """
     if not config.fix.merge_own_prs:
         raise FixLaneBlocked("merge_own_prs disabled")
     if not is_own_identity(author, bot_identity):  # current + legacy bot slugs
         raise FixLaneBlocked(f"refusing to merge PR authored by {author!r}, not {bot_identity!r}")
     if not ci_green:
         raise FixLaneBlocked("CI not green — merge refused")
+
+
+def merge_own_pr(
+    author: str,
+    bot_identity: str,
+    ci_green: bool,
+    config: RepoConfig,
+    merge_decision: "mergepolicy.MergeDecision | None" = None,
+) -> None:
+    """THE merge gate. Config cannot open this: authorship is re-verified here.
+
+    A protected-path change can NEVER pass: the caller must supply the
+    protected-path classifier's decision for THIS PR head, and only an
+    allowed decision proceeds. A missing decision fails closed (a caller that
+    forgot to classify must not merge), and a refused decision emits its one
+    ``merge_blocked`` telemetry event here, at the gate, before raising.
+    """
+    merge_precheck(author=author, bot_identity=bot_identity, ci_green=ci_green, config=config)
+    if merge_decision is None:
+        raise FixLaneBlocked("no protected-merge decision supplied — merge refused")
+    if not merge_decision.allowed:
+        mergepolicy.record_block(merge_decision)
+        raise FixLaneBlocked(f"merge refused: {merge_decision.describe()}")
 
 
 def escalate(pr: PullRequest, findings: list[Finding], reason: str) -> str:

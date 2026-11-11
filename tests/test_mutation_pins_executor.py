@@ -8,6 +8,7 @@ untrusted test code and the bot's credentials.
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import subprocess
@@ -109,9 +110,13 @@ def _pr(number=5, ref="fl4write/fix-5-abc", author=BOT, sha="h" * 40):
 class FakeForge:
     """Routes _gh_api calls; records every merge PUT."""
 
-    def __init__(self, pages, runs=None, status="success", merge_reply=None):
+    def __init__(self, pages, runs=None, status="success", merge_reply=None, files=None):
         self.pages, self.runs, self.status = pages, runs or {}, status
         self.merge_reply = merge_reply if merge_reply is not None else {"merged": True, "sha": "m" * 40}
+        # E2 changed-file evidence: docs-only by default, so every pre-existing
+        # merge test keeps exercising the allowed path of the classifier.
+        self.files = files if files is not None else [
+            {"filename": "docs/notes.md", "status": "modified", "patch": "@@ -1 +1 @@\n-old\n+new"}]
         self.puts: list = []
 
     def __call__(self, method, path, data=None):
@@ -124,6 +129,8 @@ class FakeForge:
         if "/pulls?" in path:
             page = int(path.rsplit("page=", 1)[1])
             return self.pages[page - 1] if page <= len(self.pages) else []
+        if "/files?" in path:
+            return self.files
         if path.endswith("/status"):
             if isinstance(self.status, Exception):
                 raise self.status
@@ -137,7 +144,15 @@ class FakeForge:
 
 
 @pytest.fixture
-def merge_config():
+def merge_config(tmp_path, monkeypatch):
+    # E2: the merge path reads a PLATFORM-OWNED policy (fail closed if absent).
+    policy = tmp_path / "protected-paths.json"
+    policy.write_text(json.dumps({"protected_paths": [
+        "fl4write/appauth.py", "fl4write/executor.py", "fl4write/forges.py",
+        "fl4write/gatekeeper.py", "fl4write/mergepolicy.py", "fl4write/scrub.py",
+        "fl4write/telemetry.py", "fl4write/writeguard.py", ".github/workflows/**",
+    ]}), encoding="utf-8")
+    monkeypatch.setenv("FL4WRITE_PROTECTED_PATHS", str(policy))
     return make_config(fix={"enabled": True, "merge_own_prs": True})
 
 
