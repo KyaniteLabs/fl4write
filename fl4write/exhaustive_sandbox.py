@@ -28,6 +28,11 @@ class SandboxCleanupPending(SandboxUnavailable):
 
 
 WORKER = "/opt/fl4write-test-worker.py"
+
+# The container recovery record has one state: it exists (cleanup owed) from
+# just before a container starts until that container is confirmed gone.
+# A record in any other state is refused rather than guessed at.
+CLEANUP_REQUIRED = "cleanup_required"
 MAX_REPORT = 16 * 1024 * 1024
 
 
@@ -104,7 +109,7 @@ def _consume_prior_recovery(recovery: Path) -> None:
     name = saved.get("container") if isinstance(saved, dict) else None
     if not isinstance(name, str) or not _RECOVERY_CONTAINER_RE.fullmatch(name):
         raise SandboxUnavailable("container recovery record names no removable container")
-    if saved.get("state") != "cleanup_required":
+    if saved.get("state") != CLEANUP_REQUIRED:
         raise SandboxUnavailable("container recovery record is not in a cleanup state")
     if _container_exists(name):
         removed = _docker(["docker", "rm", "--force", name], 30)
@@ -135,7 +140,7 @@ def run_isolated(command: list[str], tree: Path, evidence: Path, timeout: int, i
     _consume_prior_recovery(recovery)
     try:
         with recovery.open("x", encoding="utf-8") as stream:
-            json.dump({"container": name, "image": image, "state": "cleanup_required"}, stream)
+            json.dump({"container": name, "image": image, "state": CLEANUP_REQUIRED}, stream)
             stream.flush()
             os.fsync(stream.fileno())
     except OSError as exc:

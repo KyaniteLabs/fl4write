@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from . import scrub
+from . import exhaustive_lifecycle as loop
+from .exhaustive_lifecycle import CertStatus, FixOutcome, LoopPhase
 from .config import (ModelRoute, UntrustedConfigError, assert_credential_endpoints_trusted,
                      load_config)
 from .executor import _sandbox_env_for
@@ -675,7 +677,7 @@ def _escalate(path: Path, reason: str, state: dict[str, Any]):
     _atomic_json(
         path,
         {
-            "status": "human_action_required",
+            "status": CertStatus.HUMAN_ACTION_REQUIRED,
             "reason": scrub.inline(reason, 300),
             "round": state["round"],
             "consecutive_green": state["consecutive_green"],
@@ -723,7 +725,7 @@ def _request_owned_fixes(repo, config, head, findings, args, evidence_dir):
         test_timeout=args.test_timeout,
         **selection,
     )
-    if result.get("status") != "merged" or not _valid_sha(result.get("merged_head")):
+    if result.get("status") != FixOutcome.MERGED or not _valid_sha(result.get("merged_head")):
         raise Deferred(f"atomic fix {result.get('status', 'error')}: {result.get('reason', 'unproven')}")
     return result
 
@@ -731,9 +733,7 @@ def _request_owned_fixes(repo, config, head, findings, args, evidence_dir):
 def _non_green(state, state_path, head, reason, evidence=None):
     evidence = _bind_evidence(evidence or {})
     state["round"] += 1
-    state["consecutive_green"] = 0
-    state["green_sha"] = None
-    state["certified_sha"] = None
+    loop.break_streak(state)
     state["ledger"].append(
         {
             "round": state["round"],
@@ -823,38 +823,34 @@ def run(args: argparse.Namespace) -> int:
                 if state["certified_sha"]:
                     _atomic_json(
                         state_dir / "certification.json",
-                        {"status": "invalidated", "reason": "HEAD moved",
+                        {"status": CertStatus.INVALIDATED, "reason": "HEAD moved",
                          "previous_sha": state["certified_sha"]},
                     )
                 state["head"] = current
-                state["consecutive_green"] = 0
-                state["green_sha"] = None
-                state["certified_sha"] = None
+                loop.break_streak(state)
                 if state_path.exists():
                     _atomic_json(state_path, state)
             if state["certified_sha"]:
                 if state["certified_sha"] == current:
                     return 0
                 old = state["certified_sha"]
-                state["certified_sha"] = None
-                state["consecutive_green"] = 0
-                state["green_sha"] = None
+                loop.break_streak(state)
                 _atomic_json(
                     state_dir / "certification.json",
-                    {"status": "invalidated", "reason": "HEAD moved", "previous_sha": old},
+                    {"status": CertStatus.INVALIDATED, "reason": "HEAD moved", "previous_sha": old},
                 )
                 _atomic_json(state_path, state)
-            if state["consecutive_green"] == GREEN_REQUIRED and state["green_sha"] == current:
+            if loop.loop_phase(state, current, GREEN_REQUIRED) is LoopPhase.READY:
                 if ledger_issue is None:
                     raise Deferred("local rounds complete; owned ledger publication is required for certification")
                 publish_state = dict(state)
-                publish_state["certified_sha"] = current
+                loop.certify(publish_state, current, GREEN_REQUIRED)
                 publish_round(repo, state_path, forge, config, ledger_issue, publish_state, True)
-                state["certified_sha"] = current
+                loop.certify(state, current, GREEN_REQUIRED)
                 _atomic_json(state_path, state)
                 _atomic_json(
                     state_dir / "certification.json",
-                    {"status": "forge_published", "scope": "archived text recon and configured full test command",
+                    {"status": CertStatus.FORGE_PUBLISHED, "scope": "archived text recon and configured full test command",
                      "sha": current, "ledger_issue": ledger_issue},
                 )
                 return 0
@@ -869,8 +865,7 @@ def run(args: argparse.Namespace) -> int:
                 budget = transports.enter_context(round_transport(
                     args, config, state_dir / "budgets" / f"round-{state['round'] + 1:04d}.json", request_sha))
                 if state["green_sha"] is not None and state["green_sha"] != head:
-                    state["consecutive_green"] = 0
-                    state["green_sha"] = None
+                    loop.break_streak(state)
                     _atomic_json(state_path, state)
                 state["head"] = head
                 rd = state_dir / "artifacts" / f"round-{state['round'] + 1:04d}-{head[:12]}-{time.time_ns()}"
@@ -950,11 +945,10 @@ def run(args: argparse.Namespace) -> int:
                                                   **_bind_evidence(common)}
                         verified_findings(state["pending_round"])
                         if active_findings:
-                            state["consecutive_green"], state["green_sha"] = 0, None
+                            loop.break_streak(state)
                         _atomic_json(state_path, state)
                 if active_findings:
-                    state["consecutive_green"] = 0
-                    state["green_sha"] = None
+                    loop.break_streak(state)
                     _atomic_json(state_path, state)
                     try:
                         if not getattr(args, "enable_fixes", False):
@@ -1018,8 +1012,7 @@ def run(args: argparse.Namespace) -> int:
                 common = _bind_evidence(common)
                 state["pending_round"] = None
                 state["round"] += 1
-                state["consecutive_green"] += 1
-                state["green_sha"] = head
+                loop.extend_streak(state, head)
                 state["green_baseline"] = sorted(test_ids)
                 state["green_baseline_head"] = head
                 state["ledger"].append(
@@ -1040,14 +1033,15 @@ def run(args: argparse.Namespace) -> int:
                     _atomic_json(
                         state_dir / "certification.json",
                         {
-                            "status": "forge_certification_pending" if ready_to_certify else "local_evidence_green",
+                            "status": (CertStatus.FORGE_CERTIFICATION_PENDING if ready_to_certify
+                                       else CertStatus.LOCAL_EVIDENCE_GREEN),
                             "scope": "archived text recon and configured full test command",
                             "sha": head,
                         },
                     )
                 if ledger_issue is not None:
                     if ready_to_certify:
-                        state["certified_sha"] = head
+                        loop.certify(state, head, GREEN_REQUIRED)
                     publish_round(repo, state_path, forge, config, ledger_issue, state, ready_to_certify)
                 else:
                     _atomic_json(state_path, state)

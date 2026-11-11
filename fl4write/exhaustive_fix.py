@@ -23,6 +23,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from .exhaustive_lifecycle import RECOVERABLE_PHASES, FixOutcome, MergePhase
 from .config import ForgeBinding, RepoConfig
 
 
@@ -35,7 +36,7 @@ class FixError(RuntimeError):
     """A contained fix failure."""
 
 
-def _result(status: str, reason: str, reviewed_head: str, **extra: Any) -> dict:
+def _result(status: FixOutcome, reason: str, reviewed_head: str, **extra: Any) -> dict:
     out = {
         "status": status,
         "reason": reason,
@@ -604,7 +605,7 @@ def _recover_merge(forge, config, reviewed_head, commit_sha, author, default, ev
     if not receipt.exists():
         return None
     saved = json.loads(receipt.read_bytes())
-    if saved.get("phase") not in {"merging", "merged"}:
+    if saved.get("phase") not in RECOVERABLE_PHASES:
         return None
     if (saved.get("reviewed_head") != reviewed_head or saved.get("commit_sha") != commit_sha
             or saved.get("author") != author
@@ -633,7 +634,7 @@ def _recover_merge(forge, config, reviewed_head, commit_sha, author, default, ev
             raise FixError("default branch no longer contains the proved merge")
     if forge.head(config.repo, default) != current:
         raise FixError("default branch changed during merge recovery")
-    result = {**saved, "status": "merged", "phase": "merged",
+    result = {**saved, "status": FixOutcome.MERGED, "phase": MergePhase.MERGED,
               "reason": "recovered verified bot-owned merge", "merge_commit_sha": merged,
               "merged_head": current}
     _receipt(evidence_dir, result)
@@ -651,7 +652,7 @@ def _receipt_merge_attempt(evidence_dir: Path, reviewed_head: str) -> dict | Non
     except (OSError, ValueError):
         return None
     if not isinstance(saved, dict) or saved.get("reviewed_head") != reviewed_head \
-            or saved.get("phase") not in {"merging", "merged"}:
+            or saved.get("phase") not in RECOVERABLE_PHASES:
         return None
     commit_sha = saved.get("commit_sha")
     if not isinstance(commit_sha, str) or not _SHA.fullmatch(commit_sha):
@@ -700,14 +701,14 @@ def attempt_fix_with_regression_pin(
     ``verify_suite(command, tree, junit_path, timeout)`` must return
     ``(set(test_ids), junit_sha256)`` for green or raise for red/unavailable.
     """
-    result = _result("error", "uninitialized", reviewed_head)
+    result = _result(FixOutcome.ERROR, "uninitialized", reviewed_head)
     workspace = None
     try:
         prior_path = evidence_dir / _RECEIPT
         if prior_path.exists():
             prior = json.loads(prior_path.read_bytes())
             if (isinstance(prior, dict) and prior.get("reviewed_head") == reviewed_head
-                    and prior.get("phase") in {"merging", "merged"}):
+                    and prior.get("phase") in RECOVERABLE_PHASES):
                 result = prior
         if not repo.is_dir() or not _SHA.fullmatch(reviewed_head):
             raise FixError("repo or reviewed_head is invalid")
@@ -720,12 +721,12 @@ def attempt_fix_with_regression_pin(
                     or _git(["check-ref-format", "--branch", base_branch], repo) != base_branch):
                 raise FixError("selected base branch is invalid")
         if config.shadow or not config.fix.enabled or not config.fix.merge_own_prs:
-            return _result("blocked", "fix and own-PR merge capabilities must be enabled", reviewed_head)
+            return _result(FixOutcome.BLOCKED, "fix and own-PR merge capabilities must be enabled", reviewed_head)
         if not findings or not isinstance(test_command, list) or not test_command \
                 or any(not isinstance(x, str) or not x or "\x00" in x for x in test_command):
             raise FixError("findings and fixed-argv test command are required")
         if _git(["rev-parse", "HEAD"], repo) != reviewed_head:
-            return _result("pending", "local reviewed HEAD drifted", reviewed_head)
+            return _result(FixOutcome.PENDING, "local reviewed HEAD drifted", reviewed_head)
         _, binding = _primary(config)
         evidence_dir.mkdir(parents=True, exist_ok=True)
         # P2a: a retry for this head consults the recorded merge before
@@ -763,19 +764,19 @@ def attempt_fix_with_regression_pin(
             default = info.get("default_branch")
             fork = info.get("fork")
             if full_name != config.repo or fork is not False or not isinstance(default, str) or not default:
-                return _result("blocked", "canonical repository identity or non-fork rail failed", reviewed_head,
+                return _result(FixOutcome.BLOCKED, "canonical repository identity or non-fork rail failed", reviewed_head,
                                fork=fork)
             default = base_branch or default
             author = forge.user()
             if author != config.bot_login:
-                return _result("blocked", "authenticated identity is not the configured bot", reviewed_head,
+                return _result(FixOutcome.BLOCKED, "authenticated identity is not the configured bot", reviewed_head,
                                author=author, fork=False)
             recovered = _recover_merge(forge, config, reviewed_head, commit_sha, author, default, evidence_dir)
             if recovered is not None:
                 return recovered
             base_sha = forge.head(config.repo, default)
             if base_sha != reviewed_head:
-                return _result("pending", "remote selected base HEAD drifted", reviewed_head,
+                return _result(FixOutcome.PENDING, "remote selected base HEAD drifted", reviewed_head,
                                author=author, fork=False, base_sha=base_sha,
                                changed_paths=sorted(changed), regression_paths=sorted(regressions),
                                test_ids=sorted(test_ids), junit_sha256=junit_hash)
@@ -807,7 +808,7 @@ def attempt_fix_with_regression_pin(
                     or head_repo != config.repo \
                     or ((pr.get("base") or {}).get("ref") != default) \
                     or (((pr.get("base") or {}).get("repo") or {}).get("full_name") != config.repo):
-                return _result("blocked", "PR ownership, head, or base rail failed", reviewed_head,
+                return _result(FixOutcome.BLOCKED, "PR ownership, head, or base rail failed", reviewed_head,
                                pr_number=number, pr_url=pr_url, author=pr_author, fork=False,
                                base_sha=base_sha, changed_paths=sorted(changed),
                                regression_paths=sorted(regressions), test_ids=sorted(test_ids),
@@ -821,23 +822,23 @@ def attempt_fix_with_regression_pin(
             proof["required_contexts"] = sorted(required)
             ci = forge.checks_green(config.repo, commit_sha, required)
             if ci is None:
-                result = _result("pending", "required checks are pending or unqueryable",
+                result = _result(FixOutcome.PENDING, "required checks are pending or unqueryable",
                                  reviewed_head, **proof)
                 _receipt(evidence_dir, result)
                 return result
             if ci is False:
-                result = _result("blocked", "required checks failed", reviewed_head, **proof)
+                result = _result(FixOutcome.BLOCKED, "required checks failed", reviewed_head, **proof)
                 _receipt(evidence_dir, result)
                 return result
             # Re-read every mutable authority field immediately before merge.
             if forge.head(config.repo, default) != base_sha:
-                result = _result("pending", "selected base branch drifted before merge",
+                result = _result(FixOutcome.PENDING, "selected base branch drifted before merge",
                                  reviewed_head, **proof)
                 _receipt(evidence_dir, result)
                 return result
             if (forge.required_contexts(config.repo, default) != required
                     or forge.checks_green(config.repo, commit_sha, required) is not True):
-                result = _result("pending", "required-check evidence changed before merge", reviewed_head, **proof)
+                result = _result(FixOutcome.PENDING, "required-check evidence changed before merge", reviewed_head, **proof)
                 _receipt(evidence_dir, result)
                 return result
             current = forge.find_pr(config.repo, branch)
@@ -847,30 +848,31 @@ def attempt_fix_with_regression_pin(
                     or ((current.get("base") or {}).get("ref") != default) \
                     or (((current.get("base") or {}).get("repo") or {}).get("full_name") != config.repo) \
                     or (((current.get("head") or {}).get("repo") or {}).get("full_name") != config.repo):
-                return _result("blocked", "PR changed before merge", reviewed_head, **proof)
-            proof["phase"] = "merging"
-            result = _result("pending", "merge requested; outcome requires verification", reviewed_head, **proof)
+                return _result(FixOutcome.BLOCKED, "PR changed before merge", reviewed_head, **proof)
+            proof["phase"] = MergePhase.MERGING
+            result = _result(FixOutcome.PENDING, "merge requested; outcome requires verification", reviewed_head, **proof)
             _receipt(evidence_dir, result)
             merged = forge.merge(config.repo, number, commit_sha)
             merge_sha = merged.get("sha") if isinstance(merged, dict) else None
             if not isinstance(merged, dict) or merged.get("merged") is not True \
                     or not isinstance(merge_sha, str) or not _SHA.fullmatch(merge_sha):
-                result = _result("pending", "merge outcome was not proven", reviewed_head, **proof)
+                result = _result(FixOutcome.PENDING, "merge outcome was not proven", reviewed_head, **proof)
                 _receipt(evidence_dir, result)
                 return result
             merged_head = forge.head(config.repo, default)
             if merged_head != merge_sha or merged_head == base_sha:
-                result = _result("pending", "remote default did not prove the merge SHA",
+                result = _result(FixOutcome.PENDING, "remote default did not prove the merge SHA",
                                  reviewed_head, **proof)
                 _receipt(evidence_dir, result)
                 return result
-            result = _result("merged", "verified bot-owned PR merge", reviewed_head,
+            result = _result(FixOutcome.MERGED, "verified bot-owned PR merge", reviewed_head,
                              merged_head=merged_head, **proof)
-            result["phase"] = "merged"
+            result["phase"] = MergePhase.MERGED
             _receipt(evidence_dir, result)
             return result
     except Exception as exc:  # containment: credentials are already unwound
-        result = {**result, "status": "pending" if result.get("phase") == "merging" else "error",
+        result = {**result, "status": (FixOutcome.PENDING if result.get("phase") == MergePhase.MERGING
+                                       else FixOutcome.ERROR),
                   "reason": str(exc)[:300]}
         try:
             _receipt(evidence_dir, result)
